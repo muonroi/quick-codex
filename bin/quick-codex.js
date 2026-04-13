@@ -27,6 +27,9 @@ function usage() {
   quick-codex init [--dir <project-dir>] [--force]
   quick-codex status [--dir <project-dir>] [--run <path>]
   quick-codex resume [--dir <project-dir>] [--run <path>]
+  quick-codex checkpoint-digest [--dir <project-dir>] [--run <path>]
+  quick-codex snapshot [--dir <project-dir>] [--run <path>]
+  quick-codex repair-run [--dir <project-dir>] [--run <path>]
   quick-codex doctor-run [--dir <project-dir>] [--run <path>]
   quick-codex upgrade [--copy] [--target <dir>]
   quick-codex uninstall [--target <dir>] [--dir <project-dir>]
@@ -38,6 +41,9 @@ Commands:
   init       Scaffold AGENTS.md guidance, .quick-codex-flow/, and a sample run artifact
   status     Show the current active run, gate, risks, and next command
   resume     Print the exact next prompt(s) to resume the active run safely
+  checkpoint-digest  Print the compact-safe handoff for the active run
+  snapshot   Alias for checkpoint-digest
+  repair-run Refresh resumability sections and realign STATE.md for the active run
   doctor-run Validate a run artifact and its STATE.md handoff
   upgrade    Reinstall the skills into the target directory
   uninstall  Remove installed skills and optionally remove project scaffolds when --dir is provided
@@ -306,6 +312,8 @@ function initCommand({ dir, force }) {
   console.log("Helpful commands:");
   console.log(`- node bin/quick-codex.js status --dir ${dir}`);
   console.log(`- node bin/quick-codex.js resume --dir ${dir}`);
+  console.log(`- node bin/quick-codex.js checkpoint-digest --dir ${dir}`);
+  console.log(`- node bin/quick-codex.js repair-run --dir ${dir}`);
   console.log(`- node bin/quick-codex.js doctor-run --dir ${dir}`);
 }
 
@@ -426,6 +434,18 @@ function relPathFrom(baseDir, targetPath) {
   return path.relative(baseDir, targetPath) || ".";
 }
 
+function phaseWaveFromMetadata(metadata) {
+  const digestPhaseWave = findResumeDigestField(metadata.text, "Current phase / wave");
+  const [digestPhase, digestWave] = digestPhaseWave
+    ? digestPhaseWave.split("/").map((value) => value.trim())
+    : [null, null];
+
+  return {
+    phase: metadata.currentPhase ?? digestPhase ?? "?",
+    wave: metadata.currentWave ?? digestWave ?? "?"
+  };
+}
+
 function flowDirFor(projectDir) {
   return path.join(projectDir, FLOW_DIRNAME);
 }
@@ -443,6 +463,8 @@ function runMetadata(runPath) {
   return {
     path: runPath,
     text,
+    goal: findResumeDigestField(text, "Goal")
+      ?? findLabelValue(text, "Original goal"),
     currentGate: findResumeDigestField(text, "Current gate")
       ?? findLabelValue(text, "Current gate")
       ?? findHeadingValue(text, "Current gate"),
@@ -462,7 +484,9 @@ function runMetadata(runPath) {
     approvalStrategy: findLabelValue(text, "Approval Strategy") ?? findHeadingValue(text, "Approval Strategy"),
     burnRisk: findLabelValue(text, "Burn Risk") ?? findHeadingValue(text, "Burn Risk"),
     sessionRisk: findLabelValue(text, "Session Risk") ?? findHeadingValue(text, "Session Risk"),
-    contextRisk: findLabelValue(text, "Context Risk") ?? findHeadingValue(text, "Context Risk")
+    contextRisk: findLabelValue(text, "Context Risk") ?? findHeadingValue(text, "Context Risk"),
+    compactSafeSummary: findSectionBullets(text, "Compact-Safe Summary"),
+    requirementsStillSatisfied: findSectionBullets(text, "Requirements Still Satisfied")
   };
 }
 
@@ -524,16 +548,13 @@ function resolveRunPath(projectDir, explicitRun) {
 function statusCommand({ dir, run }) {
   const runPath = resolveRunPath(dir, run);
   const metadata = runMetadata(runPath);
-  const digestPhaseWave = findResumeDigestField(metadata.text, "Current phase / wave");
-  const [digestPhase, digestWave] = digestPhaseWave
-    ? digestPhaseWave.split("/").map((value) => value.trim())
-    : [null, null];
+  const phaseWave = phaseWaveFromMetadata(metadata);
 
   console.log(`Project: ${dir}`);
   console.log(`Active run: ${relPathFrom(dir, runPath)}`);
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
   console.log(`Execution mode: ${metadata.executionMode ?? "manual"}`);
-  console.log(`Current phase / wave: ${metadata.currentPhase ?? digestPhase ?? "?"} / ${metadata.currentWave ?? digestWave ?? "?"}`);
+  console.log(`Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`);
   console.log(`Execution state: ${metadata.executionState ?? "unknown"}`);
   console.log(`Blockers: ${metadata.blockers ?? "none"}`);
   console.log(`Stall status: ${metadata.stallStatus ?? "none"}`);
@@ -723,6 +744,156 @@ function resumeCommand({ dir, run }) {
   }
 }
 
+function checkpointDigestLines(metadata, relativeRunPath) {
+  if (metadata.compactSafeSummary.length > 0) {
+    return metadata.compactSafeSummary;
+  }
+
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  const requirements = metadata.requirementsStillSatisfied.length > 0
+    ? metadata.requirementsStillSatisfied.join(", ")
+    : "not recorded";
+  const resumeWith = metadata.recommendedCommands[0]
+    ?? `Use $qc-flow and resume from ${relativeRunPath}.`;
+
+  return [
+    `Goal: ${metadata.goal ?? "not recorded"}`,
+    `Current gate: ${metadata.currentGate ?? "unknown"}`,
+    `Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`,
+    `Requirements still satisfied: ${requirements}`,
+    `Remaining blockers: ${metadata.blockers ?? "none"}`,
+    `Next verify: ${metadata.nextVerify ?? "not recorded"}`,
+    `Resume with: ${resumeWith}`
+  ];
+}
+
+function resumeDigestLines(metadata, relativeRunPath) {
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  const recommendedNextCommand = metadata.recommendedCommands[0]
+    ?? `Use $qc-flow and resume from ${relativeRunPath}.`;
+
+  return [
+    `- Goal: ${metadata.goal ?? "not recorded"}`,
+    `- Execution mode: ${metadata.executionMode ?? "manual"}`,
+    `- Current gate: ${metadata.currentGate ?? "unknown"}`,
+    `- Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`,
+    `- Remaining blockers: ${metadata.blockers ?? "none"}`,
+    `- Next verify: ${metadata.nextVerify ?? "not recorded"}`,
+    `- Recommended next command: ${recommendedNextCommand}`
+  ];
+}
+
+function compactSafeSummaryLines(metadata, relativeRunPath) {
+  return checkpointDigestLines(metadata, relativeRunPath).map((line) => `- ${line}`);
+}
+
+function findSectionRange(lines, heading) {
+  const headingLine = `## ${heading}`;
+  const start = lines.findIndex((line) => line.trim() === headingLine);
+  if (start === -1) {
+    return null;
+  }
+
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (lines[i].startsWith("## ")) {
+      end = i;
+      break;
+    }
+  }
+
+  return { start, end };
+}
+
+function replaceOrInsertSection(text, heading, bodyLines, afterHeading = null) {
+  const lines = text.split(/\r?\n/);
+  const newSection = [`## ${heading}`, ...bodyLines];
+  const existingRange = findSectionRange(lines, heading);
+
+  if (existingRange) {
+    lines.splice(existingRange.start, existingRange.end - existingRange.start, ...newSection);
+    return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+  }
+
+  if (afterHeading) {
+    const anchorRange = findSectionRange(lines, afterHeading);
+    if (anchorRange) {
+      lines.splice(anchorRange.end, 0, "", ...newSection);
+      return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+    }
+  }
+
+  lines.push("", ...newSection);
+  return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+}
+
+function inferStateStatus(metadata) {
+  if (isRunDone(metadata)) {
+    return "done";
+  }
+  if ((metadata.executionState ?? "").toLowerCase() === "blocked" || (metadata.blockers ?? "").toLowerCase() !== "none") {
+    return "blocked";
+  }
+  return "active";
+}
+
+function renderStateFile(relativeRunPath, metadata) {
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  return `# Quick Codex Flow State
+
+Active run:
+- ${relativeRunPath}
+
+Current gate:
+- ${metadata.currentGate ?? "unknown"}
+
+Current phase / wave:
+- ${phaseWave.phase} / ${phaseWave.wave}
+
+Execution mode:
+- ${metadata.executionMode ?? "manual"}
+
+Status:
+- ${inferStateStatus(metadata)}
+`;
+}
+
+function checkpointDigestCommand({ dir, run }) {
+  const runPath = resolveRunPath(dir, run);
+  const metadata = runMetadata(runPath);
+  const relativeRunPath = relPathFrom(dir, runPath);
+  const lines = checkpointDigestLines(metadata, relativeRunPath);
+
+  console.log(`Project: ${dir}`);
+  console.log(`Active run: ${relativeRunPath}`);
+  console.log("Compact-safe handoff:");
+  for (const line of lines) {
+    console.log(`- ${line}`);
+  }
+}
+
+function repairRunCommand({ dir, run }) {
+  const runPath = resolveRunPath(dir, run);
+  const relativeRunPath = relPathFrom(dir, runPath);
+  const metadata = runMetadata(runPath);
+  let nextText = metadata.text;
+
+  nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(metadata, relativeRunPath), "Requirement Baseline");
+  nextText = replaceOrInsertSection(nextText, "Compact-Safe Summary", compactSafeSummaryLines(metadata, relativeRunPath), "Resume Digest");
+  fs.writeFileSync(runPath, nextText, "utf8");
+
+  const repairedMetadata = runMetadata(runPath);
+  const statePath = stateFileFor(dir);
+  ensureDir(path.dirname(statePath));
+  fs.writeFileSync(statePath, renderStateFile(relativeRunPath, repairedMetadata), "utf8");
+
+  console.log(`Repaired run: ${relativeRunPath}`);
+  console.log("Refreshed:");
+  console.log("- Resume Digest");
+  console.log("- Compact-Safe Summary");
+  console.log(`- ${relPathFrom(dir, statePath)}`);
+}
+
 function doctorRunCommand({ dir, run }) {
   const runPath = resolveRunPath(dir, run);
   const metadata = runMetadata(runPath);
@@ -730,6 +901,7 @@ function doctorRunCommand({ dir, run }) {
   const checks = [
     ["Requirement Baseline", text.includes("## Requirement Baseline")],
     ["Resume Digest", text.includes("## Resume Digest")],
+    ["Compact-Safe Summary", text.includes("## Compact-Safe Summary")],
     ["Current gate", metadata.currentGate !== null],
     ["Execution mode", metadata.executionMode !== null],
     ["Burn Risk", metadata.burnRisk !== null],
@@ -758,6 +930,7 @@ function doctorRunCommand({ dir, run }) {
   }
 
   if (failed) {
+    console.log(`Suggested fix: node bin/quick-codex.js repair-run --dir ${dir} --run ${relPathFrom(dir, runPath)}`);
     throw new Error("doctor-run found one or more issues");
   }
 
@@ -811,6 +984,13 @@ async function main() {
         break;
       case "resume":
         resumeCommand(args);
+        break;
+      case "checkpoint-digest":
+      case "snapshot":
+        checkpointDigestCommand(args);
+        break;
+      case "repair-run":
+        repairRunCommand(args);
         break;
       case "doctor-run":
         doctorRunCommand(args);

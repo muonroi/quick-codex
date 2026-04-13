@@ -11,5 +11,6 @@ Suggested rules:
 - prefer stable task slugs
 - keep `STATE.md` aligned with the active run
 - keep the latest `Resume Digest` and `Recommended Next Command` current
+- refresh `Compact-Safe Summary` after each completed wave or phase and before any long verify or pause
 - resume from the run file instead of relying on chat memory
-- use `quick-codex status`, `quick-codex resume`, and `quick-codex doctor-run` to avoid guessing from chat state
+- use `quick-codex status`, `quick-codex resume`, `quick-codex checkpoint-digest`, `quick-codex repair-run`, and `quick-codex doctor-run` to avoid guessing from chat state

@@ -37,6 +37,15 @@ Execution mode:
 - Next verify: confirm the verified plan
 - Recommended next command: `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
 
+## Compact-Safe Summary
+- Goal: demonstrate the run-file structure
+- Current gate: plan-check
+- Current phase / wave: P1 / W1
+- Requirements still satisfied: R1, R2, R3
+- Remaining blockers: none
+- Next verify: confirm the verified plan
+- Resume with: `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
+
 ## Session Risk
 - low
 Why:
@@ -93,3 +102,11 @@ Execution state: pending
 
 ## Verification Ledger
 - sample scaffold created
+
+## Blockers
+- none
+
+## Requirements Still Satisfied
+- R1
+- R2
+- R3

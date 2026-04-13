@@ -120,6 +120,8 @@ Handoff rules:
 - use `manual` by default unless the user explicitly wants the agent to keep advancing without waiting
 - use `auto` only when the locked wave is clear enough to continue step by step without another user prompt
 - if the next step already has enough context in the run file, do not duplicate it in the chat response
+- before any broad verify or deliberate pause, compress the handoff to deterministic fields only
+- when the session is at risk of compaction, prefer a checkpoint-style handoff over broader narrative recap
 
 Lean-mode handoff:
 - emit the compressed handoff payload before any broader explanation
@@ -290,6 +292,36 @@ Update the digest:
 In `lean` mode:
 - refresh the digest before writing any longer artifact section
 - if only status changed, prefer digest-only and status-only updates over repeating prior prose
+
+## Compact-Safe Summary
+
+Every non-trivial run must maintain a short `Compact-Safe Summary` inside the run file.
+
+Purpose:
+- survive aggressive context compaction better than broad prose
+- provide one deterministic handoff block before long verifies, pauses, or session resets
+- let `quick-codex checkpoint-digest` print a ready-to-use recovery snapshot
+
+The summary must capture:
+- goal
+- current gate
+- current phase and wave
+- requirements still satisfied
+- remaining blockers
+- next verify
+- exact resume command
+
+Update the summary:
+- after every completed wave
+- at every phase close
+- before any broad or long-running verify
+- before stopping for a pause, handoff, or likely context reset
+
+Summary rules:
+- keep it shorter than the surrounding artifact sections
+- prefer stable facts over rationale
+- if only one field changed, update only that field instead of rewriting the whole artifact
+- treat a stale compact-safe summary as a resumability bug, not a cosmetic issue
 
 ## Session and context risk
 
@@ -487,22 +519,16 @@ Execution rules:
 - verify the wave before the next one
 - if verification fails, fix inside the same wave
 - after each wave, update the run file
+- after each wave, refresh both `Resume Digest` and `Compact-Safe Summary`
 - keep the active wave artifact current while a wave is in progress
 - after each phase, create or update a phase-close artifact using [references/phase-close-template.md](references/phase-close-template.md)
+- at every phase close, refresh both `Resume Digest` and `Compact-Safe Summary` before continuing
 - keep the current approval strategy explicit when escalation may be needed
 - for coding tasks, when a wave or phase verifies cleanly and the worktree is in a coherent state, create a checkpoint commit before opening the next wave or phase
 - prefer one logical checkpoint commit per completed wave or per completed phase, not one large multi-wave dump
 - if unrelated local changes would make the checkpoint commit noisy or unsafe, stop and surface that instead of forcing a broad commit
-
-Task-type completion rules:
-- for coding tasks:
-  - a wave is not `done` unless the relevant build for the touched scope is free of errors and warnings
-  - a wave is not `done` unless the relevant unit tests for the touched scope pass
-  - a phase is not `done` unless its waves satisfy the same build-clean and unit-test-pass requirement for the touched scope
-  - prefer the narrowest build and test commands that still cover the edited code safely
-- for non-code tasks:
-  - choose the smallest concrete verification that matches the artifact being changed
-  - record that verification explicitly in the wave or phase artifact
+- before any broad or long-running verify, emit a deterministic compact-safe handoff in the run file first
+- before any intentional pause or stop, emit the same compact-safe handoff before leaving execution
 
 Task-type completion rules:
 - for coding tasks:
@@ -697,6 +723,7 @@ Mode-specific response behavior:
 - in `manual`, stop at the current safe checkpoint and emit the next concrete command
 - in `auto`, continue to the next gate, wave, or phase when the next safe move is already clear
 - in both modes, stop immediately when relock, approval, or ambiguity prevents safe continuation
+- before a broad verify or a deliberate pause, include the compact-safe handoff fields in the response or artifact update, not only the longer narrative
 
 For coding tasks, `Verification result` and phase-close summaries must say whether:
 - the relevant build passed with no errors and no warnings in the touched scope
@@ -726,183 +753,7 @@ In `lean` mode:
 - if the run file already contains stable context, do not restate it in full
 - prefer compressed handoff fields over broad summaries
 - prefer bounded verify evidence over pasted logs
-
-## Artifact formatting rules
-
-When updating the run file:
-- paste artifact content into the matching section without duplicating the section heading
-- do not produce `## Clarify State` inside the `## Clarify State` section
-- do not produce `## Research Pack` inside the `## Research Pack` section
-- do not produce `## Verified Plan` inside the `## Verified Plan` section
-- keep the run file readable as a single document, not as nested markdown fragments
-
-## References
-
-Read these only when needed:
-- [references/context-gate-template.md](references/context-gate-template.md)
-- [references/research-pack-template.md](references/research-pack-template.md)
-- [references/verified-plan-template.md](references/verified-plan-template.md)
-- [references/execution-wave-template.md](references/execution-wave-template.md)
-- [references/phase-close-template.md](references/phase-close-template.md)
-- [references/run-file-template.md](references/run-file-template.md)
-
-## Anti-thrash rules
-
-Do not keep applying speculative fixes in the same wave without new evidence.
-
-Use this rule set:
-- after the first failed verify, state one concrete hypothesis and test only that
-- after the second failed verify, either produce new evidence or relock
-- after the third failed verify in the same wave, stop execution, mark the wave blocked, and return to `plan-check` or `phase-close`
-
-Thrash indicators:
-- the same command fails repeatedly without a changed hypothesis
-- fixes are broadening scope without updating the plan
-- verification is being deferred instead of rerun
-
-## Anti-stall protocol
-
-Treat a `stall` as different from a failed verify.
-
-A stall means:
-- a tool or verify step takes unusually long without a useful signal
-- Codex is waiting on ambiguous progress instead of a concrete result
-- the next check is still too broad to diagnose the current step safely
-
-Stall rules:
-- after the first stall, checkpoint the run file and narrow the next check
-- after the second stall in the same wave, split the verify path into a smaller observable check or relock
-- after the third stall in the same wave, stop execution, mark the wave blocked, and emit a concrete `Recommended next command`
-
-When a stall happens, record:
-- `Stall Status`
-- the last stalled step
-- the next smaller check
-
-Prefer bounded, observable checks over long opaque waits.
-
-## Approval-aware execution
-
-When execution may require approval or escalation, prefer a local-first strategy.
-
-Approval rules:
-- do local reads, static inspection, and narrow verification before asking for escalation
-- batch related safe checks before any escalated step
-- if escalation is needed, tie it to the current phase or wave explicitly
-- prefer the narrowest command that can achieve the current verify goal
-- if approval is denied or unavailable, checkpoint the run file and emit a concrete `Recommended next command`
-
-Track the current `Approval Strategy` in the run file when escalation is relevant:
-- `local-only`
-- `local-first-then-escalate`
-- `escalation-required`
-
-Why this matters:
-- it reduces approval thrash
-- it keeps verification auditable
-- it makes blocked execution resumable instead of vague
-
-## Resume protocol
-
-When resuming:
-
-1. Read the run file.
-2. Read the `Resume Digest` first.
-3. Check `Session Risk` and `Context Risk`.
-4. Restate:
-   - current gate
-   - original goal
-   - required outcomes
-   - current phase
-   - current wave
-   - remaining blockers
-   - stall status
-   - approval strategy
-   - next verify
-5. Continue only after restating this state.
-
-If either risk is `high`, address that before opening new scope.
-
-If chat context and run file disagree, trust the run file unless the user changed the requirement.
-
-Gate meanings:
-- `clarify` — requirements or success conditions are still ambiguous
-- `research` — missing context is being filled
-- `plan` — the task is being decomposed
-- `plan-check` — the plan is being verified before execution
-- `execute` — a wave is actively being implemented or verified
-- `phase-close` — a phase is being checked and summarized before the next phase
-- `done` — all required outcomes are complete and verified
-
-Completion rule:
-- a run is not `done` if the current state requires an obvious next step but the response or run file omits `Recommended next command`
-- a planning-only run may finish with execution deferred, but it must still include the exact next recommended command
-- a run is not safely resumable if `Resume Digest` or the current risk fields are stale after a meaningful checkpoint
-- a run is not safely resumable if `Stall Status` or `Approval Strategy` is stale after a blocked or escalated step
-
-## Experience Engine integration
-
-This skill must not depend on `experience-engine`, but it should work well with it.
-
-When hooks surface a relevant warning:
-- fold the warning into the current clarify, research, plan, or execution artifact
-- route the warning into the right artifact section:
-  - `Clarify State` -> scope, constraints, or open questions
-  - `Research Pack` -> evidence, answered questions, or unresolved risks
-  - `Execution Wave` -> `Risks`, `Invariant requirements`, or `Verify`
-  - `Phase Close` -> carry-forward notes or remaining open risks
-- use the `Why:` line as:
-  - `Risks`
-  - `Invariant requirements`
-  - `Verify`
-- do not silently ignore repeated noisy warnings
-
-If you deliberately ignore a repeated noisy suggestion, report it with:
-
-```bash
-curl -s -X POST http://localhost:8082/api/feedback \
-  -H "Content-Type: application/json" \
-  -d '{"pointId":"xxxx","collection":"col-name","followed":false}'
-```
-
-Replace `xxxx` and `col-name` from the hook suffix:
-
-```text
-[id:xxxx col:name]
-```
-
-## Output contract
-
-Use this response shape:
-
-1. `Current gate` status
-2. `Overall picture` once the task is clear enough:
-   - goal
-   - planning inputs or source artifacts
-   - required outcomes
-   - out of scope
-3. `Research artifact` status when Gate 3 is active
-4. `Verified Plan` summary once planning is complete:
-   - what the plan is for
-   - what outcome the plan now enables
-5. `Phase / Wave` table when execution is ready
-6. `Current execution wave` artifact during implementation
-7. `Phase close` status when a phase is finishing
-8. `Verification result` after each wave or phase
-9. `Recommended next command` when:
-   - a planning-only run ends
-   - execution is deferred
-   - a phase closes and the next step is clear
-
-`Recommended next command` rules:
-- recommend the exact next skill to use
-- prefer `$qc-flow` when staying in the same run file or changing gates
-- recommend `$qc-lock` only when the verified plan is already clear and the handoff target is one tightly scoped wave
-- include a concrete command or prompt line the user can paste
-- if both options are viable, recommend one first and mention the alternative briefly
-- treat this field as required, not optional, whenever the next step is already knowable from the current run state
-
-Keep responses concise. The artifacts carry the long-term state.
+- prefer the `Compact-Safe Summary` over any broader recap when the next step is already explicit
 
 ## Artifact formatting rules
 

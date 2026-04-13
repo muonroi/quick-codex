@@ -271,6 +271,9 @@ quick-codex doctor [--target <dir>]
 quick-codex init [--dir <project-dir>] [--force]
 quick-codex status [--dir <project-dir>] [--run <path>]
 quick-codex resume [--dir <project-dir>] [--run <path>]
+quick-codex checkpoint-digest [--dir <project-dir>] [--run <path>]
+quick-codex snapshot [--dir <project-dir>] [--run <path>]
+quick-codex repair-run [--dir <project-dir>] [--run <path>]
 quick-codex doctor-run [--dir <project-dir>] [--run <path>]
 quick-codex upgrade [--copy] [--target <dir>]
 quick-codex uninstall [--target <dir>] [--dir <project-dir>]
@@ -282,6 +285,9 @@ Recommended usage:
 - `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, `STATE.md`, and a sample run artifact
 - `status` shows the active run, gate, risks, and next verify
 - `resume` prints the exact next prompt(s) to paste when resuming
+- `checkpoint-digest` prints the compact-safe handoff that should survive context compaction or a pause
+- `snapshot` is a shorter alias for `checkpoint-digest`
+- `repair-run` backfills resumability sections and realigns `STATE.md` for stale or older run artifacts
 - `doctor-run` validates the run artifact and `STATE.md` handoff
 - `upgrade` reruns install behavior and removes legacy skill names if present
 - `uninstall` removes installed skills from the target path and can also remove project scaffolds when `--dir` is provided explicitly
@@ -294,6 +300,8 @@ node bin/quick-codex.js doctor
 node bin/quick-codex.js init --dir /path/to/project
 node bin/quick-codex.js status --dir /path/to/project
 node bin/quick-codex.js resume --dir /path/to/project
+node bin/quick-codex.js checkpoint-digest --dir /path/to/project
+node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
 ```
 
@@ -370,6 +378,9 @@ If you want to customize or improve the package:
 - the CLI says an update is available:
   - refresh the published package and local skill install with `npx quick-codex@latest upgrade`
   - if you are running from a local checkout, pull the latest repo changes first
+- `doctor-run` says the run is stale or incomplete:
+  - run `node bin/quick-codex.js repair-run --dir /path/to/project`
+  - rerun `node bin/quick-codex.js doctor-run --dir /path/to/project`
 - `npx --yes ./quick-codex install` fails:
   - run `node bin/quick-codex.js install` from inside `quick-codex/`
 - `npx` fails because npm cache is not writable:

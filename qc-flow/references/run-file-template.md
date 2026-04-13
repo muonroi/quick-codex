@@ -52,6 +52,15 @@ Execution mode:
 - Next verify: ...
 - Recommended next command: ...
 
+## Compact-Safe Summary
+- Goal: ...
+- Current gate: ...
+- Current phase / wave: P1 / W1
+- Requirements still satisfied: R1, R2
+- Remaining blockers: none
+- Next verify: ...
+- Resume with: `Use $qc-flow and resume from .quick-codex-flow/<task-slug>.md ...`
+
 ## Session Risk
 - low | medium | high
 Why:
@@ -133,6 +142,8 @@ Rules:
 - keep `Recommended Next Command` concrete enough that the user can paste it directly
 - do not mark a planning-only run complete until `Recommended Next Command` is filled in
 - refresh `Resume Digest` after planning handoff, wave completion, and phase close
+- refresh `Compact-Safe Summary` after every completed wave and phase
+- refresh `Compact-Safe Summary` before any broad or long-running verify and before stopping for a pause
 - if `Session Risk` or `Context Risk` is `high`, checkpoint before opening new scope
 - refresh `Stall Status` after any stalled or long-running verify step
 - refresh `Burn Risk` after thrash, stall, or repeated unchanged-state turns

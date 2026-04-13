@@ -67,6 +67,8 @@ Check what the package thinks is active:
 ```bash
 node bin/quick-codex.js status --dir /path/to/project
 node bin/quick-codex.js resume --dir /path/to/project
+node bin/quick-codex.js checkpoint-digest --dir /path/to/project
+node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
 ```
 
@@ -112,7 +114,16 @@ node bin/quick-codex.js resume --dir /path/to/project
 Expected behavior:
 - `status` tells you the active run, gate, risks, and next verify
 - `resume` prints the exact next prompt to paste
+- `checkpoint-digest` prints the compact-safe handoff before a pause or a broad verify
+- `repair-run` rewrites stale resumability sections and realigns `STATE.md`
 - `doctor-run` tells you if the run artifact is stale or incomplete
+
+If `doctor-run` fails on an older or partially updated run:
+
+```bash
+node bin/quick-codex.js repair-run --dir /path/to/project
+node bin/quick-codex.js doctor-run --dir /path/to/project
+```
 
 ## 5. What to expect
 
