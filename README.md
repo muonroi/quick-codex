@@ -15,6 +15,8 @@
     <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-yellow">
     <img alt="Node.js 18+" src="https://img.shields.io/badge/node-18%2B-green">
     <img alt="npm version" src="https://img.shields.io/npm/v/quick-codex">
+    <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/muonroi/quick-codex/lint.yml?branch=main&label=lint">
+    <img alt="npm downloads" src="https://img.shields.io/npm/dm/quick-codex">
     <img alt="Codex Only" src="https://img.shields.io/badge/runtime-Codex-blue">
     <img alt="Install Local" src="https://img.shields.io/badge/install-local-orange">
   </p>
