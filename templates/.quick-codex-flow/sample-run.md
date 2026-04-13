@@ -25,8 +25,8 @@ Definition of done:
 Current gate:
 - plan-check
 
-Companion project state:
-- `.quick-codex-flow/STATE.md` points to this run while it is the active run
+Execution mode:
+- manual
 
 ## Resume Digest
 - Goal: demonstrate the run-file structure
@@ -35,29 +35,7 @@ Companion project state:
 - Current phase / wave: P1 / W1
 - Remaining blockers: none
 - Next verify: confirm the verified plan
-- Recommended next command: `Use $qc-lock in manual mode for this task: execute P1 / W1 from .quick-codex-flow/sample-run.md with step-local verification first.`
-
-## Execution Mode
-- manual
-Why:
-- this sample demonstrates checkpoint-first flow control
-
-## Budget Mode
-- balanced
-Why:
-- this sample shows the default profile without quota pressure
-
-## Budget Rules
-- Prefer digest-first updates when only status changed.
-- Keep artifact sections short unless new ambiguity appears.
-- Hand off to `$qc-lock` early when the remaining work is mostly execution.
-
-## Burn Risk
-- low
-Why:
-- the sample stays on a single narrow planning step
-Last Budget Trigger:
-- none
+- Recommended next command: `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
 
 ## Session Risk
 - low
@@ -68,6 +46,11 @@ Why:
 - low
 Why:
 - no active implementation state exists
+
+## Burn Risk
+- low
+Why:
+- this sample does not repeat unchanged state
 
 ## Stall Status
 - none
@@ -105,16 +88,8 @@ Current phase: P1
 Current wave: W1
 Execution state: pending
 
-## Resume Routing Example
-- `manual`: reread this run, confirm `plan-check`, then stop with the concrete `$qc-lock` handoff below
-- `auto`: only continue automatically if this run is switched to `Execution mode: auto` and the same handoff is still the next safe move
-
 ## Recommended Next Command
-- `Use $qc-lock in manual mode for this task: execute P1 / W1 from .quick-codex-flow/sample-run.md with step-local verification first.`
-- or `Use $qc-lock in auto mode for this task: execute P1 / W1 from .quick-codex-flow/sample-run.md and continue step by step until the locked wave is done or blocked.`
+- `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
 
 ## Verification Ledger
-- Result: pass
-- Command or method: sample scaffold review
-- Small evidence: required sections and next-command examples are present
-- Next action: hand off to `$qc-lock` in `manual` or `auto` mode depending on user intent
+- sample scaffold created

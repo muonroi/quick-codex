@@ -1,11 +1,12 @@
 <p align="center">
   <h1 align="center">Quick Codex</h1>
   <p align="center">
-    <strong>Codex workflow skills for tasks that need more than raw chat context.</strong>
+    <strong>Make Codex CLI more resumable, auditable, and harder to derail on medium-sized work.</strong>
   </p>
   <p align="center">
     <a href="#quick-start">Quick Start</a> ·
     <a href="#why-quick-codex">Why Quick Codex</a> ·
+    <a href="#proof">Proof</a> ·
     <a href="#how-it-works">How It Works</a> ·
     <a href="#which-skill-to-use">Which Skill to Use</a> ·
     <a href="#cli">CLI</a> ·
@@ -24,13 +25,19 @@
 
 ---
 
-Codex is strong at focused execution. It is weaker when the real workflow lives only in chat memory.
+Codex is strong at focused execution. It gets weaker when the workflow lives only in chat memory.
 
 Quick Codex gives Codex a small, local workflow layer:
-- `qc-flow` for front-half thinking, checked planning, and durable execution artifacts
+- `qc-flow` for front-half thinking, checked planning, active-run discovery, and durable execution artifacts
 - `qc-lock` for strict `plan -> lock -> execute -> verify -> fix`
+- local recovery commands so resume does not depend on remembering artifact shape by hand
 
 The goal is simple: keep non-trivial work readable, resumable, and harder to derail.
+
+In practice, that means:
+- resume from files instead of guessing from stale chat state
+- keep scope tight once execution starts
+- make verification explicit so failures narrow the next move instead of causing thrash
 
 ## Why Quick Codex
 
@@ -57,6 +64,25 @@ Quick Codex is for teams and solo developers who want:
 - explicit handoff from plan to execution
 - durable state across long tasks
 - a cleaner way to resume after interruptions
+
+It is especially useful when the pain point is:
+- "Codex keeps losing the thread"
+- "This task tends to drift after a few turns"
+- "I want step-by-step execution with real verification"
+- "I came back later and do not trust the current chat state"
+
+## Proof
+
+Quick Codex is trying to solve a narrow set of Codex CLI pain points, so the proof should stay narrow too.
+
+Current proof set:
+- [Resume After Interruption](./BENCHMARK-PROOF.md): shows the package can recover the active run, next gate, and next prompt from local state instead of chat memory
+- [Verification Thrash](./BENCHMARK-PROOF-THRASH.md): shows a real fail -> narrow -> fix loop instead of repeating broad checks blindly
+- [Scope Drift](./BENCHMARK-PROOF-DRIFT.md): shows how explicit artifacts and locked execution reduce mid-task drift
+- [Failure Recovery](./BENCHMARK-PROOF-FAILURE.md): shows recovery behavior when the workflow gets awkward or partial rather than ideal
+- [Positioning](./BENCHMARK-PROOF-POSITIONING.md): explains the product claim this package can defend today without overclaiming
+
+The benchmark index lives in [BENCHMARKS.md](./BENCHMARKS.md).
 
 ## Quick Start
 
@@ -120,55 +146,20 @@ Use $qc-flow for this task: ...
 For a tightly scoped execution task:
 
 ```text
-Use $qc-lock in manual mode for this task: ...
+Use $qc-lock for this task: ...
 ```
 
-Or if you want Codex to keep advancing without waiting for a new prompt:
-
-```text
-Use $qc-lock in auto mode for this task: ...
-```
-
-### Lean Budget Mode
-
-If quota pressure matters, scaffold a project with the lean profile:
-
-```bash
-node bin/quick-codex.js init --dir /path/to/project --budget-mode lean
-```
-
-Use:
-- `lean` when rate limits, quota burn, or context pressure matter
-- `balanced` for normal usage
-- `deep` only when extra planning depth is worth the added prompt cost
-
-Burn guardrails stay behavioral:
-- checkpoint or relock when you hit repeated wide verifies, repeated restatement, failure loops, or stalled broad checks
-- do not estimate token counts or quota percentages inside the workflow
-- once a task is narrow, prefer `qc-lock` over more broad `qc-flow` narration
-
-Compressed handoff and output hygiene:
-- when handing off to `qc-lock`, carry only the next safe execution state: goal, phase or wave, blockers, verify path, and explicit `manual` or `auto` mode
-- when verify output is large, report only `result`, `command or method`, `small evidence`, and `next action`
-- avoid dumping raw logs into chat when a bounded summary is enough
-
-Resume after a clean session:
-- keep `.quick-codex-flow/STATE.md` as the small pointer to the active run
-- if you already know the run, prefer `Use $qc-flow and resume from .quick-codex-flow/<task>.md`
-- if you only know you want to continue current work, `qc-flow` can recover from `STATE.md` and the active run file
-- in `manual`, it reconstructs the run and stops at the next safe checkpoint
-- in `auto`, it continues only while the next safe move is already explicit in file state
-
-## Why not just use Codex directly?
+## What Quick Codex Changes
 
 Raw Codex can already code well. The problem is not code generation alone. The problem is task durability.
 
 | | Raw Codex usage | Quick Codex |
 |---|---|---|
 | **Planning state** | Often lives in chat only | Lives in explicit artifacts |
-| **Resume after interruption** | Easy to lose the thread | Resume from run file |
+| **Resume after interruption** | Easy to lose the thread | Resume from run file and `STATE.md` |
 | **Large-task handoff** | Often implicit | Explicit next command |
 | **Execution control** | Can drift on medium tasks | `qc-lock` keeps the loop strict |
+| **Recovery surface** | Reconstruct state manually | `status`, `resume`, and `doctor-run` |
 | **Workflow surface** | Ad hoc per session | Reusable conventions |
 
 ## How It Works
@@ -194,6 +185,15 @@ YOU start with a task
 ```
 
 The common idea is that workflow state should live in files, not just in chat.
+
+Quick Codex is not trying to be a project operating system. It is trying to solve a smaller Codex CLI problem set well:
+- task durability when work spans multiple turns
+- reliable resume after interruption or stale session state
+- scope drift during medium-sized engineering tasks
+- verification thrash where the same broad checks are repeated without narrowing
+- vague handoff between planning and execution
+
+This is why the package stays small and local-first.
 
 ## Which Skill to Use
 
@@ -227,14 +227,12 @@ Switch from `qc-flow` to `qc-lock` when:
 - clarify, research, and plan-check are already done
 - the remaining work is implementation-focused
 - the scope is narrow enough for locked step-by-step execution
-- burn risk is rising and a smaller locked step is the safer next move
 
 Stay on `qc-flow` when:
 - requirements are still moving
 - repo context is still incomplete
 - a relock is likely
 - phase boundaries still matter
-- the next safe move requires replanning, not another broad execution loop
 
 ## What gets installed
 
@@ -253,7 +251,13 @@ Stay on `qc-flow` when:
 └── templates/
 ```
 
-The package also includes:
+Supporting docs:
+- [BENCHMARKS.md](./BENCHMARKS.md)
+- [BENCHMARK-PROOF.md](./BENCHMARK-PROOF.md)
+- [BENCHMARK-PROOF-THRASH.md](./BENCHMARK-PROOF-THRASH.md)
+- [BENCHMARK-PROOF-DRIFT.md](./BENCHMARK-PROOF-DRIFT.md)
+- [BENCHMARK-PROOF-FAILURE.md](./BENCHMARK-PROOF-FAILURE.md)
+- [BENCHMARK-PROOF-POSITIONING.md](./BENCHMARK-PROOF-POSITIONING.md)
 - [QUICKSTART.md](./QUICKSTART.md)
 - [EXAMPLES.md](./EXAMPLES.md)
 - [TASK-SELECTION.md](./TASK-SELECTION.md)
@@ -264,24 +268,33 @@ The package also includes:
 ```bash
 quick-codex install [--copy] [--target <dir>]
 quick-codex doctor [--target <dir>]
-quick-codex init [--dir <project-dir>] [--force] [--budget-mode <lean|balanced|deep>]
+quick-codex init [--dir <project-dir>] [--force]
+quick-codex status [--dir <project-dir>] [--run <path>]
+quick-codex resume [--dir <project-dir>] [--run <path>]
+quick-codex doctor-run [--dir <project-dir>] [--run <path>]
 quick-codex upgrade [--copy] [--target <dir>]
-quick-codex uninstall [--target <dir>]
+quick-codex uninstall [--target <dir>] [--dir <project-dir>]
 ```
 
 Recommended usage:
 - `install` installs `qc-flow` and `qc-lock` into `~/.codex/skills`
 - `doctor` validates package shape, installed skills, and lint status
-- `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, and a sample run artifact, with optional `--budget-mode` for `lean`, `balanced`, or `deep`
+- `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, `STATE.md`, and a sample run artifact
+- `status` shows the active run, gate, risks, and next verify
+- `resume` prints the exact next prompt(s) to paste when resuming
+- `doctor-run` validates the run artifact and `STATE.md` handoff
 - `upgrade` reruns install behavior and removes legacy skill names if present
-- `uninstall` removes installed skills from the target path
+- `uninstall` removes installed skills from the target path and can also remove project scaffolds when `--dir` is provided explicitly
+- the CLI prints a short update notice when npm has a newer published version
 
 You can also run the CLI directly:
 
 ```bash
 node bin/quick-codex.js doctor
 node bin/quick-codex.js init --dir /path/to/project
-node bin/quick-codex.js init --dir /path/to/project --budget-mode lean
+node bin/quick-codex.js status --dir /path/to/project
+node bin/quick-codex.js resume --dir /path/to/project
+node bin/quick-codex.js doctor-run --dir /path/to/project
 ```
 
 ## Invocation Model
@@ -337,6 +350,8 @@ It does not fix:
 - model-level compaction bugs by itself
 
 The package is best understood as a workflow layer:
+- it helps the work survive those failures
+- it does not fix the runtime bugs themselves
 - it reduces the impact of these limits
 - it does not remove the underlying platform behavior
 
@@ -352,6 +367,9 @@ If you want to customize or improve the package:
 - `npx quick-codex install` fails:
   - wait a minute and retry if npm propagation is still catching up
   - or use the local fallback: `npx --yes ./quick-codex install`
+- the CLI says an update is available:
+  - refresh the published package and local skill install with `npx quick-codex@latest upgrade`
+  - if you are running from a local checkout, pull the latest repo changes first
 - `npx --yes ./quick-codex install` fails:
   - run `node bin/quick-codex.js install` from inside `quick-codex/`
 - `npx` fails because npm cache is not writable:
@@ -370,3 +388,6 @@ If you want to customize or improve the package:
 - You want to validate the package:
   - run `node bin/quick-codex.js doctor`
   - or `bash scripts/lint-skills.sh`
+- You want to fully remove the package from a project as well as `~/.codex/skills`:
+  - run `node bin/quick-codex.js uninstall --dir /path/to/project`
+  - `AGENTS.md` is only removed if it exactly matches the quick-codex scaffold

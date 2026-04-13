@@ -1,7 +1,7 @@
 {
   "name": "quick-codex",
-  "version": "0.2.0",
-  "description": "Codex-only local skills package with install, doctor, init, upgrade, and uninstall commands.",
+  "version": "0.3.0",
+  "description": "A lightweight workflow layer for Codex CLI with persistent run artifacts, resume-safe skills, and local recovery commands.",
   "author": "Muonroi",
   "keywords": [
     "codex",
@@ -32,7 +32,12 @@
     "scripts",
     "templates",
     "README.md",
-    "CHANGELOG.md",
+    "BENCHMARKS.md",
+    "BENCHMARK-PROOF-DRIFT.md",
+    "BENCHMARK-PROOF.md",
+    "BENCHMARK-PROOF-THRASH.md",
+    "BENCHMARK-PROOF-FAILURE.md",
+    "BENCHMARK-PROOF-POSITIONING.md",
     "QUICKSTART.md",
     "CONTRIBUTING.md",
     "EXAMPLES.md",

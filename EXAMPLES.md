@@ -2,6 +2,26 @@
 
 Use these as starting prompts.
 
+## Codex Lost The Thread
+
+```text
+Use $qc-flow for this task: Codex keeps losing the thread on this medium task. Create a persistent run artifact, check context sufficiency before planning, and make the next command explicit.
+```
+
+## Resume After Interruption
+
+```text
+Use $qc-flow and resume from .quick-codex-flow/<run-file>.md. Restate the current gate, execution mode, current phase and wave, blockers, burn risk, approval strategy, next verify, and continue from file state instead of chat memory.
+```
+
+Useful local commands:
+
+```bash
+node bin/quick-codex.js status --dir /path/to/project
+node bin/quick-codex.js resume --dir /path/to/project
+node bin/quick-codex.js doctor-run --dir /path/to/project
+```
+
 ## Large Feature
 
 ```text

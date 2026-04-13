@@ -78,3 +78,4 @@ Rules:
 - track requirement ids like `R1`, `R2` so later phases can reference them
 - after every phase, record `Requirements still satisfied`
 - when resuming, read this file before doing anything else
+- after each verified wave or phase, record any checkpoint commit before continuing

@@ -16,6 +16,7 @@ PACKAGE_DOCS=(
   "$ROOT_DIR/bin/quick-codex.js"
   "$ROOT_DIR/templates/AGENTS.snippet.md"
   "$ROOT_DIR/templates/.quick-codex-flow/README.md"
+  "$ROOT_DIR/templates/.quick-codex-flow/STATE.md"
   "$ROOT_DIR/templates/.quick-codex-flow/sample-run.md"
 )
 
@@ -33,13 +34,13 @@ check_frontmatter() {
   local skill_md="${1:?missing SKILL.md path}"
   local name_line desc_line
 
-  head -n 1 "$skill_md" | grep -qx -- '---' || fail "$skill_md missing opening frontmatter marker"
-  name_line="$(sed -n '2p' "$skill_md")"
-  desc_line="$(sed -n '3p' "$skill_md")"
+  head -n 1 "$skill_md" | tr -d '\r' | grep -qx -- '---' || fail "$skill_md missing opening frontmatter marker"
+  name_line="$(sed -n '2p' "$skill_md" | tr -d '\r')"
+  desc_line="$(sed -n '3p' "$skill_md" | tr -d '\r')"
 
   [[ "$name_line" =~ ^name:\ \"[^\"]+\"$ ]] || fail "$skill_md has invalid or unquoted name frontmatter"
   [[ "$desc_line" =~ ^description:\ \".+\"$ ]] || fail "$skill_md has invalid or unquoted description frontmatter"
-  sed -n '4p' "$skill_md" | grep -qx -- '---' || fail "$skill_md missing closing frontmatter marker"
+  sed -n '4p' "$skill_md" | tr -d '\r' | grep -qx -- '---' || fail "$skill_md missing closing frontmatter marker"
 }
 
 check_openai_yaml() {

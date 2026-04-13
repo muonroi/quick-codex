@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+Highlights:
+- added benchmark proof docs for resume reliability, verification thrash, scope drift, failure recovery, and product positioning
+- polished the README into a stronger OSS narrative with a dedicated proof section
+- added npm-backed update notices so older CLI installs can see when a newer published package exists
+- extended `uninstall` so it can also remove quick-codex project scaffolds when `--dir` is provided explicitly
+- tightened git hygiene guidance so coding waves and phases checkpoint with small commits instead of accumulating noisy worktree drift
+- kept the recovery surface explicit with `status`, `resume`, and `doctor-run`, plus `STATE.md`-based active-run discovery
+
 ## 0.2.0
 
 Highlights:

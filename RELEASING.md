@@ -35,6 +35,7 @@ npm publish
 ```bash
 npx quick-codex --help
 npx quick-codex install
+npx quick-codex@latest upgrade
 ```
 
 ## Versioning
@@ -65,8 +66,8 @@ Setup:
 2. Create and push a version tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 The workflow will:

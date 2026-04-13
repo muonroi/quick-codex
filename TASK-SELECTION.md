@@ -1,6 +1,15 @@
 # Task Selection
 
-Use this lightweight triage before choosing a skill.
+Use this lightweight triage before choosing a skill or a recovery command.
+
+## Start From The Pain Point
+
+If the pain point is:
+- "Codex is losing the thread" -> use `qc-flow`
+- "This task may drift" -> use `qc-flow`
+- "I want a step-by-step fix with verification" -> use `qc-lock`
+- "I came back after two days and do not trust chat memory" -> use `quick-codex status` and `quick-codex resume`
+- "I do not know whether the run file is still healthy" -> use `quick-codex doctor-run`
 
 ## Quick Triage
 
@@ -23,6 +32,11 @@ Pick `qc-lock` when:
 - the requirements are already clear
 - the repo area is already known
 - the task is mostly execution and verification
+
+Use the recovery commands when:
+- the task already has a run artifact
+- you want the current gate, risks, and next command without rereading everything
+- you need deterministic routing from file state instead of chat memory
 
 ## Artifact Naming Convention
 

@@ -50,52 +50,35 @@ Verify the package:
 node bin/quick-codex.js doctor
 ```
 
-Initialize a project for run artifacts and prompts:
+If npm has a newer published version, the CLI prints a short upgrade notice and points to:
+
+```bash
+npx quick-codex@latest upgrade
+```
+
+Initialize a project for run artifacts, state discovery, and prompts:
 
 ```bash
 node bin/quick-codex.js init --dir /path/to/project
 ```
 
-If quota pressure matters, use the lean scaffold:
+Check what the package thinks is active:
 
 ```bash
-node bin/quick-codex.js init --dir /path/to/project --budget-mode lean
+node bin/quick-codex.js status --dir /path/to/project
+node bin/quick-codex.js resume --dir /path/to/project
+node bin/quick-codex.js doctor-run --dir /path/to/project
 ```
 
-Budget modes:
-- `lean` for quota-sensitive or context-tight sessions
-- `balanced` for default usage
-- `deep` when extra planning depth is worth the cost
+## 2. Start from the pain point, not the theory
 
-Burn guardrails:
-- relock or checkpoint when you hit repeated wide verifies, failure loops, or stalled broad checks
-- keep burn-risk decisions behavioral; do not guess token counts
-
-Compressed handoff and output hygiene:
-- when handing off to `qc-lock`, state `manual` or `auto` explicitly
-- for large verify output, keep only `result`, `command or method`, `small evidence`, and `next action`
-
-Resume after a clean session:
-- keep `.quick-codex-flow/STATE.md` pointing at the current non-`done` run
-- explicit resume stays best:
+If Codex is losing the thread on a medium task:
 
 ```text
-Use $qc-flow and resume from .quick-codex-flow/<task>.md
+Use $qc-flow for this task: <describe the task>. Keep a persistent run artifact and do not rely on chat memory.
 ```
 
-- if you restart without the path, `qc-flow` can recover the active run from `STATE.md`
-- `manual` reconstructs state and stops with the next command
-- `auto` continues only when the next safe move is already explicit in the run file
-
-## 2. Use the main skill explicitly
-
-For non-trivial work, start with:
-
-```text
-Use $qc-flow for this task
-```
-
-This pushes Codex toward:
+If the task tends to drift or reopen scope:
 - clarify
 - context sufficiency check
 - targeted research
@@ -103,10 +86,12 @@ This pushes Codex toward:
 - phase / wave decomposition
 - sequential execution
 
-## 3. Use the narrow executor when the plan is already clear
+## 3. Use the narrow executor when you want step-by-step verification
+
+If you want one-step execution with tight verification:
 
 ```text
-Use $qc-lock in manual mode for this task
+Use $qc-lock for this task: <describe the step>. Keep scope locked and verify each step before moving on.
 ```
 
 This pushes Codex toward:
@@ -114,15 +99,22 @@ This pushes Codex toward:
 - locked scope
 - one-step execution
 - verify before moving on
-- smaller retries when burn risk is rising
 
-If you want Codex to keep advancing step by step without waiting for a new prompt:
+## 4. Recover cleanly after interruption
 
-```text
-Use $qc-lock in auto mode for this task
+If you come back after a pause or a fresh session:
+
+```bash
+node bin/quick-codex.js status --dir /path/to/project
+node bin/quick-codex.js resume --dir /path/to/project
 ```
 
-## 4. What to expect
+Expected behavior:
+- `status` tells you the active run, gate, risks, and next verify
+- `resume` prints the exact next prompt to paste
+- `doctor-run` tells you if the run artifact is stale or incomplete
+
+## 5. What to expect
 
 `qc-flow` may be used implicitly because its metadata allows that.
 
@@ -138,7 +130,7 @@ When a planning-only run finishes under `qc-flow`, expect it to end with:
 
 If that command is missing, treat the handoff as incomplete.
 
-## 5. Development workflow
+## 6. Development workflow
 
 If you are editing the skill package itself:
 
@@ -152,4 +144,9 @@ Optional commands:
 ```bash
 node bin/quick-codex.js upgrade
 node bin/quick-codex.js uninstall
+node bin/quick-codex.js uninstall --dir /path/to/project
 ```
+
+`uninstall` behavior:
+- without `--dir`, it removes installed skills from `~/.codex/skills`
+- with `--dir`, it also removes `.quick-codex-flow/` and any quick-codex-only AGENTS scaffold in that project
