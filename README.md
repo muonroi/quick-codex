@@ -57,12 +57,10 @@ Quick Codex is for teams and solo developers who want:
 
 ## Quick Start
 
-### Option A: Local checkout via `npx`
-
-From this repository root:
+### Option A: Install from npm
 
 ```bash
-npx --yes ./quick-codex install
+npx quick-codex install
 ```
 
 This installs:
@@ -77,14 +75,22 @@ into:
 
 Then restart Codex.
 
-### Option B: Direct CLI usage from the package root
+### Option B: Local checkout via `npx`
+
+From this repository root:
+
+```bash
+npx --yes ./quick-codex install
+```
+
+### Option C: Direct CLI usage from the package root
 
 ```bash
 cd quick-codex
 node bin/quick-codex.js install
 ```
 
-### Option C: Development symlinks
+### Option D: Development symlinks
 
 ```bash
 mkdir -p ~/.codex/skills
@@ -301,10 +307,14 @@ If you want to customize or improve the package:
 
 ## Troubleshooting
 
+- `npx quick-codex install` fails:
+  - wait a minute and retry if npm propagation is still catching up
+  - or use the local fallback: `npx --yes ./quick-codex install`
 - `npx --yes ./quick-codex install` fails:
   - run `node bin/quick-codex.js install` from inside `quick-codex/`
 - `npx` fails because npm cache is not writable:
-  - run `npm_config_cache=/tmp/quick-codex-npm-cache npx --yes ./quick-codex install`
+  - run `npm_config_cache=/tmp/quick-codex-npm-cache npx quick-codex install`
+  - or `npm_config_cache=/tmp/quick-codex-npm-cache npx --yes ./quick-codex install`
 - Codex does not see the skills:
   - check `~/.codex/skills`
   - restart Codex after install or upgrade

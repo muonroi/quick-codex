@@ -2,6 +2,12 @@
 
 ## 1. Install the skills
 
+Fastest install from npm:
+
+```bash
+npx quick-codex install
+```
+
 Fastest local command:
 
 ```bash
