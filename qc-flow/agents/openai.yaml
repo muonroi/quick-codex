@@ -1,0 +1,7 @@
+interface:
+  display_name: "Quick Codex Flow"
+  short_description: "Clarify, research, plan, then execute"
+  default_prompt: "Use $qc-flow to clarify this task, verify context sufficiency, build a checked phase-and-wave plan, then execute it sequentially."
+
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,45 @@
+{
+  "name": "quick-codex",
+  "version": "0.1.0",
+  "description": "Codex-only local skills package with install, doctor, init, upgrade, and uninstall commands.",
+  "keywords": [
+    "codex",
+    "skills",
+    "workflow",
+    "cli",
+    "agent"
+  ],
+  "homepage": "https://github.com/muonroi/quick-codex#readme",
+  "bugs": {
+    "url": "https://github.com/muonroi/quick-codex/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muonroi/quick-codex.git"
+  },
+  "type": "module",
+  "bin": {
+    "quick-codex": "./bin/quick-codex.js"
+  },
+  "files": [
+    "bin",
+    "qc-flow",
+    "qc-lock",
+    "scripts",
+    "templates",
+    "README.md",
+    "QUICKSTART.md",
+    "CONTRIBUTING.md",
+    "EXAMPLES.md",
+    "TASK-SELECTION.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "lint:package": "bash scripts/lint-skills.sh",
+    "doctor": "node bin/quick-codex.js doctor"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

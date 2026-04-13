@@ -1,0 +1,9 @@
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+*.log
+node_modules/
+.quick-codex-flow/
+.quick-codex-lock/
+npm-debug.log*

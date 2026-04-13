@@ -1,0 +1,7 @@
+interface:
+  display_name: "Quick Codex Lock"
+  short_description: "Strict plan-lock-verify coding loop"
+  default_prompt: "Use $qc-lock to complete this task with a locked step-by-step plan and verification after each step."
+
+policy:
+  allow_implicit_invocation: false

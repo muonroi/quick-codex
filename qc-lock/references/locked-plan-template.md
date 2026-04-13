@@ -1,0 +1,78 @@
+# Locked Plan Template
+
+Use this format when the skill locks a plan.
+
+```markdown
+## Locked Plan
+Goal: <one sentence>
+Phase: <phase id>
+Phase purpose: <why this phase exists>
+Covers requirements: <R1, R2>
+Scope: <what this run is allowed to change>
+Out of scope: <explicit exclusions>
+Lock rule: No scope expansion without relock.
+Status: active
+
+| Step | Status | Change | Done when | Verify |
+|---|---|---|---|---|
+| S1 | pending | ... | ... | ... |
+| S2 | pending | ... | ... | ... |
+| S3 | pending | ... | ... | ... |
+
+Current step: S1
+Invariant requirements:
+- <required outcomes that must still hold after this phase>
+
+Risks:
+- <current technical risk>
+
+Experience inputs:
+- <hook warning or `none`>
+
+Assumptions:
+- <assumption that could block execution>
+```
+
+Status rules:
+- `pending` — not started
+- `in_progress` — active step
+- `done` — step completed and verification passed
+- `blocked` — cannot proceed without clarification or relock
+
+Relock rules:
+- relock when scope changes materially
+- relock when a new required step appears
+- relock when the locked verify path is no longer valid
+
+Compact example:
+
+```markdown
+## Locked Plan
+Goal: Add a retry guard to the API client without changing public behavior.
+Phase: P2
+Phase purpose: Add the implementation change after the retry path is understood.
+Covers requirements: R1
+Scope: `src/client.ts`, related tests
+Out of scope: transport refactors, logging redesign
+Lock rule: No scope expansion without relock.
+Status: active
+
+| Step | Status | Change | Done when | Verify |
+|---|---|---|---|---|
+| S1 | done | Inspect retry flow and failing path | retry entry point identified | targeted read-through |
+| S2 | in_progress | Add retry guard in client | guard prevents duplicate retry scheduling | `npm test -- client.retry` |
+| S3 | pending | Clean up edge-case handling | abort and timeout cases still pass | `npm test -- client.retry` |
+
+Current step: S2
+Invariant requirements:
+- R1: Public retry behavior stays unchanged except for the duplicate scheduling bug.
+
+Risks:
+- Guard may suppress the first valid retry.
+
+Experience inputs:
+- Why: Last time similar retry state leaked across requests.
+
+Assumptions:
+- Existing tests cover timeout and abort behavior.
+```
