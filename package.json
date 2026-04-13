@@ -1,6 +1,6 @@
 {
   "name": "quick-codex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Codex-only local skills package with install, doctor, init, upgrade, and uninstall commands.",
   "author": "Muonroi",
   "keywords": [
@@ -32,6 +32,7 @@
     "scripts",
     "templates",
     "README.md",
+    "CHANGELOG.md",
     "QUICKSTART.md",
     "CONTRIBUTING.md",
     "EXAMPLES.md",

@@ -120,8 +120,44 @@ Use $qc-flow for this task: ...
 For a tightly scoped execution task:
 
 ```text
-Use $qc-lock for this task: ...
+Use $qc-lock in manual mode for this task: ...
 ```
+
+Or if you want Codex to keep advancing without waiting for a new prompt:
+
+```text
+Use $qc-lock in auto mode for this task: ...
+```
+
+### Lean Budget Mode
+
+If quota pressure matters, scaffold a project with the lean profile:
+
+```bash
+node bin/quick-codex.js init --dir /path/to/project --budget-mode lean
+```
+
+Use:
+- `lean` when rate limits, quota burn, or context pressure matter
+- `balanced` for normal usage
+- `deep` only when extra planning depth is worth the added prompt cost
+
+Burn guardrails stay behavioral:
+- checkpoint or relock when you hit repeated wide verifies, repeated restatement, failure loops, or stalled broad checks
+- do not estimate token counts or quota percentages inside the workflow
+- once a task is narrow, prefer `qc-lock` over more broad `qc-flow` narration
+
+Compressed handoff and output hygiene:
+- when handing off to `qc-lock`, carry only the next safe execution state: goal, phase or wave, blockers, verify path, and explicit `manual` or `auto` mode
+- when verify output is large, report only `result`, `command or method`, `small evidence`, and `next action`
+- avoid dumping raw logs into chat when a bounded summary is enough
+
+Resume after a clean session:
+- keep `.quick-codex-flow/STATE.md` as the small pointer to the active run
+- if you already know the run, prefer `Use $qc-flow and resume from .quick-codex-flow/<task>.md`
+- if you only know you want to continue current work, `qc-flow` can recover from `STATE.md` and the active run file
+- in `manual`, it reconstructs the run and stops at the next safe checkpoint
+- in `auto`, it continues only while the next safe move is already explicit in file state
 
 ## Why not just use Codex directly?
 
@@ -191,12 +227,14 @@ Switch from `qc-flow` to `qc-lock` when:
 - clarify, research, and plan-check are already done
 - the remaining work is implementation-focused
 - the scope is narrow enough for locked step-by-step execution
+- burn risk is rising and a smaller locked step is the safer next move
 
 Stay on `qc-flow` when:
 - requirements are still moving
 - repo context is still incomplete
 - a relock is likely
 - phase boundaries still matter
+- the next safe move requires replanning, not another broad execution loop
 
 ## What gets installed
 
@@ -226,7 +264,7 @@ The package also includes:
 ```bash
 quick-codex install [--copy] [--target <dir>]
 quick-codex doctor [--target <dir>]
-quick-codex init [--dir <project-dir>] [--force]
+quick-codex init [--dir <project-dir>] [--force] [--budget-mode <lean|balanced|deep>]
 quick-codex upgrade [--copy] [--target <dir>]
 quick-codex uninstall [--target <dir>]
 ```
@@ -234,7 +272,7 @@ quick-codex uninstall [--target <dir>]
 Recommended usage:
 - `install` installs `qc-flow` and `qc-lock` into `~/.codex/skills`
 - `doctor` validates package shape, installed skills, and lint status
-- `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, and a sample run artifact
+- `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, and a sample run artifact, with optional `--budget-mode` for `lean`, `balanced`, or `deep`
 - `upgrade` reruns install behavior and removes legacy skill names if present
 - `uninstall` removes installed skills from the target path
 
@@ -243,6 +281,7 @@ You can also run the CLI directly:
 ```bash
 node bin/quick-codex.js doctor
 node bin/quick-codex.js init --dir /path/to/project
+node bin/quick-codex.js init --dir /path/to/project --budget-mode lean
 ```
 
 ## Invocation Model

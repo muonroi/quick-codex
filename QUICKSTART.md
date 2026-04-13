@@ -56,6 +56,37 @@ Initialize a project for run artifacts and prompts:
 node bin/quick-codex.js init --dir /path/to/project
 ```
 
+If quota pressure matters, use the lean scaffold:
+
+```bash
+node bin/quick-codex.js init --dir /path/to/project --budget-mode lean
+```
+
+Budget modes:
+- `lean` for quota-sensitive or context-tight sessions
+- `balanced` for default usage
+- `deep` when extra planning depth is worth the cost
+
+Burn guardrails:
+- relock or checkpoint when you hit repeated wide verifies, failure loops, or stalled broad checks
+- keep burn-risk decisions behavioral; do not guess token counts
+
+Compressed handoff and output hygiene:
+- when handing off to `qc-lock`, state `manual` or `auto` explicitly
+- for large verify output, keep only `result`, `command or method`, `small evidence`, and `next action`
+
+Resume after a clean session:
+- keep `.quick-codex-flow/STATE.md` pointing at the current non-`done` run
+- explicit resume stays best:
+
+```text
+Use $qc-flow and resume from .quick-codex-flow/<task>.md
+```
+
+- if you restart without the path, `qc-flow` can recover the active run from `STATE.md`
+- `manual` reconstructs state and stops with the next command
+- `auto` continues only when the next safe move is already explicit in the run file
+
 ## 2. Use the main skill explicitly
 
 For non-trivial work, start with:
@@ -75,7 +106,7 @@ This pushes Codex toward:
 ## 3. Use the narrow executor when the plan is already clear
 
 ```text
-Use $qc-lock for this task
+Use $qc-lock in manual mode for this task
 ```
 
 This pushes Codex toward:
@@ -83,6 +114,13 @@ This pushes Codex toward:
 - locked scope
 - one-step execution
 - verify before moving on
+- smaller retries when burn risk is rising
+
+If you want Codex to keep advancing step by step without waiting for a new prompt:
+
+```text
+Use $qc-lock in auto mode for this task
+```
 
 ## 4. What to expect
 

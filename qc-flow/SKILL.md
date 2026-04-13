@@ -62,6 +62,103 @@ Do not use fast path when:
 - verification is still ambiguous
 - a relock is likely
 
+## Lean Budget Mode
+
+Lean Budget Mode is a behavior profile for quota-sensitive Codex sessions.
+
+It exists to reduce workflow overhead without giving up resumability.
+
+Profiles:
+- `lean`:
+  - use when the user mentions quota burn, rate limits, context pressure, or wants the cheapest viable workflow
+  - prefer fast-path behavior
+  - keep research conclusion-only unless ambiguity is still blocking
+  - keep planning to the minimum needed to choose the next safe step
+  - recommend `$qc-lock` as soon as plan-check passes and the remaining work is mostly execution
+- `balanced`:
+  - default behavior when no strong budget or depth signal exists
+  - use the standard `qc-flow` rules in this document
+- `deep`:
+  - use only when ambiguity, architecture risk, or verification uncertainty clearly justify the extra prompt cost
+  - allow fuller research, richer rationale, and slower handoff
+
+Selection rules:
+- if the user explicitly asks for budget-sensitive behavior, choose `lean`
+- if the task is clearly risky but still needs planning, choose `deep`
+- otherwise choose `balanced`
+
+Lean mode rules:
+- keep artifacts only as detailed as needed to resume safely
+- prefer updating `Resume Digest` before expanding other sections
+- do not restate unchanged baseline sections just to preserve formatting symmetry
+- stop research as soon as the missing gate item is satisfied
+- stop planning as soon as the verify path and next command are clear
+- bias toward one small phase or one tightly scoped wave when safe
+- hand off to `$qc-lock` early rather than elaborating execution prose inside `qc-flow`
+
+## Compressed handoff
+
+When `qc-flow` hands work to a later `qc-flow` turn or to `$qc-lock`, carry only the minimum state needed for the next safe decision.
+
+Required handoff fields:
+- goal
+- required outcomes
+- current gate
+- current phase and wave, or the next active wave if execution is about to start
+- remaining blockers
+- execution mode when handoff is going to `$qc-lock`
+- burn risk and last budget trigger when relevant
+- approval strategy when relevant
+- next verify
+- exact `Recommended next command`
+
+Handoff rules:
+- prefer `Resume Digest` plus one short carry-forward note over repeating full artifact sections
+- do not restate unchanged baseline, research, or plan sections unless they materially changed
+- if handoff is going to `$qc-lock`, point to one tightly scoped wave and one concrete verify path
+- if handoff is going to `$qc-lock`, specify `manual` or `auto` explicitly
+- use `manual` by default unless the user explicitly wants the agent to keep advancing without waiting
+- use `auto` only when the locked wave is clear enough to continue step by step without another user prompt
+- if the next step already has enough context in the run file, do not duplicate it in the chat response
+
+Lean-mode handoff:
+- emit the compressed handoff payload before any broader explanation
+- if only status changed, prefer digest-only handoff
+- if burn risk is rising, narrow the handoff to only what is needed for the next step
+
+## Execution mode
+
+`qc-flow` supports two execution modes:
+- `manual`
+- `auto`
+
+Selection rules:
+- default to `manual`
+- use `auto` only when the user explicitly asks the agent to keep advancing without waiting for another prompt
+- if the user does not specify, stay in `manual`
+
+Mode behavior:
+- `manual`:
+  - stop at the current safe checkpoint
+  - emit the next concrete command or gate transition
+  - wait for the user before advancing further
+- `auto`:
+  - continue across gates, waves, and phase boundaries when the next step is already clear
+  - keep going until the run is complete or a real blocker appears
+  - stop only when:
+    - the run is complete
+    - a relock or plan revision is required
+    - approval or escalation is required and cannot be completed immediately
+    - requirements change or ambiguity reopens a gate
+    - session, context, or burn risk requires a checkpoint and safe stop
+    - the user interrupts or changes direction
+
+Auto-mode guardrails:
+- do not skip workflow gates just because continuation is automatic
+- after each completed wave or phase, update the run file before continuing
+- in `auto`, prefer short checkpoint transitions over broad recap prose
+- if the next safe move is not explicit, stop and emit a concrete blocker or next command
+
 ## Required workflow
 
 Follow this sequence:
@@ -88,6 +185,7 @@ The run file must preserve:
 - planning inputs or source artifacts
 - required outcomes
 - constraints
+- execution mode
 - resume digest
 - session risk
 - context risk
@@ -107,6 +205,67 @@ The run file must preserve:
 
 Before resuming work, read the run file first.
 
+## Active run discovery
+
+For project-level resume after a clean session, maintain a small companion state file:
+- `.quick-codex-flow/STATE.md`
+
+This state file does not replace the run file.
+It only tells `qc-flow` which run should be treated as current when the user does not provide a run path explicitly.
+
+Keep `STATE.md` minimal:
+- active run path
+- current gate
+- current phase and wave
+- execution mode
+- status: `active` | `paused` | `blocked` | `done`
+
+Discovery rules when the user does not provide `resume from <run-file>`:
+1. If `.quick-codex-flow/STATE.md` exists and its `Active run` points to a non-`done` run, use that run.
+2. Otherwise scan `.quick-codex-flow/*.md` for non-`done` runs, excluding `STATE.md`.
+3. If exactly one non-`done` run exists, use it.
+4. If more than one plausible run exists, do not guess from chat memory alone.
+5. Use timestamps only as a last fallback when the result is still unambiguous.
+
+Mode-aware resume rules:
+- `manual` and `auto` use the same discovery source
+- `manual` may stop after reconstructing the active run and the next safe checkpoint
+- `auto` may continue only if the discovered run already makes the next safe move explicit
+- if the discovered run is `done`, do not reopen it; emit that no active run remains
+- when the active run changes, update `STATE.md` before stopping
+
+## Next-step routing after discovery
+
+After the active run is resolved, route from file state, not from chat memory.
+
+Routing inputs:
+- `Current gate`
+- `Current phase / wave`
+- `Current Status`
+- `Blockers`
+- `Burn Risk`
+- `Approval Strategy`
+- `Recommended next command`
+
+Deterministic routing rules:
+1. If `Current gate` is `clarify`, `research`, `plan`, or `plan-check`, stay in `qc-flow`.
+2. If `Current gate` is `execute` and the current wave is `pending` or `in_progress`, continue only if the wave goal and next verify are explicit.
+3. If `Current gate` is `execute` and `Recommended next command` already hands one narrow wave to `$qc-lock`, follow that handoff instead of rebuilding it.
+4. If `Current gate` is `phase-close`, finish the phase-close checkpoint before opening the next phase.
+5. If `Current gate` is `done`, report that no active run remains.
+6. If blockers, approval state, or high risk contradict the apparent next step, stop and emit the blocker instead of guessing.
+
+Mode-specific routing:
+- `manual`:
+  - reconstruct the active run
+  - confirm the next safe checkpoint
+  - stop with one concrete next command, even if more work is obvious
+- `auto`:
+  - reconstruct the active run
+  - execute the current routed step
+  - continue only while each completed step leaves one explicit safe next move in the run file
+  - stop when the route would otherwise need inference instead of explicit file state
+
 ## Resume Digest
 
 Every non-trivial run must maintain a compact `Resume Digest` inside the run file.
@@ -115,6 +274,7 @@ The digest should be short enough to survive aggressive compaction and fast enou
 
 The digest must capture:
 - goal
+- execution mode
 - current gate
 - current phase and wave
 - remaining blockers
@@ -126,6 +286,10 @@ Update the digest:
 - after every completed wave
 - at every phase close
 - before stopping when session or context risk is high
+
+In `lean` mode:
+- refresh the digest before writing any longer artifact section
+- if only status changed, prefer digest-only and status-only updates over repeating prior prose
 
 ## Session and context risk
 
@@ -144,6 +308,70 @@ Risk rules:
 - if either risk is `high`, checkpoint the run file before more work
 - if both are `high`, prefer phase-close, relock, or stop with a concrete `Recommended next command`
 - keep the risk reason short and actionable
+
+Lean-mode interpretation:
+- if quota pressure is explicit, unnecessary restatement counts as workflow risk
+- prefer digest-first checkpoints over broad narrative checkpoints
+
+## Burn Risk
+
+`Burn Risk` tracks the chance that the current workflow is wasting scarce quota through repeated, low-signal behavior.
+
+Unlike `Session Risk` or `Context Risk`, `Burn Risk` is not about size alone.
+It is about waste: repeated turns, repeated checks, or repeated narration that are not buying enough new signal.
+
+Use `low`, `medium`, or `high`.
+
+Observable triggers:
+- `unchanged-state turns`:
+  - two or more consecutive turns where the main state did not change, but the workflow still produced broad narration
+- `wide verify loops`:
+  - rerunning the same broad verify without a narrower hypothesis or a changed plan
+- `restatement bloat`:
+  - repeating baseline or prior artifact sections that did not materially change
+- `failure loops`:
+  - repeated fix/verify cycles with little new evidence
+- `stalling broad checks`:
+  - long or ambiguous checks that still do not isolate the next decision safely
+
+Response rules:
+- if `Burn Risk` is `medium`:
+  - narrow the next verify
+  - switch to digest-first updates
+  - avoid opening a new phase unless the current phase is clearly complete
+- if `Burn Risk` is `high`:
+  - do not open a new phase
+  - checkpoint the run file immediately
+  - either relock, phase-close, or stop with a concrete `Recommended next command`
+- if `Burn Risk` becomes `high` during `lean` mode:
+  - prefer hard narrowing over more explanation
+  - prefer `$qc-lock` handoff if the remaining work is mostly execution
+
+Non-telemetry rule:
+- do not estimate token counts, quota percentages, or hidden model limits
+- use only observable workflow behavior when setting `Burn Risk`
+
+## Bounded output hygiene
+
+Large verify output, long logs, and repeated command dumps should be compressed into bounded evidence.
+
+Default bounded-output pattern:
+- `Result`: pass | fail | blocked
+- `Command or method`: the verify that ran
+- `Small evidence`: the smallest lines or facts that justify the result
+- `Next action`: what changes because of that result
+
+When output is large:
+- prefer a short result summary over raw output
+- keep only relevant error lines, failing test names, warning counts, or one short head/tail sample when needed
+- if output is clean, say that it passed and avoid dumping the log
+- if output is noisy but non-blocking, summarize the noise instead of pasting it
+- write the minimum evidence needed into the run file; do not turn the run file into a log archive
+
+Do not:
+- paste long command output into chat when a short summary is enough
+- repeat the same large output on retry turns
+- use "see above" without restating the one fact that matters for the next decision
 
 ## Gate 1: Clarify
 
@@ -208,6 +436,11 @@ For planning-only runs, the plan must also make the implementation handoff obvio
 - what the verified plan now enables
 - which command should be used next to continue
 
+In `lean` mode:
+- prefer a single active phase when safe
+- collapse answered research into short conclusions
+- stop elaborating once the next safe execution command is obvious
+
 Planning-only completion rule:
 - do not treat a planning-only run as complete until it includes a concrete `Recommended next command`
 - if the plan is verified but no next command is provided, the run is still incomplete
@@ -240,6 +473,8 @@ Rules:
 - each phase must list covered requirements
 - each wave should be small enough for one focused implementation pass
 - only one wave is active at a time
+- for coding tasks, every phase and wave must declare verification that covers build cleanliness and unit-test status for the touched scope
+- for non-code tasks, every phase and wave must declare the narrowest concrete verification that proves the artifact change safely
 
 ## Gate 7: Sequential execution handoff
 
@@ -256,7 +491,26 @@ Execution rules:
 - after each phase, create or update a phase-close artifact using [references/phase-close-template.md](references/phase-close-template.md)
 - keep the current approval strategy explicit when escalation may be needed
 
+Task-type completion rules:
+- for coding tasks:
+  - a wave is not `done` unless the relevant build for the touched scope is free of errors and warnings
+  - a wave is not `done` unless the relevant unit tests for the touched scope pass
+  - a phase is not `done` unless its waves satisfy the same build-clean and unit-test-pass requirement for the touched scope
+  - prefer the narrowest build and test commands that still cover the edited code safely
+- for non-code tasks:
+  - choose the smallest concrete verification that matches the artifact being changed
+  - record that verification explicitly in the wave or phase artifact
+
 If implementation reveals a missing task that changes scope or dependencies, stop and return to plan check.
+
+Compressed execution handoff:
+- when handing an execution-ready wave to `$qc-lock`, carry only the active wave goal, touched scope, verify path, blockers, burn risk, and next command
+- include the intended `qc-lock` execution mode in that handoff: `manual` or `auto`
+- prefer one-wave handoff over repeating the whole phase table when the phase structure has not changed
+
+Mode-aware execution:
+- in `auto`, if the current wave verifies cleanly and the next wave or phase is already defined, continue without waiting for another user message
+- in `manual`, stop at the current safe wave or phase checkpoint even if the next step is obvious
 
 ## Anti-thrash rules
 
@@ -271,6 +525,10 @@ Thrash indicators:
 - the same command fails repeatedly without a changed hypothesis
 - fixes are broadening scope without updating the plan
 - verification is being deferred instead of rerun
+
+Burn-risk connection:
+- repeated thrash without new evidence raises `Burn Risk`
+- after the second failed verify in the same wave, reassess `Burn Risk` before trying again
 
 ## Anti-stall protocol
 
@@ -293,6 +551,10 @@ When a stall happens, record:
 
 Prefer bounded, observable checks over long opaque waits.
 
+Burn-risk connection:
+- a stalled broad check is both a stall problem and a burn-risk trigger
+- after the first stall, reassess `Burn Risk` before starting another broad check
+
 ## Approval-aware execution
 
 When execution may require approval or escalation, prefer a local-first strategy.
@@ -314,24 +576,32 @@ Why this matters:
 - it keeps verification auditable
 - it makes blocked execution resumable instead of vague
 
+Burn-risk connection:
+- when approval is likely, prefer the smallest pre-approval check that can change the next decision
+- do not spend extra turns narrating why an escalated check might help if a concrete narrow check is still available
+
 ## Resume protocol
 
 When resuming:
 
-1. Read the run file.
-2. Read the `Resume Digest` first.
-3. Check `Session Risk` and `Context Risk`.
-4. Restate:
+1. If the user provided a run path, read that run file.
+2. Otherwise resolve the active run from `.quick-codex-flow/STATE.md` or the deterministic fallback rules.
+3. Read the `Resume Digest` first.
+4. Check `Session Risk` and `Context Risk`.
+5. Check `Burn Risk`.
+6. Restate:
    - current gate
    - original goal
+   - execution mode
    - required outcomes
    - current phase
    - current wave
    - remaining blockers
    - stall status
    - approval strategy
+   - burn risk
    - next verify
-5. Continue only after restating this state.
+7. Continue only after restating this state.
 
 If either risk is `high`, address that before opening new scope.
 
@@ -351,6 +621,10 @@ Completion rule:
 - a planning-only run may finish with execution deferred, but it must still include the exact next recommended command
 - a run is not safely resumable if `Resume Digest` or the current risk fields are stale after a meaningful checkpoint
 - a run is not safely resumable if `Stall Status` or `Approval Strategy` is stale after a blocked or escalated step
+- a run is not safely resumable if `Burn Risk` is stale after a thrash, stall, or narrow-to-stop decision
+- for coding tasks, a phase close or final `done` state is incomplete unless it states whether the relevant build was free of errors and warnings and whether the relevant unit tests passed for the touched scope
+- in `manual`, a safe checkpoint may end with a next command even when more work is obvious
+- in `auto`, do not stop at a safe checkpoint if the next step is already clear and no blocker is present
 
 ## Experience Engine integration
 
@@ -406,15 +680,39 @@ Use this response shape:
    - execution is deferred
    - a phase closes and the next step is clear
 
+Mode-specific response behavior:
+- in `manual`, stop at the current safe checkpoint and emit the next concrete command
+- in `auto`, continue to the next gate, wave, or phase when the next safe move is already clear
+- in both modes, stop immediately when relock, approval, or ambiguity prevents safe continuation
+
+For coding tasks, `Verification result` and phase-close summaries must say whether:
+- the relevant build passed with no errors and no warnings in the touched scope
+- the relevant unit tests for the touched scope passed
+
+For large verify output, `Verification result` should use the bounded-output pattern:
+- result
+- command or method
+- smallest relevant evidence
+- next action
+
 `Recommended next command` rules:
 - recommend the exact next skill to use
 - prefer `$qc-flow` when staying in the same run file or changing gates
 - recommend `$qc-lock` only when the verified plan is already clear and the handoff target is one tightly scoped wave
 - include a concrete command or prompt line the user can paste
+- if recommending `$qc-lock`, state whether it should run in `manual` or `auto`
 - if both options are viable, recommend one first and mention the alternative briefly
 - treat this field as required, not optional, whenever the next step is already knowable from the current run state
 
 Keep responses concise. The artifacts carry the long-term state.
+
+In `lean` mode:
+- compress each section to the minimum needed to preserve gate, verify path, and next action
+- omit inactive sections instead of filling them with placeholders
+- prefer short prose over tables unless the table materially reduces ambiguity
+- if the run file already contains stable context, do not restate it in full
+- prefer compressed handoff fields over broad summaries
+- prefer bounded verify evidence over pasted logs
 
 ## Artifact formatting rules
 
