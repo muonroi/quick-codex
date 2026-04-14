@@ -82,8 +82,10 @@ Use $qc-flow for this task: <describe the task>. Keep a persistent run artifact 
 
 If the task tends to drift or reopen scope:
 - clarify
+- surface the affected area and blast radius
 - context sufficiency check
 - targeted research
+- prove the evidence basis for planning
 - verified plan
 - phase / wave decomposition
 - sequential execution
@@ -93,10 +95,11 @@ If the task tends to drift or reopen scope:
 If you want one-step execution with tight verification:
 
 ```text
-Use $qc-lock for this task: <describe the step>. Keep scope locked and verify each step before moving on.
+Use $qc-lock for this task: <describe the step>. If upstream planning is missing, do a short preflight first. Keep scope locked and verify each step before moving on.
 ```
 
 This pushes Codex toward:
+- short preflight when the affected area is not yet explicit
 - short explicit plan
 - locked scope
 - one-step execution
@@ -147,8 +150,9 @@ If you are editing the skill package itself:
 
 1. Edit the files in this repo
 2. Restart Codex if needed
-3. Re-run a real task through the skill
-4. Verify with concrete artifacts, not only by reading the docs
+3. Re-run a real task through the skill with a persistent run artifact
+4. Verify affected area, evidence basis, and handoff behavior with concrete artifacts, not only by reading the docs
+5. Exercise `status`, `resume`, or `doctor-run` when the task uses `qc-flow`
 
 Optional commands:
 

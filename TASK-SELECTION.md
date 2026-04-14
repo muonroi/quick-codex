@@ -17,20 +17,25 @@ Answer these:
 
 1. Are the requirements already clear?
 2. Do I know the relevant repo area and files?
-3. Do I need research before planning?
-4. Will this likely span multiple turns?
-5. Is the remaining work mostly implementation?
+3. Is the affected area and blast radius already explicit?
+4. Do I need research before planning?
+5. Do I already have evidence that supports the planned scope?
+6. Will this likely span multiple turns?
+7. Is the remaining work mostly implementation?
 
 ## Choose a Skill
 
 Pick `qc-flow` when:
 - one or more answers above are `no`
 - the task needs clarify or research
+- the affected area or protected boundaries are still fuzzy
 - phase boundaries matter
 
 Pick `qc-lock` when:
 - the requirements are already clear
 - the repo area is already known
+- the affected area is already explicit, or can be proven quickly in preflight
+- the evidence basis for the lock is already known
 - the task is mostly execution and verification
 
 Use the recovery commands when:
@@ -67,5 +72,6 @@ Do not switch to `qc-lock` early just because implementation looks easy.
 
 Only switch when:
 - the plan is already verified
+- the affected area and protected boundaries are already explicit
 - the remaining work is tightly scoped
 - the handoff can be described in one current execution target

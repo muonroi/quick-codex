@@ -10,8 +10,9 @@ Inputs:
 
 Required outcomes:
 - R1: clarify the task
-- R2: verify the plan
-- R3: recommend the next command
+- R2: surface the affected area
+- R3: verify the evidence basis for the plan
+- R4: recommend the next command
 
 Constraints:
 - keep the task small and auditable
@@ -21,6 +22,11 @@ Out of scope:
 
 Definition of done:
 - this sample demonstrates the core run-file sections
+
+Affected area / blast radius:
+- run artifact structure
+- resume metadata
+- planning and handoff sections
 
 Current gate:
 - plan-check
@@ -41,7 +47,7 @@ Execution mode:
 - Goal: demonstrate the run-file structure
 - Current gate: plan-check
 - Current phase / wave: P1 / W1
-- Requirements still satisfied: R1, R2, R3
+- Requirements still satisfied: R1, R2, R3, R4
 - Remaining blockers: none
 - Next verify: confirm the verified plan
 - Resume with: `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
@@ -79,12 +85,30 @@ If blocked:
 Goal:
 - show the artifact structure
 
+Affected area / blast radius:
+- artifact headings
+- resume metadata
+
+## Evidence Basis
+- repo evidence: run-file template and CLI parser
+- docs or external evidence: none
+- explicit research-skip rationale: sample scaffold only
+
 ## Research Pack
 Decision:
 - `context-sufficient`
+Why:
+- this sample depends only on the package templates and CLI fields
 
 ## Verified Plan
 Goal: demonstrate one phase and one wave.
+Plan inputs / evidence:
+- run-file template
+- CLI `status`, `resume`, and `doctor-run` fields
+
+Affected area coverage:
+- run artifact headings
+- resume metadata
 
 ## Current Execution Wave
 Not started.
@@ -110,3 +134,4 @@ Execution state: pending
 - R1
 - R2
 - R3
+- R4

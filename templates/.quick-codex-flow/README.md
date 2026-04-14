@@ -10,6 +10,7 @@ Suggested rules:
 - one run file per task
 - prefer stable task slugs
 - keep `STATE.md` aligned with the active run
+- keep `Affected area / blast radius` and `Evidence Basis` current enough to justify the next plan or handoff
 - keep the latest `Resume Digest` and `Recommended Next Command` current
 - refresh `Compact-Safe Summary` after each completed wave or phase and before any long verify or pause
 - resume from the run file instead of relying on chat memory

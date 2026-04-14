@@ -28,14 +28,16 @@
 Codex is strong at focused execution. It gets weaker when the workflow lives only in chat memory.
 
 Quick Codex gives Codex a small, local workflow layer:
-- `qc-flow` for front-half thinking, checked planning, active-run discovery, and durable execution artifacts
-- `qc-lock` for strict `plan -> lock -> execute -> verify -> fix`
+- `qc-flow` for front-half thinking, affected-area discussion, evidence-based planning, active-run discovery, and durable execution artifacts
+- `qc-lock` for strict `preflight -> plan -> lock -> execute -> verify -> fix`
 - local recovery commands so resume does not depend on remembering artifact shape by hand
 
 The goal is simple: keep non-trivial work readable, resumable, and harder to derail.
 
 In practice, that means:
 - resume from files instead of guessing from stale chat state
+- surface blast radius before implementation pretends to be obvious
+- force planning to rest on repo evidence or an explicit research-skip rationale
 - keep scope tight once execution starts
 - make verification explicit so failures narrow the next move instead of causing thrash
 
@@ -81,6 +83,7 @@ Current proof set:
 - [Scope Drift](./BENCHMARK-PROOF-DRIFT.md): shows how explicit artifacts and locked execution reduce mid-task drift
 - [Failure Recovery](./BENCHMARK-PROOF-FAILURE.md): shows recovery behavior when the workflow gets awkward or partial rather than ideal
 - [Positioning](./BENCHMARK-PROOF-POSITIONING.md): explains the product claim this package can defend today without overclaiming
+- [Workflow Hardening](./BENCHMARK-PROOF-WORKFLOW-HARDENING.md): shows the updated workflow now forces affected-area discussion, evidence-based planning, and `qc-lock` preflight more explicitly than before
 
 The benchmark index lives in [BENCHMARKS.md](./BENCHMARKS.md).
 
@@ -169,13 +172,16 @@ YOU start with a task
   │
   ├─ qc-flow
   │   └─ clarify
+  │   └─ surface affected area / blast radius
   │   └─ check context sufficiency
   │   └─ research only missing pieces
+  │   └─ verify the evidence basis for planning
   │   └─ verify the plan
   │   └─ decompose into phases and waves
   │   └─ recommend the next command
   │
   └─ qc-lock
+      └─ preflight if upstream plan is weak
       └─ plan
       └─ lock
       └─ execute one step
@@ -201,11 +207,13 @@ Use `qc-flow` when:
 - the task is non-trivial
 - requirements are unclear
 - repo context is incomplete
+- the affected area is not yet explicit
 - research or planning should happen before coding
 - the work may span multiple turns
 
 Use `qc-lock` when:
 - the problem is already understood
+- the affected area is already explicit, or can be proven quickly in a small preflight
 - the remaining work is mostly execution
 - you want strict step-by-step verification
 - the scope needs to stay tight
@@ -214,9 +222,9 @@ Use `qc-lock` when:
 
 | Situation | Recommended skill | Why |
 |---|---|---|
-| Large feature, unclear requirements, or missing repo context | `qc-flow` | It clarifies, researches, verifies the plan, then executes sequentially |
-| Bug fix with known scope | `qc-lock` | It stays close to `plan -> lock -> execute -> verify -> fix` |
-| Small refactor with known files but some local risk | `qc-lock` | It keeps scope narrow and verifies each step |
+| Large feature, unclear requirements, or missing repo context | `qc-flow` | It clarifies, surfaces affected area, researches, verifies the evidence basis, then executes sequentially |
+| Bug fix with known scope | `qc-lock` | It stays close to `preflight -> plan -> lock -> execute -> verify -> fix` |
+| Small refactor with known files but some local risk | `qc-lock` | It keeps scope narrow, can do a short preflight, and verifies each step |
 | Long-running task that may span multiple turns | `qc-flow` | It relies on persistent run artifacts and resume state |
 | Existing run artifact already in progress under `qc-flow` | `qc-flow` | Resume from the run artifact instead of switching midstream |
 | Task began with `qc-flow` but execution is now fully understood and tightly scoped | `qc-lock` | Hand off to a stricter executor once the front-half is complete |
@@ -224,13 +232,15 @@ Use `qc-lock` when:
 ### When to switch
 
 Switch from `qc-flow` to `qc-lock` when:
-- clarify, research, and plan-check are already done
+- clarify, affected-area discussion, research, and plan-check are already done
 - the remaining work is implementation-focused
+- the evidence basis for the current scope is still current
 - the scope is narrow enough for locked step-by-step execution
 
 Stay on `qc-flow` when:
 - requirements are still moving
 - repo context is still incomplete
+- blast radius is still fuzzy
 - a relock is likely
 - phase boundaries still matter
 
@@ -258,6 +268,7 @@ Supporting docs:
 - [BENCHMARK-PROOF-DRIFT.md](./BENCHMARK-PROOF-DRIFT.md)
 - [BENCHMARK-PROOF-FAILURE.md](./BENCHMARK-PROOF-FAILURE.md)
 - [BENCHMARK-PROOF-POSITIONING.md](./BENCHMARK-PROOF-POSITIONING.md)
+- [BENCHMARK-PROOF-WORKFLOW-HARDENING.md](./BENCHMARK-PROOF-WORKFLOW-HARDENING.md)
 - [QUICKSTART.md](./QUICKSTART.md)
 - [EXAMPLES.md](./EXAMPLES.md)
 - [TASK-SELECTION.md](./TASK-SELECTION.md)
@@ -330,6 +341,7 @@ Quick Codex works on its own, but it pairs well with [Experience Engine](https:/
 
 Recommended routing for relevant hook warnings:
 - `Clarify State` -> scope, constraints, open questions
+- `Clarify State` -> affected area, protected boundaries, user-confirmed assumptions
 - `Research Pack` -> evidence, answered questions, unresolved risks
 - `Execution Wave` -> `Risks`, `Invariant requirements`, `Verify`
 - `Phase Close` -> carry-forward notes, open risks
@@ -368,7 +380,7 @@ The package is best understood as a workflow layer:
 If you want to customize or improve the package:
 - read [CONTRIBUTING.md](./CONTRIBUTING.md)
 - validate with `bash scripts/lint-skills.sh`
-- test a real task, not only the docs
+- test a real task with artifacts, not only the docs
 
 ## Troubleshooting
 

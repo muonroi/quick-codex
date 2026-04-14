@@ -10,6 +10,7 @@ Current proof set:
 - [BENCHMARK-PROOF-THRASH.md](./BENCHMARK-PROOF-THRASH.md)
 - [BENCHMARK-PROOF-FAILURE.md](./BENCHMARK-PROOF-FAILURE.md)
 - [BENCHMARK-PROOF-POSITIONING.md](./BENCHMARK-PROOF-POSITIONING.md)
+- [BENCHMARK-PROOF-WORKFLOW-HARDENING.md](./BENCHMARK-PROOF-WORKFLOW-HARDENING.md)
 
 ## 1. Multi-turn Drift
 
@@ -99,3 +100,22 @@ Ask a user to find the answer to these without extra coaching:
 
 Expected Quick Codex advantage:
 - the README, quickstart, task selection, and examples should answer these directly
+
+## 6. Workflow Hardening
+
+Goal:
+- verify that the workflow now forces front-half discipline where the older wording was too soft
+
+Setup:
+- choose a task that changes the workflow rules themselves
+- require the task to update both skill text and public docs/templates
+- validate the result through a real run artifact instead of doc review alone
+
+Compare:
+- does `qc-flow` require affected-area discussion before plan
+- does `qc-flow` require evidence or an explicit research-skip rationale before plan
+- does `qc-lock` require preflight when upstream planning is weak
+- do public docs and scaffolds teach the same stricter workflow
+
+Expected Quick Codex advantage:
+- the package surface should now align the skill rules, docs, and scaffolded artifacts around the same stricter front-half gates

@@ -33,6 +33,11 @@ Check:
 
 Keep changes coherent across all three.
 
+If the workflow changes materially, also check:
+- public docs
+- `templates/`
+- sample run artifacts created by `init`
+
 ## Preferred validation style
 
 Use a real task when possible.
@@ -40,8 +45,10 @@ Use a real task when possible.
 Good validation:
 - run a real task through the skill
 - keep a persistent run artifact
+- record the affected area and evidence basis that justified planning or lock
 - record verification commands and outputs
 - note any relock or edge-case discovery
+- exercise the recovery surface when `qc-flow` is involved: `status`, `resume`, or `doctor-run`
 
 Weak validation:
 - only reading the text
@@ -54,6 +61,8 @@ If the package shape changes, update:
 - `QUICKSTART.md`
 - `EXAMPLES.md`
 - `TASK-SELECTION.md`
+- `templates/AGENTS.snippet.md`
+- `templates/.quick-codex-flow/`
 - this file if the contributor workflow changes materially
 
 Before publishing or opening a pull request, run:
