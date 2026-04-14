@@ -37,6 +37,9 @@ Out of scope:
 Definition of done:
 - ...
 
+Affected area / blast radius:
+- ...
+
 Current gate:
 - clarify | research | plan | plan-check | execute | phase-close | done
 
@@ -93,6 +96,11 @@ If blocked:
 ## Clarify State
 <paste the current clarify artifact here>
 
+## Evidence Basis
+- repo evidence: ...
+- docs or external evidence: ...
+- explicit research-skip rationale: none
+
 ## Research Pack
 <paste the current research artifact here>
 
@@ -136,6 +144,7 @@ Rules:
 - keep `.quick-codex-flow/STATE.md` aligned with the current active run
 - always update `Current gate` when moving between workflow stages
 - keep `Requirement Baseline` stable unless the user changes requirements
+- keep `Affected area / blast radius` current when planning or relocking changes what may be touched
 - update `Requirements Still Satisfied` after each completed phase
 - keep `Inputs` current when the plan depends on specific source artifacts or docs
 - when pasting artifacts into a section, do not repeat the section heading inside that section

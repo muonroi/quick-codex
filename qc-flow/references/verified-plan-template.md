@@ -7,6 +7,11 @@ Use this once context is sufficient and before execution begins.
 Goal: <one sentence>
 Requirements covered: <R1, R2>
 Out of scope: <explicit exclusions>
+Plan inputs / evidence:
+- ...
+
+Affected area coverage:
+- ...
 
 | Phase | Status | Purpose | Covers requirements | Depends on | Exit criteria | Verify |
 |---|---|---|---|---|---|---|
@@ -25,6 +30,13 @@ Requirement trace:
 - R1 -> P1, W1, W2
 - R2 -> P2, W3
 
+Affected-area trace:
+- UI / flows -> ...
+- API / contracts -> ...
+- data / persistence -> ...
+- config / CI / deploy -> ...
+- tests / docs / observability / security -> ...
+
 Risks:
 - ...
 
@@ -33,6 +45,8 @@ Assumptions:
 
 Verification of plan:
 - Every phase maps to requirements: yes/no
+- Affected area is explicit: yes/no
+- Evidence basis is sufficient: yes/no
 - Dependencies are clear: yes/no
 - Verify path exists for each wave: yes/no
 - Out of scope is explicit: yes/no

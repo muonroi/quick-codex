@@ -1,6 +1,6 @@
 ---
 name: "qc-lock"
-description: "Use when the user wants Codex to work in a strict, auditable loop: write a short explicit plan, lock it, execute one step at a time, verify each step, and fix failures before moving on. Best for coding tasks where scope drift and weak orchestration are the main risks. Works alone, and works better with Experience Engine hooks by folding relevant warnings into the current locked step instead of silently ignoring them."
+description: "Use when the user wants Codex to work in a strict, auditable loop: verify preflight context, write a short explicit plan, lock it, execute one step at a time, verify each step, and fix failures before moving on. Best for coding tasks where scope drift and weak orchestration are the main risks. Works alone, and works better with Experience Engine hooks by folding relevant warnings into the current locked step instead of silently ignoring them."
 ---
 
 # Quick Codex Lock
@@ -8,6 +8,9 @@ description: "Use when the user wants Codex to work in a strict, auditable loop:
 Use this skill when the user wants a narrow, reliable execution loop rather than broad autonomous orchestration.
 
 This skill is designed for small context windows. It externalizes state into a persistent run artifact so the task can survive long sessions, many turns, and phase handoffs without losing the original requirements.
+
+This skill is strongest after `qc-flow` has already clarified the task, surfaced the affected area, and produced evidence for planning.
+It may still run standalone, but only after a short preflight that proves the lock is safe.
 
 Philosophy:
 - Single is good: the workflow must work without any external service.
@@ -20,26 +23,52 @@ Use this skill for:
 - tasks that need strong scope control
 - work where each step should be verified before the next starts
 - cases where Codex tends to drift or over-orchestrate
+- execution-ready work where the affected area is already understood or can be proven quickly
 
 Do not use this skill for:
 - trivial one-shot edits
 - open-ended exploration with no clear execution target
 - work where the user explicitly wants broad autonomous planning
 
+## Required preflight
+
+Before `PLAN`, decide whether upstream planning is already trustworthy.
+
+Trusted upstream inputs may be:
+- an existing `qc-flow` run with a verified plan
+- another explicit artifact that already captures goal, requirements, affected area, and evidence basis
+
+If no such artifact exists, `qc-lock` must do a short preflight before locking:
+- clarify the execution target and required outcomes
+- surface the affected area and blast radius
+- identify likely files and protected boundaries
+- do targeted research for any unknown repo area, contract, or verify path
+
+Preflight pass conditions:
+- execution target is narrow enough to lock
+- affected area is explicit
+- verify path is explicit
+- evidence is sufficient for the proposed lock
+
+If these are not true, do not lock yet.
+Either keep researching or hand the task back to `$qc-flow`.
+
 ## Required loop
 
 Follow this sequence exactly:
 
-1. PLAN
-2. LOCK
-3. EXECUTE one step
-4. TEST / VERIFY that step
-5. FIX the same step if verification fails
-6. Repeat from step 3 until all locked steps are done
+1. PREFLIGHT if upstream context is not already verified
+2. PLAN
+3. LOCK
+4. EXECUTE one step
+5. TEST / VERIFY that step
+6. FIX the same step if verification fails
+7. Repeat from step 4 until all locked steps are done
 
 Never skip verification.
 Never advance past a failing step.
 Never expand scope without relocking.
+Never lock from a fuzzy affected area.
 
 ## Persistent state
 
@@ -53,7 +82,9 @@ The run file is the source of truth across turns. Do not rely on chat context al
 The run file must preserve:
 - original user goal
 - required outcomes from the start
+- affected area and protected boundaries
 - non-goals and exclusions
+- evidence basis for the current lock
 - phase list
 - locked plan for the current phase
 - verification evidence
@@ -68,6 +99,7 @@ At the top of the run file, capture a stable baseline before execution starts.
 This baseline must include:
 - `Original goal`
 - `Required outcomes`
+- `Affected area`
 - `Constraints`
 - `Out of scope`
 - `Definition of done`
@@ -76,6 +108,7 @@ Rules:
 - keep these items stable unless the user changes them
 - never silently rewrite the original requirement
 - every future phase must trace back to these baseline items
+- do not silently widen the affected area after lock
 - if a discovered task does not map back to the baseline, it is not in scope until relocked
 
 ## Phase model
@@ -87,12 +120,14 @@ Each phase must have:
 - `purpose`
 - `depends_on`
 - `covers_requirements`
+- `covers_affected_area`
 - `exit_criteria`
 - `verify`
 
 Phase rules:
 - each phase should be independently understandable from the run file
 - before starting a phase, restate which baseline requirements it covers
+- before starting a phase, restate which affected area it is allowed to touch
 - after finishing a phase, record what remains unchanged from the original requirements
 - if a later phase would compromise an earlier required outcome, stop and relock
 
@@ -114,6 +149,11 @@ For multi-phase work, the plan must include:
 - a phase list first
 - one locked step plan only for the current phase
 
+Planning rules:
+- cite the evidence or upstream artifact that justifies the lock
+- name the touched scope and protected boundaries explicitly
+- if the affected area is still uncertain, stop and keep preflight active
+
 ### 2. LOCK
 
 Emit a `Locked Plan` block using the template in [references/locked-plan-template.md](references/locked-plan-template.md).
@@ -123,6 +163,7 @@ Lock rules:
 - mark every step as `pending`, `in_progress`, `done`, or `blocked`
 - do not add, remove, merge, or reorder steps after lock
 - if scope changes materially, replace the full lock block and clearly state `Relocked`
+- if the affected area changes materially, replace the full lock block and clearly state `Relocked`
 - if a new issue appears during execution, first decide whether it is:
   - required to finish the current step safely
   - unrelated scope that must wait for a relock
@@ -135,6 +176,7 @@ Before editing, state:
 - current step id
 - current phase id
 - expected files to touch
+- affected area this step is allowed to touch
 - verification command or method for that step
 
 Prefer the smallest edit that can complete the step.
@@ -181,6 +223,8 @@ When continuing existing work:
    - original goal
    - current phase
    - remaining required outcomes
+   - affected area
+   - evidence basis for the current lock
    - current locked step
 3. Only then continue execution.
 
@@ -192,6 +236,7 @@ Use these rules to prevent context loss:
 - every phase must reference the initial required outcomes
 - every relock must restate what remains invariant
 - every completion summary must include `requirements still satisfied`
+- every relock must restate the affected area that remains in scope
 - do not replace old intent with newly discovered local optimizations
 - do not let failing tests or implementation friction redefine the goal
 - if uncertain, reread the run file and anchor on the baseline
@@ -236,16 +281,18 @@ Use direct `experience-engine` API calls only when the user explicitly wants to 
 
 Use this structure in responses:
 
-1. Short `Plan` section
-2. `Requirement Baseline` summary when starting or relocking
-3. `Locked Plan` block
-4. Per-step progress updates:
+1. `Preflight` status when upstream planning is missing or weak
+2. Short `Plan` section
+3. `Requirement Baseline` summary when starting or relocking
+4. `Locked Plan` block
+5. Per-step progress updates:
    - `Step`
    - `Phase`
    - `Files`
+   - `Affected area`
    - `Verify`
    - `Result`
-5. Final outcome with verification status and remaining requirements
+6. Final outcome with verification status and remaining requirements
 
 Keep commentary concise. The lock block is the authoritative state.
 

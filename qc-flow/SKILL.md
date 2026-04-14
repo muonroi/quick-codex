@@ -9,8 +9,10 @@ Use this skill for non-trivial implementation work where Codex should not jump s
 
 This skill keeps a disciplined front-half workflow:
 - discuss until the problem is clear
+- surface the full affected area before planning
 - do not plan with missing context
 - research intentionally, not blindly
+- require evidence before planning, not gut feel
 - verify the plan before execution
 - decompose the work before touching code
 
@@ -21,7 +23,7 @@ This skill changes the execution model for Codex:
 
 ## Core principle
 
-Think first, then lock context, then plan, then execute.
+Think first, surface impact, lock context, prove the missing pieces, then plan, then execute.
 
 The workflow must work without any external system.
 When Experience Engine hooks are available, treat them as risk signals that strengthen the current artifact or verification path.
@@ -46,19 +48,24 @@ Use a fast path when the task is already narrow and the front-half is mostly com
 
 Fast-path conditions:
 - clarify is effectively already satisfied
+- the affected area and blast radius are already explicit
 - context sufficiency is already satisfied
+- the research evidence already exists, or an explicit skip rationale is defensible
 - the remaining work fits one small phase or one tightly scoped wave
 - the verify path is already obvious
 
 Fast-path rules:
 - keep the baseline and run file, but compress the planning prose
 - do not force extended research when no material gap exists
+- do not use fast path to skip affected-area discussion or evidence capture
 - move quickly from plan-check to a single active wave when safe
 - recommend `$qc-lock` early when the remaining work is pure execution
 
 Do not use fast path when:
 - requirements are still moving
+- the blast radius is still uncertain
 - repo area is still uncertain
+- research evidence is still missing for a non-trivial area
 - verification is still ambiguous
 - a relock is likely
 
@@ -95,6 +102,7 @@ Lean mode rules:
 - stop planning as soon as the verify path and next command are clear
 - bias toward one small phase or one tightly scoped wave when safe
 - hand off to `$qc-lock` early rather than elaborating execution prose inside `qc-flow`
+- do not let `lean` mode erase affected-area coverage or evidence required to plan safely
 
 ## Compressed handoff
 
@@ -103,10 +111,12 @@ When `qc-flow` hands work to a later `qc-flow` turn or to `$qc-lock`, carry only
 Required handoff fields:
 - goal
 - required outcomes
+- affected area
 - current gate
 - current phase and wave, or the next active wave if execution is about to start
 - remaining blockers
 - execution mode when handoff is going to `$qc-lock`
+- evidence basis for the handoff
 - burn risk and last budget trigger when relevant
 - approval strategy when relevant
 - next verify
@@ -115,7 +125,7 @@ Required handoff fields:
 Handoff rules:
 - prefer `Resume Digest` plus one short carry-forward note over repeating full artifact sections
 - do not restate unchanged baseline, research, or plan sections unless they materially changed
-- if handoff is going to `$qc-lock`, point to one tightly scoped wave and one concrete verify path
+- if handoff is going to `$qc-lock`, point to one tightly scoped wave, one concrete verify path, and the affected scope that wave is allowed to touch
 - if handoff is going to `$qc-lock`, specify `manual` or `auto` explicitly
 - use `manual` by default unless the user explicitly wants the agent to keep advancing without waiting
 - use `auto` only when the locked wave is clear enough to continue step by step without another user prompt
@@ -166,12 +176,13 @@ Auto-mode guardrails:
 Follow this sequence:
 
 1. Clarify
-2. Context sufficiency check
-3. Research loop if needed
-4. Plan
-5. Plan check
-6. Phase and wave decomposition
-7. Sequential execution handoff
+2. Affected-area and blast-radius discussion
+3. Context sufficiency check
+4. Research loop
+5. Plan
+6. Plan check
+7. Phase and wave decomposition
+8. Sequential execution handoff
 
 Do not skip a gate because the likely solution feels obvious.
 
@@ -187,6 +198,7 @@ The run file must preserve:
 - planning inputs or source artifacts
 - required outcomes
 - constraints
+- affected area and blast radius
 - execution mode
 - resume digest
 - session risk
@@ -196,6 +208,7 @@ The run file must preserve:
 - current workflow gate
 - open questions and resolved decisions
 - context sufficiency status
+- evidence basis or explicit research-skip rationale
 - current research artifact
 - verified plan
 - phase and wave table
@@ -415,24 +428,49 @@ Clarify until you can state:
 - what the user wants
 - what success looks like
 - what is constrained
+- which assumptions came from the user versus the agent
 - what remains unknown
 
 If critical ambiguity remains, stay in clarify mode.
 
-## Gate 2: Context sufficiency check
+## Gate 2: Affected-area and blast-radius discussion
+
+Do not move to context sufficiency until the likely impact surface is explicit enough to challenge with the user or the repo evidence.
+
+Surface the affected area across:
+- user-visible flows or UI surface
+- APIs, contracts, or integration points
+- data model, schema, persistence, or migrations
+- configuration, environment, deployment, or CI
+- tests, observability, docs, and security expectations
+
+Rules:
+- if one of these areas is plausibly affected, record it explicitly instead of leaving it implicit
+- if one of these areas is plausibly not affected, record that exclusion explicitly when it helps avoid hidden scope
+- if the affected area is still fuzzy, stay in clarify mode and tighten the problem statement before planning
+
+## Gate 3: Context sufficiency check
 
 Before research or planning, check whether current context is sufficient.
 
 Context is sufficient only if you know:
 - the likely repo area or module
 - the relevant files or search targets
+- the likely affected areas and blast radius
+- the cross-boundary contracts that must remain stable
 - the main technical constraints
 - the main risks or unknowns
 - how success will be verified
 
 If any of these are weak, record the gap and continue to research.
 
-## Gate 3: Research loop
+Non-trivial planning rule:
+- for multi-file, cross-module, or architecture-touching work, do not plan from intuition alone
+- planning requires either:
+  - a current research artifact with concrete evidence for the missing gate items, or
+  - an explicit research-skip rationale that states why no meaningful gap remains
+
+## Gate 4: Research loop
 
 Research only the missing context.
 
@@ -441,6 +479,7 @@ Create or update a targeted research artifact using [references/research-pack-te
 Research rules:
 - keep research targeted
 - capture evidence, answered questions, unresolved questions, and a stop decision in the research artifact
+- validate the affected area, not just the first implementation path that looks plausible
 - summarize only the research conclusion into the run file if needed
 - prefer concrete repo evidence over speculation
 - stop researching once the missing gate items are satisfied
@@ -451,15 +490,17 @@ When Experience Engine warnings are relevant during research:
 - record them in the research artifact as evidence or risk input
 - map the `Why:` line into the current research rationale or downstream verification path
 
-## Gate 4: Plan
+## Gate 5: Plan
 
 Once context is sufficient, create a short plan for the whole task.
 
 The plan must:
 - map back to required outcomes
+- map to the affected area that is actually being changed or protected
 - include a verification path
 - separate discovery from implementation where useful
 - avoid hidden scope expansion
+- cite the evidence or explicit skip rationale it depends on
 
 Use [references/verified-plan-template.md](references/verified-plan-template.md).
 
@@ -477,20 +518,23 @@ Planning-only completion rule:
 - do not treat a planning-only run as complete until it includes a concrete `Recommended next command`
 - if the plan is verified but no next command is provided, the run is still incomplete
 
-## Gate 5: Plan check
+## Gate 6: Plan check
 
 Check the plan before execution.
 
 A plan passes only if:
 - every phase traces to at least one required outcome
+- the affected area is explicit
+- the plan names the protected boundaries that must not regress
 - dependencies are clear
 - verification exists for every phase
 - risky assumptions are called out
+- the evidence basis is sufficient for the claimed scope
 - out-of-scope items are explicit
 
 If the plan fails, revise it before execution.
 
-## Gate 6: Phase and wave decomposition
+## Gate 7: Phase and wave decomposition
 
 Decompose the verified plan into phases and waves.
 
@@ -505,10 +549,11 @@ Rules:
 - each phase must list covered requirements
 - each wave should be small enough for one focused implementation pass
 - only one wave is active at a time
+- each wave should declare the sub-scope it is allowed to touch inside the broader affected area
 - for coding tasks, every phase and wave must declare verification that covers build cleanliness and unit-test status for the touched scope
 - for non-code tasks, every phase and wave must declare the narrowest concrete verification that proves the artifact change safely
 
-## Gate 7: Sequential execution handoff
+## Gate 8: Sequential execution handoff
 
 After plan verification, switch to sequential execution.
 
@@ -543,7 +588,7 @@ Task-type completion rules:
 If implementation reveals a missing task that changes scope or dependencies, stop and return to plan check.
 
 Compressed execution handoff:
-- when handing an execution-ready wave to `$qc-lock`, carry only the active wave goal, touched scope, verify path, blockers, burn risk, and next command
+- when handing an execution-ready wave to `$qc-lock`, carry only the active wave goal, touched scope, affected-area guardrails, evidence basis, verify path, blockers, burn risk, and next command
 - include the intended `qc-lock` execution mode in that handoff: `manual` or `auto`
 - prefer one-wave handoff over repeating the whole phase table when the phase structure has not changed
 
@@ -626,13 +671,15 @@ When resuming:
 1. If the user provided a run path, read that run file.
 2. Otherwise resolve the active run from `.quick-codex-flow/STATE.md` or the deterministic fallback rules.
 3. Read the `Resume Digest` first.
-4. Check `Session Risk` and `Context Risk`.
-5. Check `Burn Risk`.
-6. Restate:
+4. Re-anchor on the current affected area and evidence basis before trusting the next command.
+5. Check `Session Risk` and `Context Risk`.
+6. Check `Burn Risk`.
+7. Restate:
    - current gate
    - original goal
    - execution mode
    - required outcomes
+   - affected area
    - current phase
    - current wave
    - remaining blockers
@@ -640,7 +687,7 @@ When resuming:
    - approval strategy
    - burn risk
    - next verify
-7. Continue only after restating this state.
+8. Continue only after restating this state.
 
 If either risk is `high`, address that before opening new scope.
 
@@ -705,10 +752,12 @@ Use this response shape:
    - goal
    - planning inputs or source artifacts
    - required outcomes
+   - affected area / blast radius
    - out of scope
-3. `Research artifact` status when Gate 3 is active
+3. `Research artifact` status when Gate 4 is active
 4. `Verified Plan` summary once planning is complete:
    - what the plan is for
+   - what evidence it rests on
    - what outcome the plan now enables
 5. `Phase / Wave` table when execution is ready
 6. `Current execution wave` artifact during implementation
@@ -738,7 +787,7 @@ For large verify output, `Verification result` should use the bounded-output pat
 `Recommended next command` rules:
 - recommend the exact next skill to use
 - prefer `$qc-flow` when staying in the same run file or changing gates
-- recommend `$qc-lock` only when the verified plan is already clear and the handoff target is one tightly scoped wave
+- recommend `$qc-lock` only when the verified plan is already clear, the evidence basis is current, and the handoff target is one tightly scoped wave
 - include a concrete command or prompt line the user can paste
 - if recommending `$qc-lock`, state whether it should run in `manual` or `auto`
 - if both options are viable, recommend one first and mention the alternative briefly
@@ -763,6 +812,7 @@ When updating the run file:
 - do not produce `## Research Pack` inside the `## Research Pack` section
 - do not produce `## Verified Plan` inside the `## Verified Plan` section
 - keep the run file readable as a single document, not as nested markdown fragments
+- if a plan relies on a research skip, record that rationale in the matching artifact section rather than leaving the omission implicit
 
 ## References
 

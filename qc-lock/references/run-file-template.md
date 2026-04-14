@@ -25,6 +25,12 @@ Required outcomes:
 - R1: ...
 - R2: ...
 
+Affected area:
+- ...
+
+Protected boundaries:
+- ...
+
 Constraints:
 - ...
 
@@ -35,11 +41,21 @@ Definition of done:
 - ...
 
 ## Phase List
-| Phase | Status | Purpose | Covers requirements | Depends on | Exit criteria | Verify |
-|---|---|---|---|---|---|---|
-| P1 | done | ... | R1 | none | ... | ... |
-| P2 | in_progress | ... | R2 | P1 | ... | ... |
-| P3 | pending | ... | R1,R2 | P2 | ... | ... |
+| Phase | Status | Purpose | Covers requirements | Covers affected area | Depends on | Exit criteria | Verify |
+|---|---|---|---|---|---|---|---|
+| P1 | done | ... | R1 | API contract | none | ... | ... |
+| P2 | in_progress | ... | R2 | persistence + tests | P1 | ... | ... |
+| P3 | pending | ... | R1,R2 | docs + cleanup | P2 | ... | ... |
+
+## Preflight Summary
+Upstream artifact:
+- `qc-flow` run | other artifact | none
+
+Evidence basis:
+- ...
+
+Preflight decision:
+- ready-to-lock | keep-researching | hand-back-to-qc-flow
 
 ## Current Locked Plan
 <paste the current locked plan block here>
@@ -76,6 +92,7 @@ Open risks:
 Rules:
 - keep `Requirement Baseline` stable
 - track requirement ids like `R1`, `R2` so later phases can reference them
+- keep `Affected area` and `Protected boundaries` explicit when relocking
 - after every phase, record `Requirements still satisfied`
 - when resuming, read this file before doing anything else
 - after each verified wave or phase, record any checkpoint commit before continuing

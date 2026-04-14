@@ -10,6 +10,9 @@ Goal:
 Missing context being filled:
 - ...
 
+Affected area being validated:
+- ...
+
 Research questions:
 - Q1: ...
 - Q2: ...
@@ -22,6 +25,11 @@ Answered questions:
 
 Unresolved questions:
 - Q2 -> ...
+
+Evidence basis for planning:
+- repo evidence:
+- docs or external evidence:
+- explicit research-skip rationale for any untouched area:
 
 Decision:
 - `continue-research`
@@ -38,5 +46,6 @@ Next action:
 Rules:
 - keep it focused on missing context only
 - prefer concrete evidence over speculation
+- validate blast radius and protected boundaries, not just the most likely implementation path
 - when the decision is `context-sufficient`, planning may begin
 - when the decision is `return-to-clarify`, do not plan yet

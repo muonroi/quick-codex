@@ -8,8 +8,11 @@ Goal: <one sentence>
 Phase: <phase id>
 Phase purpose: <why this phase exists>
 Covers requirements: <R1, R2>
+Affected area: <which surfaces this lock may touch>
+Protected boundaries: <what must not regress while changing this scope>
 Scope: <what this run is allowed to change>
 Out of scope: <explicit exclusions>
+Evidence basis: <upstream plan, repo evidence, or preflight findings>
 Lock rule: No scope expansion without relock.
 Status: active
 
@@ -22,6 +25,9 @@ Status: active
 Current step: S1
 Invariant requirements:
 - <required outcomes that must still hold after this phase>
+
+Invariant affected area:
+- <surfaces that remain in scope>
 
 Risks:
 - <current technical risk>
@@ -52,8 +58,11 @@ Goal: Add a retry guard to the API client without changing public behavior.
 Phase: P2
 Phase purpose: Add the implementation change after the retry path is understood.
 Covers requirements: R1
+Affected area: API client retry path, targeted retry tests
+Protected boundaries: public client API, abort handling, timeout semantics
 Scope: `src/client.ts`, related tests
 Out of scope: transport refactors, logging redesign
+Evidence basis: verified `qc-flow` run plus retry-path read-through
 Lock rule: No scope expansion without relock.
 Status: active
 
@@ -66,6 +75,9 @@ Status: active
 Current step: S2
 Invariant requirements:
 - R1: Public retry behavior stays unchanged except for the duplicate scheduling bug.
+
+Invariant affected area:
+- Only retry scheduling and its targeted tests are in scope.
 
 Risks:
 - Guard may suppress the first valid retry.
