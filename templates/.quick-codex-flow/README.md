@@ -12,6 +12,7 @@ Suggested rules:
 - keep `STATE.md` aligned with the active run
 - keep `Affected area / blast radius` and `Evidence Basis` current enough to justify the next plan or handoff
 - keep the latest `Resume Digest` and `Recommended Next Command` current
+- keep `Experience Snapshot` current when a hook warning changes scope, verify, or invariants
 - refresh `Compact-Safe Summary` after each completed wave or phase and before any long verify or pause
 - resume from the run file instead of relying on chat memory
 - use `quick-codex status`, `quick-codex resume`, `quick-codex checkpoint-digest`, `quick-codex repair-run`, and `quick-codex doctor-run` to avoid guessing from chat state

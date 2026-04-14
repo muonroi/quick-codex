@@ -11,7 +11,7 @@ Use $qc-flow for this task: Codex keeps losing the thread on this medium task. C
 ## Resume After Interruption
 
 ```text
-Use $qc-flow and resume from .quick-codex-flow/<run-file>.md. Restate the current gate, execution mode, current phase and wave, blockers, burn risk, approval strategy, next verify, and continue from file state instead of chat memory.
+Use $qc-flow and resume from .quick-codex-flow/<run-file>.md. Restate the current gate, execution mode, current phase and wave, blockers, burn risk, approval strategy, experience constraints, hook-derived invariants, next verify, and continue from file state instead of chat memory.
 ```
 
 Useful local commands:
@@ -19,6 +19,8 @@ Useful local commands:
 ```bash
 node bin/quick-codex.js status --dir /path/to/project
 node bin/quick-codex.js resume --dir /path/to/project
+node bin/quick-codex.js capture-hooks --dir /path/to/project --input /path/to/hooks.txt
+node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
 node bin/quick-codex.js doctor-run --dir /path/to/project
 ```
 
@@ -43,7 +45,7 @@ Use $qc-lock for this task: simplify duplicated help-routing logic in repo-tool 
 ## Resume From Run Artifact
 
 ```text
-Use $qc-flow and resume from .quick-codex-flow/<run-file>.md. Restate the current gate, current phase, current wave, remaining blockers, and continue from the locked state instead of rebuilding context from chat.
+Use $qc-flow and resume from .quick-codex-flow/<run-file>.md. Restate the current gate, current phase, current wave, remaining blockers, experience constraints, and continue from the locked state instead of rebuilding context from chat.
 ```
 
 ## Front-Half Then Handoff

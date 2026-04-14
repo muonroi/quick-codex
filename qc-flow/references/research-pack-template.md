@@ -26,6 +26,9 @@ Answered questions:
 Unresolved questions:
 - Q2 -> ...
 
+Active gray-area triggers:
+- G1: ...
+
 Evidence basis for planning:
 - repo evidence:
 - docs or external evidence:
@@ -49,3 +52,4 @@ Rules:
 - validate blast radius and protected boundaries, not just the most likely implementation path
 - when the decision is `context-sufficient`, planning may begin
 - when the decision is `return-to-clarify`, do not plan yet
+- when a gray-area trigger remains active, do not treat the run as execution-ready

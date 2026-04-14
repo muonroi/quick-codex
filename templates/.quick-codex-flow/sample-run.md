@@ -40,6 +40,8 @@ Execution mode:
 - Current gate: plan-check
 - Current phase / wave: P1 / W1
 - Remaining blockers: none
+- Experience constraints: capture hook-derived constraints before resume
+- Active hook-derived invariants: do not rebuild context from chat memory when the run file already carries the hook impact
 - Next verify: confirm the verified plan
 - Recommended next command: `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
 
@@ -49,6 +51,8 @@ Execution mode:
 - Current phase / wave: P1 / W1
 - Requirements still satisfied: R1, R2, R3, R4
 - Remaining blockers: none
+- Experience constraints: capture hook-derived constraints before resume
+- Active hook-derived invariants: do not rebuild context from chat memory when the run file already carries the hook impact
 - Next verify: confirm the verified plan
 - Resume with: `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
 
@@ -80,6 +84,22 @@ Current reason:
 - this sample does not require escalation
 If blocked:
 - emit the next command clearly
+
+## Experience Snapshot
+Active warnings:
+- `[id:demo1 col:experience-demo]` Persist hook-derived guardrails before a pause or compaction-sensitive verify.
+Why:
+- the next session should recover the warning impact from the artifact instead of relying on chat memory
+Decision impact:
+- keep resume-safe experience constraints in the run file and carry them into the handoff summaries
+Experience constraints:
+- checkpoint hook-derived constraints before a broad verify or likely pause
+Active hook-derived invariants:
+- a relevant warning stays active until the run records that it is no longer relevant
+Still relevant:
+- yes, this sample demonstrates experience-preserving resume
+Ignored warnings:
+- none
 
 ## Clarify State
 Goal:

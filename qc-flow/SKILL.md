@@ -21,6 +21,24 @@ This skill changes the execution model for Codex:
 - sequential phase and wave execution
 - persistent artifacts as the source of truth
 
+## Gray-area trigger
+
+A `gray area` exists when the next safe move still depends on an unresolved interpretation instead of concrete evidence.
+
+Treat the gray-area trigger as active when any of these are true:
+- the user intent or success condition can still be read in more than one reasonable way
+- the affected area or protected boundaries still have more than one plausible reading
+- the verify path still depends on guessed contracts, guessed runtime behavior, or guessed ownership
+- the repo evidence supports one path, but another path is still plausibly in scope and untested
+- fast path would rely on phrases like `probably`, `likely`, `should be`, `seems enough`, or stale chat memory
+
+Routing rule when gray-area trigger is active:
+- if the ambiguity is about user intent, constraints, or success conditions, stay in `clarify` and discuss with the user
+- if the ambiguity is about repo facts, contracts, runtime behavior, or verify path, stay in `research`
+- do not use fast path while any gray-area trigger remains active
+- do not hand execution to `$qc-lock` while any gray-area trigger remains active
+- do not silently convert gray area into implementation assumptions
+
 ## Core principle
 
 Think first, surface impact, lock context, prove the missing pieces, then plan, then execute.
@@ -53,6 +71,7 @@ Fast-path conditions:
 - the research evidence already exists, or an explicit skip rationale is defensible
 - the remaining work fits one small phase or one tightly scoped wave
 - the verify path is already obvious
+- no gray-area trigger is active
 
 Fast-path rules:
 - keep the baseline and run file, but compress the planning prose
@@ -68,6 +87,7 @@ Do not use fast path when:
 - research evidence is still missing for a non-trivial area
 - verification is still ambiguous
 - a relock is likely
+- any gray-area trigger is active
 
 ## Lean Budget Mode
 
@@ -115,6 +135,8 @@ Required handoff fields:
 - current gate
 - current phase and wave, or the next active wave if execution is about to start
 - remaining blockers
+- experience constraints when active
+- active hook-derived invariants when active
 - execution mode when handoff is going to `$qc-lock`
 - evidence basis for the handoff
 - burn risk and last budget trigger when relevant
@@ -199,6 +221,7 @@ The run file must preserve:
 - required outcomes
 - constraints
 - affected area and blast radius
+- experience snapshot when hook warnings affect scope, verify, or invariants
 - execution mode
 - resume digest
 - session risk
@@ -293,6 +316,8 @@ The digest must capture:
 - current gate
 - current phase and wave
 - remaining blockers
+- experience constraints
+- active hook-derived invariants
 - next verify
 - recommended next command
 
@@ -321,6 +346,8 @@ The summary must capture:
 - current phase and wave
 - requirements still satisfied
 - remaining blockers
+- experience constraints
+- active hook-derived invariants
 - next verify
 - exact resume command
 
@@ -432,6 +459,7 @@ Clarify until you can state:
 - what remains unknown
 
 If critical ambiguity remains, stay in clarify mode.
+If the ambiguity is about user intent or success conditions, explicitly discuss it with the user before moving on.
 
 ## Gate 2: Affected-area and blast-radius discussion
 
@@ -463,6 +491,7 @@ Context is sufficient only if you know:
 - how success will be verified
 
 If any of these are weak, record the gap and continue to research.
+If the weakness is a user-intent ambiguity instead of a repo-fact gap, stay in clarify and discuss it instead of starting research prematurely.
 
 Non-trivial planning rule:
 - for multi-file, cross-module, or architecture-touching work, do not plan from intuition alone
@@ -485,6 +514,7 @@ Research rules:
 - stop researching once the missing gate items are satisfied
 
 If research reveals new ambiguity, return to clarify before planning.
+If that ambiguity is still repo-side rather than user-intent-side, keep the run in `research` and record the unresolved gray-area trigger explicitly.
 
 When Experience Engine warnings are relevant during research:
 - record them in the research artifact as evidence or risk input
@@ -683,6 +713,8 @@ When resuming:
    - current phase
    - current wave
    - remaining blockers
+   - experience constraints
+   - active hook-derived invariants
    - stall status
    - approval strategy
    - burn risk
@@ -718,6 +750,7 @@ This skill must not depend on `experience-engine`, but it should work well with 
 
 When hooks surface a relevant warning:
 - fold the warning into the current clarify, research, plan, or execution artifact
+- record the same warning in `Experience Snapshot` when it changes scope, verify, or invariant requirements across turns
 - route the warning into the right artifact section:
   - `Clarify State` -> scope, constraints, or open questions
   - `Research Pack` -> evidence, answered questions, or unresolved risks
@@ -788,6 +821,7 @@ For large verify output, `Verification result` should use the bounded-output pat
 - recommend the exact next skill to use
 - prefer `$qc-flow` when staying in the same run file or changing gates
 - recommend `$qc-lock` only when the verified plan is already clear, the evidence basis is current, and the handoff target is one tightly scoped wave
+- never recommend `$qc-lock` while any gray-area trigger remains active
 - include a concrete command or prompt line the user can paste
 - if recommending `$qc-lock`, state whether it should run in `manual` or `auto`
 - if both options are viable, recommend one first and mention the alternative briefly

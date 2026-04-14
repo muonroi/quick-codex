@@ -36,6 +36,10 @@ Open questions:
 - Q1: ...
 - Q2: ...
 
+Gray-area triggers:
+- G1: ...
+- G2: ...
+
 Context sufficiency check:
 - Repo area known: yes/no
 - Relevant files identifiable: yes/no
@@ -58,4 +62,5 @@ Rules:
 - stay here until the decision is not ambiguous
 - if one or more sufficiency items are `no`, do not plan yet
 - if the affected area is vague, do not treat the task as clarified yet
+- if a gray-area trigger is about user intent or success conditions, discuss with the user before leaving clarify
 - keep the required outcomes stable

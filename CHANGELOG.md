@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Highlights:
+- added `Experience Snapshot` to the `qc-flow` run-file contract so hook-derived warnings can survive resume and compaction-sensitive handoffs
+- extended `status`, `resume`, `repair-run`, and `doctor-run` to carry and validate experience-aware resumability fields
+- added `capture-hooks` so recent Experience Engine warning text can be synced into `Experience Snapshot` without manual copy-paste per field
+- added `sync-experience` so a concrete tool action can be sent to Experience Engine `/api/intercept` and merged into the active run automatically
+- updated templates and docs so Experience Engine is part of the resume contract, not only a side-channel suggestion
+
 ## 0.3.0
 
 Highlights:

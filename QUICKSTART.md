@@ -67,6 +67,8 @@ Check what the package thinks is active:
 ```bash
 node bin/quick-codex.js status --dir /path/to/project
 node bin/quick-codex.js resume --dir /path/to/project
+node bin/quick-codex.js capture-hooks --dir /path/to/project --input /path/to/hooks.txt
+node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
 node bin/quick-codex.js checkpoint-digest --dir /path/to/project
 node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
@@ -116,16 +118,28 @@ node bin/quick-codex.js resume --dir /path/to/project
 
 Expected behavior:
 - `status` tells you the active run, gate, risks, and next verify
-- `resume` prints the exact next prompt to paste
+- `resume` prints the exact next prompt to paste plus the active experience constraints to keep in view
 - `checkpoint-digest` prints the compact-safe handoff before a pause or a broad verify
-- `repair-run` rewrites stale resumability sections and realigns `STATE.md`
-- `doctor-run` tells you if the run artifact is stale or incomplete
+- `repair-run` rewrites stale resumability sections, backfills `Experience Snapshot`, and realigns `STATE.md`
+- `doctor-run` tells you if the run artifact is stale, incomplete, or missing experience carry-forward
 
 If `doctor-run` fails on an older or partially updated run:
 
 ```bash
 node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
+```
+
+If you already have recent Experience Engine hook output:
+
+```bash
+node bin/quick-codex.js capture-hooks --dir /path/to/project --input /path/to/hooks.txt
+```
+
+If you want Experience Engine to evaluate the next tool action directly:
+
+```bash
+node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
 ```
 
 ## 5. What to expect
@@ -153,6 +167,7 @@ If you are editing the skill package itself:
 3. Re-run a real task through the skill with a persistent run artifact
 4. Verify affected area, evidence basis, and handoff behavior with concrete artifacts, not only by reading the docs
 5. Exercise `status`, `resume`, or `doctor-run` when the task uses `qc-flow`
+6. If Experience Engine warnings affect scope or verify, persist them into `Experience Snapshot` before pausing or running broad verification
 
 Optional commands:
 

@@ -22,6 +22,7 @@ Answer these:
 5. Do I already have evidence that supports the planned scope?
 6. Will this likely span multiple turns?
 7. Is the remaining work mostly implementation?
+8. Is any gray area still active about user intent, affected area, contracts, or verify path?
 
 ## Choose a Skill
 
@@ -30,6 +31,7 @@ Pick `qc-flow` when:
 - the task needs clarify or research
 - the affected area or protected boundaries are still fuzzy
 - phase boundaries matter
+- any gray area is still active
 
 Pick `qc-lock` when:
 - the requirements are already clear
@@ -37,6 +39,7 @@ Pick `qc-lock` when:
 - the affected area is already explicit, or can be proven quickly in preflight
 - the evidence basis for the lock is already known
 - the task is mostly execution and verification
+- no gray-area trigger remains active
 
 Use the recovery commands when:
 - the task already has a run artifact

@@ -38,8 +38,10 @@ In practice, that means:
 - resume from files instead of guessing from stale chat state
 - surface blast radius before implementation pretends to be obvious
 - force planning to rest on repo evidence or an explicit research-skip rationale
+- treat unresolved gray areas as a hard stop for fast-path and premature execution lock
 - keep scope tight once execution starts
 - make verification explicit so failures narrow the next move instead of causing thrash
+- carry forward hook-derived constraints so compaction does not erase relevant Experience Engine warnings
 
 ## Why Quick Codex
 
@@ -210,6 +212,7 @@ Use `qc-flow` when:
 - the affected area is not yet explicit
 - research or planning should happen before coding
 - the work may span multiple turns
+- any gray area is still active
 
 Use `qc-lock` when:
 - the problem is already understood
@@ -217,6 +220,7 @@ Use `qc-lock` when:
 - the remaining work is mostly execution
 - you want strict step-by-step verification
 - the scope needs to stay tight
+- no gray-area trigger remains active
 
 ### Decision Table
 
@@ -282,6 +286,8 @@ quick-codex doctor [--target <dir>]
 quick-codex init [--dir <project-dir>] [--force]
 quick-codex status [--dir <project-dir>] [--run <path>]
 quick-codex resume [--dir <project-dir>] [--run <path>]
+quick-codex capture-hooks [--dir <project-dir>] [--run <path>] [--input <path>]
+quick-codex sync-experience [--dir <project-dir>] [--run <path>] --tool <name> [--tool-input <json>] [--tool-input-file <path>] [--engine-url <url>] [--timeout-ms <ms>]
 quick-codex checkpoint-digest [--dir <project-dir>] [--run <path>]
 quick-codex snapshot [--dir <project-dir>] [--run <path>]
 quick-codex repair-run [--dir <project-dir>] [--run <path>]
@@ -295,11 +301,13 @@ Recommended usage:
 - `doctor` validates package shape, installed skills, and lint status
 - `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, `STATE.md`, and a sample run artifact
 - `status` shows the active run, gate, risks, and next verify
-- `resume` prints the exact next prompt(s) to paste when resuming
+- `resume` prints the exact next prompt(s) to paste when resuming, plus the active experience constraints that still matter
+- `capture-hooks` parses hook text from a file or stdin and syncs it into `Experience Snapshot`
+- `sync-experience` calls Experience Engine `/api/intercept` for a concrete tool action and syncs returned warnings into `Experience Snapshot`
 - `checkpoint-digest` prints the compact-safe handoff that should survive context compaction or a pause
 - `snapshot` is a shorter alias for `checkpoint-digest`
-- `repair-run` backfills resumability sections and realigns `STATE.md` for stale or older run artifacts
-- `doctor-run` validates the run artifact and `STATE.md` handoff
+- `repair-run` backfills resumability sections, `Experience Snapshot`, and realigns `STATE.md` for stale or older run artifacts
+- `doctor-run` validates the run artifact, `Experience Snapshot`, and `STATE.md` handoff
 - `upgrade` reruns install behavior and removes legacy skill names if present
 - `uninstall` removes installed skills from the target path and can also remove project scaffolds when `--dir` is provided explicitly
 - the CLI prints a short update notice when npm has a newer published version
@@ -311,6 +319,8 @@ node bin/quick-codex.js doctor
 node bin/quick-codex.js init --dir /path/to/project
 node bin/quick-codex.js status --dir /path/to/project
 node bin/quick-codex.js resume --dir /path/to/project
+node bin/quick-codex.js capture-hooks --dir /path/to/project --input /path/to/hooks.txt
+node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
 node bin/quick-codex.js checkpoint-digest --dir /path/to/project
 node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
@@ -345,11 +355,30 @@ Recommended routing for relevant hook warnings:
 - `Research Pack` -> evidence, answered questions, unresolved risks
 - `Execution Wave` -> `Risks`, `Invariant requirements`, `Verify`
 - `Phase Close` -> carry-forward notes, open risks
+- `Experience Snapshot` -> active warnings, decision impact, carry-forward constraints, ignored warnings
 
 Recommended routing for the hook `Why:` line:
 - `Risks`
 - `Invariant requirements`
 - `Verify`
+
+For resume-sensitive work, do not leave this as chat-only interpretation.
+Persist the warning impact into the run file:
+- `Resume Digest` -> `Experience constraints`
+- `Compact-Safe Summary` -> `Experience constraints`
+- `Compact-Safe Summary` -> `Active hook-derived invariants`
+
+When you already have recent hook text, sync it directly:
+
+```bash
+node bin/quick-codex.js capture-hooks --dir /path/to/project --input /path/to/hooks.txt
+```
+
+When you want the engine to evaluate a concrete next tool action itself:
+
+```bash
+node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
+```
 
 If a warning is noisy and you intentionally ignore it, do not ignore it silently. Report it back so the engine can improve.
 

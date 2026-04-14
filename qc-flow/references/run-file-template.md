@@ -52,6 +52,8 @@ Execution mode:
 - Current gate: ...
 - Current phase / wave: P1 / W1
 - Remaining blockers: none
+- Experience constraints: none
+- Active hook-derived invariants: none
 - Next verify: ...
 - Recommended next command: ...
 
@@ -61,6 +63,8 @@ Execution mode:
 - Current phase / wave: P1 / W1
 - Requirements still satisfied: R1, R2
 - Remaining blockers: none
+- Experience constraints: none
+- Active hook-derived invariants: none
 - Next verify: ...
 - Resume with: `Use $qc-flow and resume from .quick-codex-flow/<task-slug>.md ...`
 
@@ -92,6 +96,22 @@ Current reason:
 - ...
 If blocked:
 - ...
+
+## Experience Snapshot
+Active warnings:
+- none
+Why:
+- no relevant Experience Engine warnings have been recorded in this run
+Decision impact:
+- none
+Experience constraints:
+- none
+Active hook-derived invariants:
+- none
+Still relevant:
+- no hook-derived carry-forward is active
+Ignored warnings:
+- none
 
 ## Clarify State
 <paste the current clarify artifact here>
@@ -147,12 +167,14 @@ Rules:
 - keep `Affected area / blast radius` current when planning or relocking changes what may be touched
 - update `Requirements Still Satisfied` after each completed phase
 - keep `Inputs` current when the plan depends on specific source artifacts or docs
+- keep `Experience Snapshot` current whenever a hook warning changes scope, verify, or invariant requirements
 - when pasting artifacts into a section, do not repeat the section heading inside that section
 - keep `Recommended Next Command` concrete enough that the user can paste it directly
 - do not mark a planning-only run complete until `Recommended Next Command` is filled in
 - refresh `Resume Digest` after planning handoff, wave completion, and phase close
 - refresh `Compact-Safe Summary` after every completed wave and phase
 - refresh `Compact-Safe Summary` before any broad or long-running verify and before stopping for a pause
+- refresh the experience lines in both summaries when active hook-derived constraints change
 - if `Session Risk` or `Context Risk` is `high`, checkpoint before opening new scope
 - refresh `Stall Status` after any stalled or long-running verify step
 - refresh `Burn Risk` after thrash, stall, or repeated unchanged-state turns

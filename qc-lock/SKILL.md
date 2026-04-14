@@ -53,6 +53,12 @@ Preflight pass conditions:
 If these are not true, do not lock yet.
 Either keep researching or hand the task back to `$qc-flow`.
 
+Gray-area rule:
+- if the task still has an unresolved gray area, `qc-lock` is not allowed to convert that ambiguity into a lock
+- gray area about user intent or success conditions -> hand back to `$qc-flow`
+- gray area about repo facts, contracts, or verify path -> keep preflight active and keep researching
+- only lock when the remaining uncertainty is operational detail inside an already-proven scope
+
 ## Required loop
 
 Follow this sequence exactly:
@@ -69,6 +75,7 @@ Never skip verification.
 Never advance past a failing step.
 Never expand scope without relocking.
 Never lock from a fuzzy affected area.
+Never lock while a gray-area trigger is still active.
 
 ## Persistent state
 
@@ -264,15 +271,22 @@ Prefer this order:
 If you deliberately ignore a repeated noisy suggestion, report it with:
 
 ```bash
-curl -s -X POST http://localhost:8082/api/feedback \
-  -H "Content-Type: application/json" \
-  -d '{"pointId":"xxxx","collection":"col-name","followed":false}'
+exp-feedback ignored xxxx col-name
+exp-feedback noise xxxx col-name wrong_task
 ```
 
 Replace `xxxx` and `col-name` from the hook suffix:
 
 ```text
 [id:xxxx col:name]
+```
+
+Raw verdict API form is still available when needed:
+
+```bash
+curl -s -X POST http://localhost:8082/api/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"pointId":"xxxx","collection":"col-name","verdict":"IGNORED"}'
 ```
 
 Use direct `experience-engine` API calls only when the user explicitly wants to inspect or debug the engine behavior.
