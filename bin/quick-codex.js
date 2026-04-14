@@ -549,6 +549,20 @@ function findSectionBulletValue(text, heading, label) {
   return null;
 }
 
+function detectArtifactType(runPath, text) {
+  if (runPath.includes(".quick-codex-lock") || text.includes("## Locked Plan")) {
+    return "lock";
+  }
+  return "flow";
+}
+
+function defaultResumeCommand(relativeRunPath, artifactType = "flow") {
+  if (artifactType === "lock") {
+    return `Use $qc-lock for this task: resume from ${relativeRunPath}.`;
+  }
+  return `Use $qc-flow and resume from ${relativeRunPath}.`;
+}
+
 function meaningfulList(values) {
   const normalized = values
     .map((value) => value.trim())
@@ -904,8 +918,19 @@ function phaseWaveFromMetadata(metadata) {
 
   return {
     phase: metadata.currentPhase ?? digestPhase ?? "?",
-    wave: metadata.currentWave ?? digestWave ?? "?"
+    wave: metadata.currentWave ?? metadata.currentStep ?? digestWave ?? "?"
   };
+}
+
+function normalizeStatePointer(value) {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (/^(none|n\/a|not recorded)$/i.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
 }
 
 function flowDirFor(projectDir) {
@@ -939,6 +964,16 @@ function resolveRunPath(projectDir, explicitRun) {
   const statePath = stateFileFor(projectDir);
   const stateText = readTextIfExists(statePath);
   if (stateText) {
+    const activeLock = normalizeStatePointer(findLabelValue(stateText, "Active lock"));
+    if (activeLock) {
+      const activeLockPath = path.resolve(projectDir, activeLock);
+      if (fs.existsSync(activeLockPath)) {
+        const metadata = runMetadata(activeLockPath);
+        if (!isRunDone(metadata)) {
+          return activeLockPath;
+        }
+      }
+    }
     const activeRun = findLabelValue(stateText, "Active run");
     if (activeRun) {
       const activeRunPath = path.resolve(projectDir, activeRun);
@@ -989,7 +1024,7 @@ function statusCommand({ dir, run }) {
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
   console.log(`Execution mode: ${metadata.executionMode ?? "manual"}`);
   console.log(`Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`);
-  console.log(`Execution state: ${metadata.executionState ?? "unknown"}`);
+  console.log(`Execution state: ${metadata.executionState ?? metadata.status ?? "unknown"}`);
   console.log(`Blockers: ${metadata.blockers ?? "none"}`);
   console.log(`Stall status: ${metadata.stallStatus ?? "none"}`);
   console.log(`Approval strategy: ${metadata.approvalStrategy ?? "local-only"}`);
@@ -1169,7 +1204,7 @@ function resumeCommand({ dir, run }) {
   const relativeRunPath = relPathFrom(dir, runPath);
   const commands = metadata.recommendedCommands.length > 0
     ? metadata.recommendedCommands
-    : [`Use $qc-flow and resume from ${relativeRunPath}.`];
+    : [defaultResumeCommand(relativeRunPath, metadata.artifactType)];
 
   console.log(`Project: ${dir}`);
   console.log(`Active run: ${relativeRunPath}`);
@@ -1194,7 +1229,7 @@ function checkpointDigestLines(metadata, relativeRunPath, { preferExisting = tru
     ? metadata.requirementsStillSatisfied.join(", ")
     : "not recorded";
   const resumeWith = metadata.recommendedCommands[0]
-    ?? `Use $qc-flow and resume from ${relativeRunPath}.`;
+    ?? defaultResumeCommand(relativeRunPath, metadata.artifactType);
 
   return [
     `Goal: ${metadata.goal ?? "not recorded"}`,
@@ -1212,7 +1247,7 @@ function checkpointDigestLines(metadata, relativeRunPath, { preferExisting = tru
 function resumeDigestLines(metadata, relativeRunPath) {
   const phaseWave = phaseWaveFromMetadata(metadata);
   const recommendedNextCommand = metadata.recommendedCommands[0]
-    ?? `Use $qc-flow and resume from ${relativeRunPath}.`;
+    ?? defaultResumeCommand(relativeRunPath, metadata.artifactType);
 
   return [
     `- Goal: ${metadata.goal ?? "not recorded"}`,
@@ -1294,11 +1329,15 @@ function inferStateStatus(metadata) {
 }
 
 function renderStateFile(relativeRunPath, metadata) {
+  const activeLock = metadata.artifactType === "lock" ? relativeRunPath : "none";
   const phaseWave = phaseWaveFromMetadata(metadata);
   return `# Quick Codex Flow State
 
 Active run:
 - ${relativeRunPath}
+
+Active lock:
+- ${activeLock}
 
 Current gate:
 - ${metadata.currentGate ?? "unknown"}
@@ -1374,37 +1413,71 @@ function runMetadataFromText(runPath, text) {
 }
 
 function runMetadataStruct(runPath, text) {
+  const artifactType = detectArtifactType(runPath, text);
+  const lockCurrentStep = findLabelValueInSection(text, "Locked Plan", "Current step")
+    ?? findLabelValue(text, "Current step");
+  const lockCurrentVerify = findSectionLabelBullets(text, "Locked Plan", "Current verify");
+  const lockRecommendedCommands = findSectionLabelBullets(text, "Locked Plan", "Recommended next command");
+  const lockBlockers = findSectionLabelBullets(text, "Locked Plan", "Blockers");
+  const lockRequirementsStillSatisfied = findSectionLabelBullets(text, "Locked Plan", "Requirements still satisfied");
+  const lockVerificationEvidence = findSectionLabelBullets(text, "Locked Plan", "Verification evidence");
+  const lockExperienceInputs = findSectionLabelBullets(text, "Locked Plan", "Experience inputs");
+
   return {
     path: runPath,
     text,
+    artifactType,
     goal: findResumeDigestField(text, "Goal")
       ?? findLabelValue(text, "Original goal"),
     currentGate: findResumeDigestField(text, "Current gate")
       ?? findLabelValue(text, "Current gate")
-      ?? findHeadingValue(text, "Current gate"),
+      ?? findHeadingValue(text, "Current gate")
+      ?? (artifactType === "lock" ? "execute" : null),
     currentPhase: findLabelValueInSection(text, "Current Status", "Current phase")
-      ?? findLabelValue(text, "Current phase"),
+      ?? findLabelValue(text, "Current phase")
+      ?? (artifactType === "lock" ? findLabelValue(text, "Phase") : null),
     currentWave: findLabelValueInSection(text, "Current Status", "Current wave")
-      ?? findLabelValue(text, "Current wave"),
+      ?? findLabelValue(text, "Current wave")
+      ?? (artifactType === "lock" ? lockCurrentStep : null),
+    currentStep: lockCurrentStep,
     executionState: findLabelValueInSection(text, "Current Status", "Execution state")
-      ?? findLabelValue(text, "Execution state"),
+      ?? findLabelValue(text, "Execution state")
+      ?? (artifactType === "lock" ? findLabelValue(text, "Status") : null),
     executionMode: findResumeDigestField(text, "Execution mode")
       ?? findLabelValue(text, "Execution mode"),
     status: findLabelValue(text, "Status"),
-    blockers: findResumeDigestField(text, "Remaining blockers") ?? findSectionBullets(text, "Blockers")[0] ?? "none",
-    nextVerify: findResumeDigestField(text, "Next verify"),
-    recommendedCommands: findSectionBullets(text, "Recommended Next Command"),
+    blockers: findResumeDigestField(text, "Remaining blockers")
+      ?? findSectionBullets(text, "Blockers")[0]
+      ?? lockBlockers[0]
+      ?? "none",
+    nextVerify: findResumeDigestField(text, "Next verify")
+      ?? lockCurrentVerify[0]
+      ?? null,
+    recommendedCommands: uniqueValues([
+      ...findSectionBullets(text, "Recommended Next Command"),
+      ...lockRecommendedCommands
+    ]),
     stallStatus: findLabelValue(text, "Stall Status") ?? findHeadingValue(text, "Stall Status"),
     approvalStrategy: findLabelValue(text, "Approval Strategy") ?? findHeadingValue(text, "Approval Strategy"),
     burnRisk: findLabelValue(text, "Burn Risk") ?? findHeadingValue(text, "Burn Risk"),
     sessionRisk: findLabelValue(text, "Session Risk") ?? findHeadingValue(text, "Session Risk"),
     contextRisk: findLabelValue(text, "Context Risk") ?? findHeadingValue(text, "Context Risk"),
     compactSafeSummary: findSectionBullets(text, "Compact-Safe Summary"),
-    requirementsStillSatisfied: findSectionBullets(text, "Requirements Still Satisfied"),
+    requirementsStillSatisfied: uniqueValues([
+      ...findSectionBullets(text, "Requirements Still Satisfied"),
+      ...lockRequirementsStillSatisfied
+    ]),
+    verificationEvidence: lockVerificationEvidence,
     hasExperienceSnapshot: text.includes("## Experience Snapshot"),
-    experienceConstraints: findSectionLabelBullets(text, "Experience Snapshot", "Experience constraints"),
+    experienceConstraints: uniqueValues([
+      ...findSectionLabelBullets(text, "Experience Snapshot", "Experience constraints"),
+      ...(artifactType === "lock" ? lockExperienceInputs : [])
+    ]),
     experienceHookInvariants: findSectionLabelBullets(text, "Experience Snapshot", "Active hook-derived invariants"),
-    experienceActiveWarnings: findSectionLabelBullets(text, "Experience Snapshot", "Active warnings"),
+    experienceActiveWarnings: uniqueValues([
+      ...findSectionLabelBullets(text, "Experience Snapshot", "Active warnings"),
+      ...(artifactType === "lock" ? lockExperienceInputs : [])
+    ]),
     experienceWhy: findSectionLabelBullets(text, "Experience Snapshot", "Why"),
     experienceDecisionImpact: findSectionLabelBullets(text, "Experience Snapshot", "Decision impact"),
     experienceStillRelevant: findSectionLabelBullets(text, "Experience Snapshot", "Still relevant"),
@@ -1420,6 +1493,40 @@ function repairRunCommand({ dir, run }) {
   const runPath = resolveRunPath(dir, run);
   const relativeRunPath = relPathFrom(dir, runPath);
   const metadata = runMetadata(runPath);
+  const statePath = stateFileFor(dir);
+  ensureDir(path.dirname(statePath));
+
+  if (metadata.artifactType === "lock") {
+    const currentStateText = readTextIfExists(statePath);
+    const existingActiveRun = normalizeStatePointer(findLabelValue(currentStateText ?? "", "Active run")) ?? relativeRunPath;
+    const stateBody = `# Quick Codex Flow State
+
+Active run:
+- ${existingActiveRun}
+
+Active lock:
+- ${relativeRunPath}
+
+Current gate:
+- ${metadata.currentGate ?? "unknown"}
+
+Current phase / wave:
+- ${phaseWaveFromMetadata(metadata).phase} / ${phaseWaveFromMetadata(metadata).wave}
+
+Execution mode:
+- ${metadata.executionMode ?? "manual"}
+
+Status:
+- ${inferStateStatus(metadata)}
+`;
+    fs.writeFileSync(statePath, stateBody, "utf8");
+    console.log(`Repaired lock artifact pointer: ${relativeRunPath}`);
+    console.log("Refreshed:");
+    console.log(`- ${relPathFrom(dir, statePath)}`);
+    console.log("- lock artifacts keep their compact bridge shape; flow-only sections were not synthesized");
+    return;
+  }
+
   let nextText = metadata.text;
 
   nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(metadata, relativeRunPath), "Requirement Baseline");
@@ -1430,8 +1537,6 @@ function repairRunCommand({ dir, run }) {
   fs.writeFileSync(runPath, nextText, "utf8");
 
   const repairedMetadata = runMetadata(runPath);
-  const statePath = stateFileFor(dir);
-  ensureDir(path.dirname(statePath));
   fs.writeFileSync(statePath, renderStateFile(relativeRunPath, repairedMetadata), "utf8");
 
   console.log(`Repaired run: ${relativeRunPath}`);
@@ -1454,7 +1559,7 @@ function doctorRunCommand({ dir, run }) {
     ...metadata.experienceStillRelevant
   ]).length > 0;
   const missingIgnoredWarningFeedback = ignoredWarningsMissingFeedback(metadata.ignoredWarnings);
-  const checks = [
+  const flowChecks = [
     ["Requirement Baseline", text.includes("## Requirement Baseline")],
     ["Resume Digest", text.includes("## Resume Digest")],
     ["Compact-Safe Summary", text.includes("## Compact-Safe Summary")],
@@ -1476,6 +1581,19 @@ function doctorRunCommand({ dir, run }) {
     ["Recommended Next Command", metadata.recommendedCommands.length > 0],
     ["Verification Ledger", text.includes("## Verification Ledger")]
   ];
+  const lockChecks = [
+    ["Requirement Baseline", text.includes("## Requirement Baseline")],
+    ["Locked Plan", text.includes("## Locked Plan")],
+    ["Current gate", metadata.currentGate !== null],
+    ["Current execution position", metadata.currentPhase !== null && (metadata.currentStep !== null || metadata.currentWave !== null)],
+    ["Current verify", metadata.nextVerify !== null],
+    ["Recommended Next Command", metadata.recommendedCommands.length > 0],
+    ["Blockers", text.includes("Blockers:")],
+    ["Verification evidence", metadata.verificationEvidence.length > 0],
+    ["Requirements still satisfied", metadata.requirementsStillSatisfied.length > 0],
+    ["Ignored warning feedback ids", missingIgnoredWarningFeedback.length === 0]
+  ];
+  const checks = metadata.artifactType === "lock" ? lockChecks : flowChecks;
 
   let failed = false;
   console.log(`Run: ${relPathFrom(dir, runPath)}`);
@@ -1494,10 +1612,15 @@ function doctorRunCommand({ dir, run }) {
 
   const stateText = readTextIfExists(stateFileFor(dir));
   if (stateText) {
-    const activeRun = findLabelValue(stateText, "Active run");
-    const expectedPath = activeRun ? path.resolve(dir, activeRun) : null;
+    const activeRun = normalizeStatePointer(findLabelValue(stateText, "Active run"));
+    const activeLock = normalizeStatePointer(findLabelValue(stateText, "Active lock"));
+    const expectedPointer = metadata.artifactType === "lock"
+      ? (activeLock ?? activeRun)
+      : activeRun;
+    const expectedPath = expectedPointer ? path.resolve(dir, expectedPointer) : null;
     const stateMatches = expectedPath === runPath;
-    console.log(`${stateMatches ? "PASS" : "WARN"}: STATE.md active run ${stateMatches ? "matches" : "does not match"} this run`);
+    const pointerLabel = metadata.artifactType === "lock" ? "lock pointer" : "active run";
+    console.log(`${stateMatches ? "PASS" : "WARN"}: STATE.md ${pointerLabel} ${stateMatches ? "matches" : "does not match"} this run`);
   } else {
     console.log("WARN: STATE.md not found");
   }

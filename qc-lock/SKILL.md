@@ -94,10 +94,36 @@ The run file must preserve:
 - evidence basis for the current lock
 - phase list
 - locked plan for the current phase
+- current execution position and current verify path
+- recommended next command for the active lock
+- active blockers
 - verification evidence
+- requirements still satisfied
 - unresolved risks and blockers
 
 Before starting a new phase or resuming after a pause, reread the run file first.
+
+## Lock-side bridge subset
+
+`qc-lock` is a bridge artifact, not a second `qc-flow` run.
+
+The locked artifact must carry or derive:
+- goal
+- current gate, which should stay `execute` while the lock is active
+- execution mode when upstream handoff made it explicit
+- phase and current step
+- affected area
+- protected boundaries or explicit out-of-scope equivalent
+- current verify path
+- recommended next command for the current lock
+- blockers when present
+- execution-local risks
+- active experience constraints when relevant
+- verification evidence that justifies the current step statuses
+- requirements still satisfied
+
+Do not copy `Resume Digest`, `Compact-Safe Summary`, or broad workflow narration into the lock artifact.
+Use compact lock-side equivalents instead.
 
 ## Requirement baseline
 
@@ -168,6 +194,7 @@ Write or update the same lock in the persistent run file.
 
 Lock rules:
 - mark every step as `pending`, `in_progress`, `done`, or `blocked`
+- keep the lock-side bridge fields current: current verify, recommended next command, blockers, verification evidence, and requirements still satisfied
 - do not add, remove, merge, or reorder steps after lock
 - if scope changes materially, replace the full lock block and clearly state `Relocked`
 - if the affected area changes materially, replace the full lock block and clearly state `Relocked`
@@ -188,6 +215,7 @@ Before editing, state:
 
 Prefer the smallest edit that can complete the step.
 After each meaningful step, update the run file so a later turn can resume without reconstructing state from memory.
+Refresh the lock-side bridge fields whenever the current step, verify path, blockers, or proof status changes.
 
 ### 4. TEST / VERIFY
 
@@ -233,6 +261,9 @@ When continuing existing work:
    - affected area
    - evidence basis for the current lock
    - current locked step
+   - current verify path
+   - current blockers
+   - proof basis for the current step status
 3. Only then continue execution.
 
 If the run file and chat context disagree, trust the run file unless the user explicitly changed direction.
@@ -244,6 +275,7 @@ Use these rules to prevent context loss:
 - every relock must restate what remains invariant
 - every completion summary must include `requirements still satisfied`
 - every relock must restate the affected area that remains in scope
+- every lock checkpoint must refresh the current verify path and recommended next command when they changed
 - do not replace old intent with newly discovered local optimizations
 - do not let failing tests or implementation friction redefine the goal
 - if uncertain, reread the run file and anchor on the baseline
@@ -306,7 +338,7 @@ Use this structure in responses:
    - `Affected area`
    - `Verify`
    - `Result`
-6. Final outcome with verification status and remaining requirements
+6. Final outcome with verification status, remaining requirements, and the next locked command when work is not finished
 
 Keep commentary concise. The lock block is the authoritative state.
 

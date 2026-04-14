@@ -117,11 +117,16 @@ node bin/quick-codex.js resume --dir /path/to/project
 ```
 
 Expected behavior:
-- `status` tells you the active run, gate, risks, and next verify
+- `status` tells you the active continuity artifact, gate, risks, and next verify
 - `resume` prints the exact next prompt to paste plus the active experience constraints to keep in view
 - `checkpoint-digest` prints the compact-safe handoff before a pause or a broad verify
-- `repair-run` rewrites stale resumability sections, backfills `Experience Snapshot`, and realigns `STATE.md`
-- `doctor-run` tells you if the run artifact is stale, incomplete, or missing experience carry-forward
+- `repair-run` rewrites stale flow-run resumability sections, preserves compact lock artifacts, and realigns `STATE.md`
+- `doctor-run` tells you if the flow run or lock artifact is stale, incomplete, or missing required continuity fields
+- `CONTINUITY-CONTRACT.md` defines which surface owns run, lock, pointer, and guidance continuity state
+
+`STATE.md` stays pointer-only:
+- `Active run` points to the main continuity artifact
+- optional `Active lock` points to the currently active lock handoff
 
 If `doctor-run` fails on an older or partially updated run:
 
@@ -141,6 +146,11 @@ If you want Experience Engine to evaluate the next tool action directly:
 ```bash
 node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
 ```
+
+If you are updating an older lock artifact:
+- add the compact bridge fields instead of copying flow sections
+- keep `STATE.md` pointer-only; use optional `Active lock` when locked execution is the active handoff
+- smoke check with `status`, `resume`, and `doctor-run` on both the flow run and the lock artifact
 
 ## 5. What to expect
 

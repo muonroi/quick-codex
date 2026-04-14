@@ -266,6 +266,7 @@ Stay on `qc-flow` when:
 ```
 
 Supporting docs:
+- [CONTINUITY-CONTRACT.md](./CONTINUITY-CONTRACT.md)
 - [BENCHMARKS.md](./BENCHMARKS.md)
 - [BENCHMARK-PROOF.md](./BENCHMARK-PROOF.md)
 - [BENCHMARK-PROOF-THRASH.md](./BENCHMARK-PROOF-THRASH.md)
@@ -299,18 +300,31 @@ quick-codex uninstall [--target <dir>] [--dir <project-dir>]
 Recommended usage:
 - `install` installs `qc-flow` and `qc-lock` into `~/.codex/skills`
 - `doctor` validates package shape, installed skills, and lint status
-- `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, `STATE.md`, and a sample run artifact
-- `status` shows the active run, gate, risks, and next verify
-- `resume` prints the exact next prompt(s) to paste when resuming, plus the active experience constraints that still matter
+- `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, `STATE.md`, and a sample run artifact with an optional `Active lock` pointer
+- `status` shows the active continuity artifact, gate, risks, and next verify for either a flow run or a lock artifact
+- `resume` prints the exact next prompt(s) to paste when resuming, plus the active experience constraints that still matter for flow or lock execution
 - `capture-hooks` parses hook text from a file or stdin and syncs it into `Experience Snapshot`
 - `sync-experience` calls Experience Engine `/api/intercept` for a concrete tool action and syncs returned warnings into `Experience Snapshot`
 - `checkpoint-digest` prints the compact-safe handoff that should survive context compaction or a pause
 - `snapshot` is a shorter alias for `checkpoint-digest`
-- `repair-run` backfills resumability sections, `Experience Snapshot`, and realigns `STATE.md` for stale or older run artifacts
-- `doctor-run` validates the run artifact, `Experience Snapshot`, and `STATE.md` handoff
+- `repair-run` backfills flow-run resumability sections, preserves compact lock artifacts, and realigns `STATE.md` for flow or lock handoff
+- `doctor-run` validates a flow run or lock artifact against the continuity contract and checks the `STATE.md` handoff
 - `upgrade` reruns install behavior and removes legacy skill names if present
 - `uninstall` removes installed skills from the target path and can also remove project scaffolds when `--dir` is provided explicitly
 - the CLI prints a short update notice when npm has a newer published version
+
+Migration notes for older artifacts:
+- older `qc-flow` runs can be repaired forward with `repair-run`
+- older `qc-lock` artifacts should gain bridge fields incrementally: `Current gate`, `Current verify`, `Recommended next command`, `Blockers`, `Verification evidence`, and `Requirements still satisfied`
+- do not copy `Resume Digest` or `Compact-Safe Summary` into `qc-lock`; keep the lock artifact compact
+
+Minimum smoke-check path for continuity adoption:
+- `bash scripts/lint-skills.sh`
+- `node bin/quick-codex.js status --dir /path/to/project --run .quick-codex-flow/<run>.md`
+- `node bin/quick-codex.js doctor-run --dir /path/to/project --run .quick-codex-flow/<run>.md`
+- `node bin/quick-codex.js status --dir /path/to/project --run .quick-codex-lock/<task>.md`
+- `node bin/quick-codex.js doctor-run --dir /path/to/project --run .quick-codex-lock/<task>.md`
+- if `STATE.md` uses `Active lock`, confirm plain `status` and `resume` without `--run` resolve to the lock artifact
 
 You can also run the CLI directly:
 
@@ -348,6 +362,8 @@ Important:
 ## Experience Engine Integration
 
 Quick Codex works on its own, but it pairs well with [Experience Engine](https://github.com/muonroi/experience-engine).
+
+For the authoritative field ownership and surface roles behind resume, lock, and scaffold behavior, see [CONTINUITY-CONTRACT.md](./CONTINUITY-CONTRACT.md).
 
 Recommended routing for relevant hook warnings:
 - `Clarify State` -> scope, constraints, open questions

@@ -3,6 +3,9 @@
 Active run:
 - .quick-codex-flow/sample-run.md
 
+Active lock:
+- none
+
 Current gate:
 - plan-check
 

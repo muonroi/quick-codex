@@ -5,6 +5,8 @@ Use this format when the skill locks a plan.
 ```markdown
 ## Locked Plan
 Goal: <one sentence>
+Current gate: execute
+Execution mode: <manual | auto when provided by upstream handoff>
 Phase: <phase id>
 Phase purpose: <why this phase exists>
 Covers requirements: <R1, R2>
@@ -23,17 +25,32 @@ Status: active
 | S3 | pending | ... | ... | ... |
 
 Current step: S1
+Current verify:
+- <smallest reliable verify for the current step>
+
+Recommended next command:
+- <exact next locked step or relock command>
+
 Invariant requirements:
 - <required outcomes that must still hold after this phase>
 
 Invariant affected area:
 - <surfaces that remain in scope>
 
+Blockers:
+- <`none` or the current blocker>
+
 Risks:
 - <current technical risk>
 
 Experience inputs:
-- <hook warning or `none`>
+- <active warning, constraint, or `none`>
+
+Verification evidence:
+- <proof that justifies the current step statuses or `none yet`>
+
+Requirements still satisfied:
+- <R1, R2>
 
 Assumptions:
 - <assumption that could block execution>
@@ -55,6 +72,8 @@ Compact example:
 ```markdown
 ## Locked Plan
 Goal: Add a retry guard to the API client without changing public behavior.
+Current gate: execute
+Execution mode: manual
 Phase: P2
 Phase purpose: Add the implementation change after the retry path is understood.
 Covers requirements: R1
@@ -73,17 +92,32 @@ Status: active
 | S3 | pending | Clean up edge-case handling | abort and timeout cases still pass | `npm test -- client.retry` |
 
 Current step: S2
+Current verify:
+- `npm test -- client.retry`
+
+Recommended next command:
+- Continue S2 until `npm test -- client.retry` passes, then mark S2 `done` and move to S3.
+
 Invariant requirements:
 - R1: Public retry behavior stays unchanged except for the duplicate scheduling bug.
 
 Invariant affected area:
 - Only retry scheduling and its targeted tests are in scope.
 
+Blockers:
+- none
+
 Risks:
 - Guard may suppress the first valid retry.
 
 Experience inputs:
 - Why: Last time similar retry state leaked across requests.
+
+Verification evidence:
+- S1 read-through identified the retry entry point and confirmed the duplicate scheduling path.
+
+Requirements still satisfied:
+- R1
 
 Assumptions:
 - Existing tests cover timeout and abort behavior.

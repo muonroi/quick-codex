@@ -7,3 +7,4 @@ node_modules/
 /.quick-codex-flow/
 /.quick-codex-lock/
 npm-debug.log*
+bin/
