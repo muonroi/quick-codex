@@ -27,6 +27,8 @@ function usage() {
   quick-codex init [--dir <project-dir>] [--force]
   quick-codex status [--dir <project-dir>] [--run <path>]
   quick-codex resume [--dir <project-dir>] [--run <path>]
+  quick-codex capture-hooks [--dir <project-dir>] [--run <path>] [--input <path>]
+  quick-codex sync-experience [--dir <project-dir>] [--run <path>] --tool <name> [--tool-input <json>] [--tool-input-file <path>] [--engine-url <url>] [--timeout-ms <ms>]
   quick-codex checkpoint-digest [--dir <project-dir>] [--run <path>]
   quick-codex snapshot [--dir <project-dir>] [--run <path>]
   quick-codex repair-run [--dir <project-dir>] [--run <path>]
@@ -39,12 +41,14 @@ Commands:
   install    Install qc-flow and qc-lock into ~/.codex/skills
   doctor     Check package shape, skill files, local install, and lint status
   init       Scaffold AGENTS.md guidance, .quick-codex-flow/, and a sample run artifact
-  status     Show the current active run, gate, risks, and next command
-  resume     Print the exact next prompt(s) to resume the active run safely
+  status     Show the current active run, gate, risks, experience constraints, and next command
+  resume     Print the exact next prompt(s) plus active experience constraints to resume safely
+  capture-hooks Capture Experience Engine hook text into the active run's Experience Snapshot
+  sync-experience Query Experience Engine /api/intercept for a tool action and sync returned warnings into the active run
   checkpoint-digest  Print the compact-safe handoff for the active run
   snapshot   Alias for checkpoint-digest
-  repair-run Refresh resumability sections and realign STATE.md for the active run
-  doctor-run Validate a run artifact and its STATE.md handoff
+  repair-run Refresh resumability sections, Experience Snapshot, and realign STATE.md for the active run
+  doctor-run Validate a run artifact, Experience Snapshot, and STATE.md handoff
   upgrade    Reinstall the skills into the target directory
   uninstall  Remove installed skills and optionally remove project scaffolds when --dir is provided
 `);
@@ -58,7 +62,13 @@ function parseArgs(argv) {
     target: DEFAULT_TARGET,
     dir: process.cwd(),
     dirExplicit: false,
-    run: null
+    run: null,
+    input: null,
+    tool: null,
+    toolInput: null,
+    toolInputFile: null,
+    engineUrl: null,
+    timeoutMs: 3000
   };
 
   if (argv.length === 0 || ["-h", "--help", "help"].includes(argv[0])) {
@@ -99,6 +109,57 @@ function parseArgs(argv) {
         throw new Error("--run requires a path");
       }
       result.run = argv[i];
+      continue;
+    }
+    if (arg === "--input") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--input requires a path");
+      }
+      result.input = path.resolve(argv[i]);
+      continue;
+    }
+    if (arg === "--tool") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--tool requires a tool name");
+      }
+      result.tool = argv[i];
+      continue;
+    }
+    if (arg === "--tool-input") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--tool-input requires a JSON string");
+      }
+      result.toolInput = argv[i];
+      continue;
+    }
+    if (arg === "--tool-input-file") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--tool-input-file requires a path");
+      }
+      result.toolInputFile = path.resolve(argv[i]);
+      continue;
+    }
+    if (arg === "--engine-url") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--engine-url requires a URL");
+      }
+      result.engineUrl = argv[i];
+      continue;
+    }
+    if (arg === "--timeout-ms") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--timeout-ms requires a number");
+      }
+      result.timeoutMs = Number(argv[i]);
+      if (!Number.isFinite(result.timeoutMs) || result.timeoutMs <= 0) {
+        throw new Error("--timeout-ms must be a positive number");
+      }
       continue;
     }
     throw new Error(`Unknown option: ${arg}`);
@@ -312,6 +373,8 @@ function initCommand({ dir, force }) {
   console.log("Helpful commands:");
   console.log(`- node bin/quick-codex.js status --dir ${dir}`);
   console.log(`- node bin/quick-codex.js resume --dir ${dir}`);
+  console.log(`- node bin/quick-codex.js capture-hooks --dir ${dir} --input /path/to/hooks.txt`);
+  console.log(`- node bin/quick-codex.js sync-experience --dir ${dir} --tool Write --tool-input '{\"file_path\":\"src/app.ts\"}'`);
   console.log(`- node bin/quick-codex.js checkpoint-digest --dir ${dir}`);
   console.log(`- node bin/quick-codex.js repair-run --dir ${dir}`);
   console.log(`- node bin/quick-codex.js doctor-run --dir ${dir}`);
@@ -430,6 +493,394 @@ function findSectionBullets(text, heading) {
   return values;
 }
 
+function findSectionLabelBullets(text, heading, label) {
+  const lines = text.split(/\r?\n/);
+  const headingLine = `## ${heading}`;
+  let activeSection = false;
+  let activeLabel = false;
+  const values = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    if (trimmed === headingLine) {
+      activeSection = true;
+      activeLabel = false;
+      continue;
+    }
+
+    if (activeSection && trimmed.startsWith("## ")) {
+      break;
+    }
+
+    if (!activeSection) {
+      continue;
+    }
+
+    if (trimmed.startsWith(`${label}:`)) {
+      activeLabel = true;
+      const sameLine = trimmed.slice(`${label}:`.length).trim();
+      if (sameLine.length > 0) {
+        values.push(stripBullet(sameLine));
+      }
+      continue;
+    }
+
+    if (activeLabel && /^[A-Za-z].*:$/.test(trimmed)) {
+      break;
+    }
+
+    if (activeLabel && trimmed.startsWith("- ")) {
+      values.push(stripBullet(trimmed));
+    }
+  }
+
+  return values;
+}
+
+function findSectionBulletValue(text, heading, label) {
+  const bullets = findSectionBullets(text, heading);
+  for (const bullet of bullets) {
+    if (bullet.startsWith(`${label}:`)) {
+      return bullet.slice(`${label}:`.length).trim();
+    }
+  }
+  return null;
+}
+
+function meaningfulList(values) {
+  const normalized = values
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  return normalized.filter((value) => !/^(none|n\/a|no .+|not recorded)$/i.test(value));
+}
+
+function summarizeList(values, fallback = "none recorded") {
+  const meaningful = meaningfulList(values);
+  return meaningful.length > 0 ? meaningful.join("; ") : fallback;
+}
+
+function ignoredWarningsMissingFeedback(values) {
+  return meaningfulList(values).filter((value) => !/\[id:[^\]]+\]/.test(value) || !/feedback:\s*(sent|recorded|posted|false)/i.test(value));
+}
+
+function uniqueValues(values) {
+  return [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
+}
+
+function experienceSnapshotLines(snapshot) {
+  return [
+    "Active warnings:",
+    ...(snapshot.experienceActiveWarnings.length > 0 ? snapshot.experienceActiveWarnings.map((value) => `- ${value}`) : ["- none"]),
+    "Why:",
+    ...(snapshot.experienceWhy.length > 0 ? snapshot.experienceWhy.map((value) => `- ${value}`) : ["- no relevant Experience Engine warnings have been recorded in this run"]),
+    "Decision impact:",
+    ...(snapshot.experienceDecisionImpact.length > 0 ? snapshot.experienceDecisionImpact.map((value) => `- ${value}`) : ["- none"]),
+    "Experience constraints:",
+    ...(snapshot.experienceConstraints.length > 0 ? snapshot.experienceConstraints.map((value) => `- ${value}`) : ["- none"]),
+    "Active hook-derived invariants:",
+    ...(snapshot.experienceHookInvariants.length > 0 ? snapshot.experienceHookInvariants.map((value) => `- ${value}`) : ["- none"]),
+    "Still relevant:",
+    ...(snapshot.experienceStillRelevant.length > 0 ? snapshot.experienceStillRelevant.map((value) => `- ${value}`) : ["- no hook-derived carry-forward is active"]),
+    "Ignored warnings:",
+    ...(snapshot.ignoredWarnings.length > 0 ? snapshot.ignoredWarnings.map((value) => `- ${value}`) : ["- none"])
+  ];
+}
+
+function readCaptureText(inputPath) {
+  if (inputPath) {
+    return fs.readFileSync(inputPath, "utf8");
+  }
+  if (!process.stdin.isTTY) {
+    return fs.readFileSync(0, "utf8");
+  }
+  throw new Error("capture-hooks requires --input <path> or hook text via stdin");
+}
+
+function experienceConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ".experience", "config.json"), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function defaultEngineUrl(expCfg) {
+  if (process.env.QUICK_CODEX_EXPERIENCE_URL) {
+    return process.env.QUICK_CODEX_EXPERIENCE_URL;
+  }
+  if (expCfg.serverBaseUrl) {
+    return expCfg.serverBaseUrl;
+  }
+  const port = expCfg.server?.port ?? process.env.EXP_SERVER_PORT ?? 8082;
+  return `http://localhost:${port}`;
+}
+
+function defaultEngineAuthToken(expCfg) {
+  return process.env.QUICK_CODEX_EXPERIENCE_TOKEN ?? expCfg.serverAuthToken ?? expCfg.server?.authToken ?? null;
+}
+
+function parseToolInputArgs({ toolInput, toolInputFile }) {
+  if (toolInput && toolInputFile) {
+    throw new Error("Use either --tool-input or --tool-input-file, not both");
+  }
+  if (toolInputFile) {
+    return JSON.parse(fs.readFileSync(toolInputFile, "utf8"));
+  }
+  if (toolInput) {
+    return JSON.parse(toolInput);
+  }
+  return {};
+}
+
+function parseHookWarnings(text) {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  const blocks = [];
+  let current = [];
+
+  const isHookStart = (line) => /(?:⚠️|💡)?\s*\[(?:Experience|Suggestion)/.test(line);
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line.length === 0) {
+      if (current.length > 0) {
+        current.push("");
+      }
+      continue;
+    }
+    if (isHookStart(line) && current.length > 0) {
+      blocks.push(current);
+      current = [line];
+      continue;
+    }
+    current.push(line);
+  }
+
+  if (current.length > 0) {
+    blocks.push(current);
+  }
+
+  const sourceBlocks = blocks.length > 0 ? blocks : [lines.map((line) => line.trim()).filter((line) => line.length > 0)];
+  return sourceBlocks
+    .map((block) => {
+      const headline = block.find((line) => line.length > 0) ?? null;
+      if (!headline) {
+        return null;
+      }
+      const whyLine = block.find((line) => line.startsWith("Why:"));
+      const why = whyLine ? whyLine.slice("Why:".length).trim() : null;
+      const idMatch = block.join(" ").match(/\[id:([^\s\]]+)\s+col:([^\]]+)\]/);
+      const headlineWithoutId = headline.replace(/\s*\[id:[^\]]+\]\s*$/, "").trim();
+      const suffix = idMatch ? ` [id:${idMatch[1]} col:${idMatch[2]}]` : "";
+      return {
+        headline: `${headlineWithoutId}${suffix}`.trim(),
+        why,
+        pointId: idMatch?.[1] ?? null,
+        collection: idMatch?.[2] ?? null
+      };
+    })
+    .filter(Boolean);
+}
+
+function mergeExperienceSnapshot(metadata, parsedWarnings, sourceLabel = "quick-codex capture-hooks") {
+  const timestamp = new Date().toISOString();
+  const warningHeadlines = uniqueValues([
+    ...metadata.experienceActiveWarnings,
+    ...parsedWarnings.map((warning) => warning.headline)
+  ]);
+  const whyLines = uniqueValues([
+    ...metadata.experienceWhy,
+    ...parsedWarnings.map((warning) => warning.why).filter(Boolean)
+  ]);
+  const constraints = uniqueValues([
+    ...metadata.experienceConstraints,
+    ...parsedWarnings.map((warning) => warning.why ? `Respect hook rationale: ${warning.why}` : `Review captured warning before the next broad verify: ${warning.headline}`)
+  ]);
+  const invariants = uniqueValues([
+    ...metadata.experienceHookInvariants,
+    ...parsedWarnings.map((warning) => warning.why
+      ? `Do not continue as if this warning did not happen: ${warning.why}`
+      : `Keep this warning active until the run records it as resolved: ${warning.headline}`)
+  ]);
+  const decisionImpact = uniqueValues([
+    ...metadata.experienceDecisionImpact,
+    ...parsedWarnings.map((warning) => `Captured via ${sourceLabel} on ${timestamp}: ${warning.headline}`)
+  ]);
+  const stillRelevant = uniqueValues([
+    ...metadata.experienceStillRelevant,
+    ...parsedWarnings.map((warning) => `yes - captured on ${timestamp}: ${warning.headline}`)
+  ]);
+
+  return {
+    experienceActiveWarnings: warningHeadlines,
+    experienceWhy: whyLines,
+    experienceDecisionImpact: decisionImpact,
+    experienceConstraints: constraints,
+    experienceHookInvariants: invariants,
+    experienceStillRelevant: stillRelevant,
+    ignoredWarnings: metadata.ignoredWarnings
+  };
+}
+
+function applyParsedWarningsToRun({ dir, run, parsedWarnings, sourceLabel }) {
+  const runPath = resolveRunPath(dir, run);
+  const relativeRunPath = relPathFrom(dir, runPath);
+  const metadata = runMetadata(runPath);
+  const mergedSnapshot = mergeExperienceSnapshot(metadata, parsedWarnings, sourceLabel);
+  let nextText = metadata.text;
+
+  nextText = replaceOrInsertSection(nextText, "Experience Snapshot", experienceSnapshotLines(mergedSnapshot), "Approval Strategy");
+  const mergedMetadata = runMetadataFromText(runPath, nextText);
+  nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(mergedMetadata, relativeRunPath), "Requirement Baseline");
+  nextText = replaceOrInsertSection(nextText, "Compact-Safe Summary", compactSafeSummaryLines(mergedMetadata, relativeRunPath), "Resume Digest");
+  fs.writeFileSync(runPath, nextText, "utf8");
+
+  const refreshedMetadata = runMetadata(runPath);
+  const statePath = stateFileFor(dir);
+  ensureDir(path.dirname(statePath));
+  fs.writeFileSync(statePath, renderStateFile(relativeRunPath, refreshedMetadata), "utf8");
+
+  return { relativeRunPath, refreshedMetadata };
+}
+
+function readJsonlHead(pathToFile, maxLines = 12) {
+  try {
+    const content = fs.readFileSync(pathToFile, "utf8");
+    const lines = content.split("\n").filter(Boolean).slice(0, maxLines);
+    return lines.map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function findRecentCodexSession({ projectDir, now = Date.now(), recentMs = 10 * 60 * 1000 } = {}) {
+  const directEnvSession = process.env.CODEX_SESSION_ID || process.env.CLAUDE_SESSION_ID || process.env.GEMINI_SESSION_ID || null;
+  if (directEnvSession) {
+    return directEnvSession;
+  }
+
+  const sessionsRoot = path.join(os.homedir(), ".codex", "sessions");
+  if (!fs.existsSync(sessionsRoot)) {
+    return null;
+  }
+
+  let best = null;
+
+  function considerFile(filePath) {
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return;
+    }
+    if ((now - stat.mtimeMs) > recentMs) {
+      return;
+    }
+
+    const entries = readJsonlHead(filePath);
+    let sessionId = null;
+    let sessionCwd = null;
+    for (const entry of entries) {
+      const payload = entry?.payload ?? {};
+      if (!sessionId && entry?.type === "session_meta" && typeof payload.id === "string") {
+        sessionId = payload.id;
+      }
+      if (!sessionCwd && typeof payload.cwd === "string") {
+        sessionCwd = payload.cwd;
+      }
+    }
+    if (!sessionId) {
+      return;
+    }
+
+    const exactCwd = Boolean(projectDir && sessionCwd && path.resolve(sessionCwd) === path.resolve(projectDir));
+    const score = `${exactCwd ? "1" : "0"}:${String(Math.trunc(stat.mtimeMs)).padStart(16, "0")}`;
+    if (!best || score > best.score) {
+      best = { id: sessionId, score };
+    }
+  }
+
+  function walk(dir) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        considerFile(fullPath);
+      }
+    }
+  }
+
+  walk(sessionsRoot);
+  return best?.id ?? null;
+}
+
+async function fetchExperienceSuggestions({ tool, toolInput, engineUrl, timeoutMs, projectDir }) {
+  if (!tool) {
+    throw new Error("sync-experience requires --tool <name>");
+  }
+  const expCfg = experienceConfig();
+  const baseUrl = engineUrl ?? defaultEngineUrl(expCfg);
+  const authToken = defaultEngineAuthToken(expCfg);
+  const sourceSession = findRecentCodexSession({ projectDir });
+  const headers = { "Content-Type": "application/json" };
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/api/intercept`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        toolName: tool,
+        toolInput,
+        sourceKind: "quick-codex-cli",
+        sourceRuntime: "codex-cli",
+        sourceSession,
+        cwd: projectDir ?? process.cwd()
+      }),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch (error) {
+    throw new Error(`sync-experience could not reach Experience Engine at ${baseUrl}: ${error.message}. Use capture-hooks as fallback.`);
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`sync-experience received a non-JSON response from ${baseUrl}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`sync-experience failed against ${baseUrl}: ${data.error ?? response.statusText}`);
+  }
+
+  return {
+    baseUrl,
+    sourceSession,
+    suggestions: data.suggestions ?? null,
+    hasSuggestions: Boolean(data.hasSuggestions && data.suggestions)
+  };
+}
+
 function relPathFrom(baseDir, targetPath) {
   return path.relative(baseDir, targetPath) || ".";
 }
@@ -459,35 +910,7 @@ function runMetadata(runPath) {
   if (text === null) {
     throw new Error(`Run file not found: ${runPath}`);
   }
-
-  return {
-    path: runPath,
-    text,
-    goal: findResumeDigestField(text, "Goal")
-      ?? findLabelValue(text, "Original goal"),
-    currentGate: findResumeDigestField(text, "Current gate")
-      ?? findLabelValue(text, "Current gate")
-      ?? findHeadingValue(text, "Current gate"),
-    currentPhase: findLabelValueInSection(text, "Current Status", "Current phase")
-      ?? findLabelValue(text, "Current phase"),
-    currentWave: findLabelValueInSection(text, "Current Status", "Current wave")
-      ?? findLabelValue(text, "Current wave"),
-    executionState: findLabelValueInSection(text, "Current Status", "Execution state")
-      ?? findLabelValue(text, "Execution state"),
-    executionMode: findResumeDigestField(text, "Execution mode")
-      ?? findLabelValue(text, "Execution mode"),
-    status: findLabelValue(text, "Status"),
-    blockers: findResumeDigestField(text, "Remaining blockers") ?? findSectionBullets(text, "Blockers")[0] ?? "none",
-    nextVerify: findResumeDigestField(text, "Next verify"),
-    recommendedCommands: findSectionBullets(text, "Recommended Next Command"),
-    stallStatus: findLabelValue(text, "Stall Status") ?? findHeadingValue(text, "Stall Status"),
-    approvalStrategy: findLabelValue(text, "Approval Strategy") ?? findHeadingValue(text, "Approval Strategy"),
-    burnRisk: findLabelValue(text, "Burn Risk") ?? findHeadingValue(text, "Burn Risk"),
-    sessionRisk: findLabelValue(text, "Session Risk") ?? findHeadingValue(text, "Session Risk"),
-    contextRisk: findLabelValue(text, "Context Risk") ?? findHeadingValue(text, "Context Risk"),
-    compactSafeSummary: findSectionBullets(text, "Compact-Safe Summary"),
-    requirementsStillSatisfied: findSectionBullets(text, "Requirements Still Satisfied")
-  };
+  return runMetadataStruct(runPath, text);
 }
 
 function isRunDone(metadata) {
@@ -562,6 +985,8 @@ function statusCommand({ dir, run }) {
   console.log(`Burn risk: ${metadata.burnRisk ?? "low"}`);
   console.log(`Session risk: ${metadata.sessionRisk ?? "unknown"}`);
   console.log(`Context risk: ${metadata.contextRisk ?? "unknown"}`);
+  console.log(`Experience constraints: ${summarizeList(metadata.experienceConstraints)}`);
+  console.log(`Hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`);
   console.log(`Next verify: ${metadata.nextVerify ?? "not recorded"}`);
   if (metadata.recommendedCommands.length > 0) {
     console.log("Recommended next command:");
@@ -738,14 +1163,18 @@ function resumeCommand({ dir, run }) {
   console.log(`Project: ${dir}`);
   console.log(`Active run: ${relativeRunPath}`);
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
+  console.log("Do not forget:");
+  console.log(`- Experience constraints: ${summarizeList(metadata.experienceConstraints)}`);
+  console.log(`- Hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`);
+  console.log(`- Warnings to respect on next step: ${summarizeList(metadata.experienceActiveWarnings)}`);
   console.log("Paste one of these next:");
   for (const command of commands) {
     console.log(`- ${command}`);
   }
 }
 
-function checkpointDigestLines(metadata, relativeRunPath) {
-  if (metadata.compactSafeSummary.length > 0) {
+function checkpointDigestLines(metadata, relativeRunPath, { preferExisting = true } = {}) {
+  if (preferExisting && metadata.compactSafeSummary.length > 0) {
     return metadata.compactSafeSummary;
   }
 
@@ -762,6 +1191,8 @@ function checkpointDigestLines(metadata, relativeRunPath) {
     `Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`,
     `Requirements still satisfied: ${requirements}`,
     `Remaining blockers: ${metadata.blockers ?? "none"}`,
+    `Experience constraints: ${summarizeList(metadata.experienceConstraints)}`,
+    `Active hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`,
     `Next verify: ${metadata.nextVerify ?? "not recorded"}`,
     `Resume with: ${resumeWith}`
   ];
@@ -778,13 +1209,27 @@ function resumeDigestLines(metadata, relativeRunPath) {
     `- Current gate: ${metadata.currentGate ?? "unknown"}`,
     `- Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`,
     `- Remaining blockers: ${metadata.blockers ?? "none"}`,
+    `- Experience constraints: ${summarizeList(metadata.experienceConstraints)}`,
+    `- Active hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`,
     `- Next verify: ${metadata.nextVerify ?? "not recorded"}`,
     `- Recommended next command: ${recommendedNextCommand}`
   ];
 }
 
 function compactSafeSummaryLines(metadata, relativeRunPath) {
-  return checkpointDigestLines(metadata, relativeRunPath).map((line) => `- ${line}`);
+  return checkpointDigestLines(metadata, relativeRunPath, { preferExisting: false }).map((line) => `- ${line}`);
+}
+
+function defaultExperienceSnapshotLines() {
+  return experienceSnapshotLines({
+    experienceActiveWarnings: [],
+    experienceWhy: [],
+    experienceDecisionImpact: [],
+    experienceConstraints: [],
+    experienceHookInvariants: [],
+    experienceStillRelevant: [],
+    ignoredWarnings: []
+  });
 }
 
 function findSectionRange(lines, heading) {
@@ -872,6 +1317,94 @@ function checkpointDigestCommand({ dir, run }) {
   }
 }
 
+function captureHooksCommand({ dir, run, input }) {
+  const captureText = readCaptureText(input);
+  const parsedWarnings = parseHookWarnings(captureText);
+  if (parsedWarnings.length === 0) {
+    throw new Error("capture-hooks did not find any hook warnings in the provided input");
+  }
+  const { relativeRunPath } = applyParsedWarningsToRun({ dir, run, parsedWarnings, sourceLabel: "quick-codex capture-hooks" });
+  console.log(`Captured ${parsedWarnings.length} hook warning(s) into ${relativeRunPath}`);
+  for (const warning of parsedWarnings) {
+    console.log(`- ${warning.headline}`);
+  }
+}
+
+async function syncExperienceCommand({ dir, run, tool, toolInput, toolInputFile, engineUrl, timeoutMs }) {
+  const parsedToolInput = parseToolInputArgs({ toolInput, toolInputFile });
+  const result = await fetchExperienceSuggestions({
+    tool,
+    toolInput: parsedToolInput,
+    engineUrl,
+    timeoutMs,
+    projectDir: dir
+  });
+
+  if (!result.hasSuggestions || !result.suggestions) {
+    console.log(`No Experience Engine suggestions to sync for tool ${tool} from ${result.baseUrl}.`);
+    return;
+  }
+
+  const parsedWarnings = parseHookWarnings(result.suggestions);
+  if (parsedWarnings.length === 0) {
+    throw new Error("sync-experience received suggestions, but could not parse any warning blocks");
+  }
+
+  const { relativeRunPath } = applyParsedWarningsToRun({ dir, run, parsedWarnings, sourceLabel: "quick-codex sync-experience" });
+  console.log(`Synced ${parsedWarnings.length} Experience Engine warning(s) into ${relativeRunPath}`);
+  console.log(`Source: ${result.baseUrl}/api/intercept`);
+  for (const warning of parsedWarnings) {
+    console.log(`- ${warning.headline}`);
+  }
+}
+
+function runMetadataFromText(runPath, text) {
+  return runMetadataStruct(runPath, text);
+}
+
+function runMetadataStruct(runPath, text) {
+  return {
+    path: runPath,
+    text,
+    goal: findResumeDigestField(text, "Goal")
+      ?? findLabelValue(text, "Original goal"),
+    currentGate: findResumeDigestField(text, "Current gate")
+      ?? findLabelValue(text, "Current gate")
+      ?? findHeadingValue(text, "Current gate"),
+    currentPhase: findLabelValueInSection(text, "Current Status", "Current phase")
+      ?? findLabelValue(text, "Current phase"),
+    currentWave: findLabelValueInSection(text, "Current Status", "Current wave")
+      ?? findLabelValue(text, "Current wave"),
+    executionState: findLabelValueInSection(text, "Current Status", "Execution state")
+      ?? findLabelValue(text, "Execution state"),
+    executionMode: findResumeDigestField(text, "Execution mode")
+      ?? findLabelValue(text, "Execution mode"),
+    status: findLabelValue(text, "Status"),
+    blockers: findResumeDigestField(text, "Remaining blockers") ?? findSectionBullets(text, "Blockers")[0] ?? "none",
+    nextVerify: findResumeDigestField(text, "Next verify"),
+    recommendedCommands: findSectionBullets(text, "Recommended Next Command"),
+    stallStatus: findLabelValue(text, "Stall Status") ?? findHeadingValue(text, "Stall Status"),
+    approvalStrategy: findLabelValue(text, "Approval Strategy") ?? findHeadingValue(text, "Approval Strategy"),
+    burnRisk: findLabelValue(text, "Burn Risk") ?? findHeadingValue(text, "Burn Risk"),
+    sessionRisk: findLabelValue(text, "Session Risk") ?? findHeadingValue(text, "Session Risk"),
+    contextRisk: findLabelValue(text, "Context Risk") ?? findHeadingValue(text, "Context Risk"),
+    compactSafeSummary: findSectionBullets(text, "Compact-Safe Summary"),
+    requirementsStillSatisfied: findSectionBullets(text, "Requirements Still Satisfied"),
+    hasExperienceSnapshot: text.includes("## Experience Snapshot"),
+    experienceConstraints: findSectionLabelBullets(text, "Experience Snapshot", "Experience constraints"),
+    experienceHookInvariants: findSectionLabelBullets(text, "Experience Snapshot", "Active hook-derived invariants"),
+    experienceActiveWarnings: findSectionLabelBullets(text, "Experience Snapshot", "Active warnings"),
+    experienceWhy: findSectionLabelBullets(text, "Experience Snapshot", "Why"),
+    experienceDecisionImpact: findSectionLabelBullets(text, "Experience Snapshot", "Decision impact"),
+    experienceStillRelevant: findSectionLabelBullets(text, "Experience Snapshot", "Still relevant"),
+    ignoredWarnings: findSectionLabelBullets(text, "Experience Snapshot", "Ignored warnings"),
+    digestExperienceConstraints: findResumeDigestField(text, "Experience constraints"),
+    digestHookInvariants: findResumeDigestField(text, "Active hook-derived invariants"),
+    summaryExperienceConstraints: findSectionBulletValue(text, "Compact-Safe Summary", "Experience constraints"),
+    summaryHookInvariants: findSectionBulletValue(text, "Compact-Safe Summary", "Active hook-derived invariants")
+  };
+}
+
 function repairRunCommand({ dir, run }) {
   const runPath = resolveRunPath(dir, run);
   const relativeRunPath = relPathFrom(dir, runPath);
@@ -880,6 +1413,9 @@ function repairRunCommand({ dir, run }) {
 
   nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(metadata, relativeRunPath), "Requirement Baseline");
   nextText = replaceOrInsertSection(nextText, "Compact-Safe Summary", compactSafeSummaryLines(metadata, relativeRunPath), "Resume Digest");
+  nextText = replaceOrInsertSection(nextText, "Experience Snapshot", metadata.hasExperienceSnapshot
+    ? experienceSnapshotLines(metadata)
+    : defaultExperienceSnapshotLines(), "Approval Strategy");
   fs.writeFileSync(runPath, nextText, "utf8");
 
   const repairedMetadata = runMetadata(runPath);
@@ -891,6 +1427,7 @@ function repairRunCommand({ dir, run }) {
   console.log("Refreshed:");
   console.log("- Resume Digest");
   console.log("- Compact-Safe Summary");
+  console.log("- Experience Snapshot");
   console.log(`- ${relPathFrom(dir, statePath)}`);
 }
 
@@ -898,14 +1435,33 @@ function doctorRunCommand({ dir, run }) {
   const runPath = resolveRunPath(dir, run);
   const metadata = runMetadata(runPath);
   const text = metadata.text;
+  const requiresExperienceCarryForward = meaningfulList([
+    ...metadata.experienceActiveWarnings,
+    ...metadata.experienceDecisionImpact,
+    ...metadata.experienceConstraints,
+    ...metadata.experienceHookInvariants,
+    ...metadata.experienceStillRelevant
+  ]).length > 0;
+  const missingIgnoredWarningFeedback = ignoredWarningsMissingFeedback(metadata.ignoredWarnings);
   const checks = [
     ["Requirement Baseline", text.includes("## Requirement Baseline")],
     ["Resume Digest", text.includes("## Resume Digest")],
     ["Compact-Safe Summary", text.includes("## Compact-Safe Summary")],
+    ["Experience Snapshot", metadata.hasExperienceSnapshot],
     ["Current gate", metadata.currentGate !== null],
     ["Execution mode", metadata.executionMode !== null],
     ["Burn Risk", metadata.burnRisk !== null],
     ["Approval Strategy", metadata.approvalStrategy !== null],
+    [
+      "Experience carry-forward",
+      !requiresExperienceCarryForward || (
+        meaningfulList([metadata.digestExperienceConstraints ?? ""]).length > 0 &&
+        meaningfulList([metadata.digestHookInvariants ?? ""]).length > 0 &&
+        meaningfulList([metadata.summaryExperienceConstraints ?? ""]).length > 0 &&
+        meaningfulList([metadata.summaryHookInvariants ?? ""]).length > 0
+      )
+    ],
+    ["Ignored warning feedback ids", missingIgnoredWarningFeedback.length === 0],
     ["Recommended Next Command", metadata.recommendedCommands.length > 0],
     ["Verification Ledger", text.includes("## Verification Ledger")]
   ];
@@ -916,6 +1472,12 @@ function doctorRunCommand({ dir, run }) {
     console.log(`${passed ? "PASS" : "FAIL"}: ${name}`);
     if (!passed) {
       failed = true;
+    }
+  }
+  if (missingIgnoredWarningFeedback.length > 0) {
+    console.log("Missing ignored-warning feedback markers:");
+    for (const warning of missingIgnoredWarningFeedback) {
+      console.log(`- ${warning}`);
     }
   }
 
@@ -984,6 +1546,12 @@ async function main() {
         break;
       case "resume":
         resumeCommand(args);
+        break;
+      case "capture-hooks":
+        captureHooksCommand(args);
+        break;
+      case "sync-experience":
+        await syncExperienceCommand(args);
         break;
       case "checkpoint-digest":
       case "snapshot":
