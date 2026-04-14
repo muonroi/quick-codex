@@ -664,6 +664,7 @@ function parseHookWarnings(text) {
   }
 
   const sourceBlocks = blocks.length > 0 ? blocks : [lines.map((line) => line.trim()).filter((line) => line.length > 0)];
+  const seen = new Set();
   return sourceBlocks
     .map((block) => {
       const headline = block.find((line) => line.length > 0) ?? null;
@@ -682,7 +683,17 @@ function parseHookWarnings(text) {
         collection: idMatch?.[2] ?? null
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((warning) => {
+      const key = warning.pointId && warning.collection
+        ? `${warning.collection}:${warning.pointId}`
+        : `${warning.headline}::${warning.why || ""}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
 }
 
 function mergeExperienceSnapshot(metadata, parsedWarnings, sourceLabel = "quick-codex capture-hooks") {
