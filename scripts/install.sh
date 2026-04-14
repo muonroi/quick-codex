@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TARGET_DIR="${HOME}/.codex/skills"
+TARGET_DIR="${HOME}/.agents/skills"
 MODE="symlink"
 LEGACY_SKILLS=(
   "codex-gsd-flow"
@@ -61,5 +61,6 @@ install_one "qc-flow"
 install_one "qc-lock"
 
 printf 'Installed to %s using %s mode\n' "$TARGET_DIR" "$MODE"
+printf 'Legacy compatibility target remains available via --target %s\n' "${HOME}/.codex/skills"
 printf 'Removed legacy skill names if present: %s\n' "${LEGACY_SKILLS[*]}"
 printf 'Restart Codex to reload the skills.\n'

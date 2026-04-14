@@ -1,6 +1,6 @@
 {
   "name": "quick-codex",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A lightweight workflow layer for Codex CLI with persistent run artifacts, resume-safe skills, and local recovery commands.",
   "author": "Muonroi",
   "keywords": [
@@ -46,6 +46,7 @@
   ],
   "scripts": {
     "lint:package": "bash scripts/lint-skills.sh",
+    "test": "node --test tests/*.test.js",
     "doctor": "node bin/quick-codex.js doctor",
     "prepublishOnly": "bash scripts/lint-skills.sh"
   },

@@ -101,11 +101,19 @@ This installs:
 - `qc-flow`
 - `qc-lock`
 
-into:
+into the canonical Codex user skills directory:
+
+```text
+~/.agents/skills
+```
+
+Legacy compatibility:
 
 ```text
 ~/.codex/skills
 ```
+
+is still supported when you pass `--target ~/.codex/skills`, but it is no longer the default.
 
 Then restart Codex.
 
@@ -127,17 +135,17 @@ node bin/quick-codex.js install
 ### Option D: Development symlinks
 
 ```bash
-mkdir -p ~/.codex/skills
-ln -s /path/to/repo/qc-flow ~/.codex/skills/qc-flow
-ln -s /path/to/repo/qc-lock ~/.codex/skills/qc-lock
+mkdir -p ~/.agents/skills
+ln -s /path/to/repo/qc-flow ~/.agents/skills/qc-flow
+ln -s /path/to/repo/qc-lock ~/.agents/skills/qc-lock
 ```
 
 If you prefer copies instead of symlinks:
 
 ```bash
-mkdir -p ~/.codex/skills
-cp -R /path/to/repo/qc-flow ~/.codex/skills/
-cp -R /path/to/repo/qc-lock ~/.codex/skills/
+mkdir -p ~/.agents/skills
+cp -R /path/to/repo/qc-flow ~/.agents/skills/
+cp -R /path/to/repo/qc-lock ~/.agents/skills/
 ```
 
 ### First commands after install
@@ -293,13 +301,17 @@ quick-codex checkpoint-digest [--dir <project-dir>] [--run <path>]
 quick-codex snapshot [--dir <project-dir>] [--run <path>]
 quick-codex repair-run [--dir <project-dir>] [--run <path>]
 quick-codex doctor-run [--dir <project-dir>] [--run <path>]
+quick-codex lock-check [--dir <project-dir>] [--run <path>]
+quick-codex verify-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>]
+quick-codex regression-check [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>]
+quick-codex close-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--phase-done]
 quick-codex upgrade [--copy] [--target <dir>]
 quick-codex uninstall [--target <dir>] [--dir <project-dir>]
 ```
 
 Recommended usage:
-- `install` installs `qc-flow` and `qc-lock` into `~/.codex/skills`
-- `doctor` validates package shape, installed skills, and lint status
+- `install` installs `qc-flow` and `qc-lock` into `~/.agents/skills` by default
+- `doctor` validates package shape, installed skills, and lint status across supported discovery targets unless `--target` is passed
 - `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, `STATE.md`, and a sample run artifact with an optional `Active lock` pointer
 - `status` shows the active continuity artifact, gate, risks, and next verify for either a flow run or a lock artifact
 - `resume` prints the exact next prompt(s) to paste when resuming, plus the active experience constraints that still matter for flow or lock execution
@@ -309,6 +321,10 @@ Recommended usage:
 - `snapshot` is a shorter alias for `checkpoint-digest`
 - `repair-run` backfills flow-run resumability sections, preserves compact lock artifacts, and realigns `STATE.md` for flow or lock handoff
 - `doctor-run` validates a flow run or lock artifact against the continuity contract and checks the `STATE.md` handoff
+- `lock-check` validates that a flow or lock artifact is explicit enough for locked execution before handing work to a narrow executor
+- `verify-wave` runs the active wave verify commands from the artifact and appends bounded evidence into `Verification Ledger`
+- `regression-check` reruns the active protected-boundary verification commands, preferring the current wave, then `Latest Phase Close -> Verification completed`, and only falling back to `Next verify` when no broader command source exists
+- `close-wave` marks the active verified wave done, refreshes the summaries, auto-routes to the next same-phase wave when `Verified Plan -> Waves` already defines it, and can write `Latest Phase Close` when `--phase-done` is passed
 - `upgrade` reruns install behavior and removes legacy skill names if present
 - `uninstall` removes installed skills from the target path and can also remove project scaffolds when `--dir` is provided explicitly
 - the CLI prints a short update notice when npm has a newer published version
@@ -322,6 +338,10 @@ Minimum smoke-check path for continuity adoption:
 - `bash scripts/lint-skills.sh`
 - `node bin/quick-codex.js status --dir /path/to/project --run .quick-codex-flow/<run>.md`
 - `node bin/quick-codex.js doctor-run --dir /path/to/project --run .quick-codex-flow/<run>.md`
+- `node bin/quick-codex.js lock-check --dir /path/to/project --run .quick-codex-flow/<run>.md`
+- `node bin/quick-codex.js verify-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn`
+- `node bin/quick-codex.js regression-check --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn`
+- `node bin/quick-codex.js close-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn`
 - `node bin/quick-codex.js status --dir /path/to/project --run .quick-codex-lock/<task>.md`
 - `node bin/quick-codex.js doctor-run --dir /path/to/project --run .quick-codex-lock/<task>.md`
 - if `STATE.md` uses `Active lock`, confirm plain `status` and `resume` without `--run` resolve to the lock artifact
@@ -338,6 +358,10 @@ node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --to
 node bin/quick-codex.js checkpoint-digest --dir /path/to/project
 node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
+node bin/quick-codex.js lock-check --dir /path/to/project --run .quick-codex-flow/<run>.md
+node bin/quick-codex.js verify-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
+node bin/quick-codex.js regression-check --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
+node bin/quick-codex.js close-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
 ```
 
 ## Invocation Model
@@ -438,13 +462,27 @@ If you want to customize or improve the package:
 - `doctor-run` says the run is stale or incomplete:
   - run `node bin/quick-codex.js repair-run --dir /path/to/project`
   - rerun `node bin/quick-codex.js doctor-run --dir /path/to/project`
+- `lock-check` says the artifact is not lock-ready:
+  - make the affected area, exclusions, evidence basis, and verify path explicit in the active artifact
+  - remove or resolve any active gray-area trigger before handing work to a locked executor
+- `verify-wave` or `regression-check` cannot find verify commands:
+  - add `Verify:` bullets to `Current Execution Wave`
+  - or record broader protected-boundary commands in `Latest Phase Close -> Verification completed`
+  - or set `Next verify` explicitly if you want the last-resort fallback behavior
+- `close-wave` refuses to close the wave:
+  - run `verify-wave` or otherwise record at least one passing `Verification Ledger` entry for the same phase/wave first
+  - clear any failing ledger entry for that same phase/wave before retrying
+- `close-wave` does not route to the next wave automatically:
+  - make sure the run already has a `## Waves` table under `Verified Plan`
+  - only same-phase `pending` waves are auto-routed; otherwise the command keeps the generic `qc-flow` handoff
 - `npx --yes ./quick-codex install` fails:
   - run `node bin/quick-codex.js install` from inside `quick-codex/`
 - `npx` fails because npm cache is not writable:
   - run `npm_config_cache=/tmp/quick-codex-npm-cache npx quick-codex install`
   - or `npm_config_cache=/tmp/quick-codex-npm-cache npx --yes ./quick-codex install`
 - Codex does not see the skills:
-  - check `~/.codex/skills`
+  - check `~/.agents/skills`
+  - if you intentionally use the legacy path, rerun with `--target ~/.codex/skills`
   - restart Codex after install or upgrade
 - `doctor` reports missing local install:
   - run `install` first, then rerun `doctor`
@@ -456,6 +494,6 @@ If you want to customize or improve the package:
 - You want to validate the package:
   - run `node bin/quick-codex.js doctor`
   - or `bash scripts/lint-skills.sh`
-- You want to fully remove the package from a project as well as `~/.codex/skills`:
+- You want to fully remove the package from a project as well as the default `~/.agents/skills` install:
   - run `node bin/quick-codex.js uninstall --dir /path/to/project`
   - `AGENTS.md` is only removed if it exactly matches the quick-codex scaffold

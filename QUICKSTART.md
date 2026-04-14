@@ -23,17 +23,23 @@ node bin/quick-codex.js install
 Use symlinks during development:
 
 ```bash
-mkdir -p ~/.codex/skills
-ln -s /path/to/repo/qc-flow ~/.codex/skills/qc-flow
-ln -s /path/to/repo/qc-lock ~/.codex/skills/qc-lock
+mkdir -p ~/.agents/skills
+ln -s /path/to/repo/qc-flow ~/.agents/skills/qc-flow
+ln -s /path/to/repo/qc-lock ~/.agents/skills/qc-lock
 ```
 
 Or copy them:
 
 ```bash
-mkdir -p ~/.codex/skills
-cp -R /path/to/repo/qc-flow ~/.codex/skills/
-cp -R /path/to/repo/qc-lock ~/.codex/skills/
+mkdir -p ~/.agents/skills
+cp -R /path/to/repo/qc-flow ~/.agents/skills/
+cp -R /path/to/repo/qc-lock ~/.agents/skills/
+```
+
+Legacy compatibility path:
+
+```bash
+node bin/quick-codex.js install --target ~/.codex/skills
 ```
 
 Restart Codex after installation.
@@ -72,6 +78,10 @@ node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --to
 node bin/quick-codex.js checkpoint-digest --dir /path/to/project
 node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
+node bin/quick-codex.js lock-check --dir /path/to/project --run .quick-codex-flow/<run>.md
+node bin/quick-codex.js verify-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
+node bin/quick-codex.js regression-check --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
+node bin/quick-codex.js close-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
 ```
 
 ## 2. Start from the pain point, not the theory
@@ -122,6 +132,10 @@ Expected behavior:
 - `checkpoint-digest` prints the compact-safe handoff before a pause or a broad verify
 - `repair-run` rewrites stale flow-run resumability sections, preserves compact lock artifacts, and realigns `STATE.md`
 - `doctor-run` tells you if the flow run or lock artifact is stale, incomplete, or missing required continuity fields
+- `lock-check` tells you whether a run is explicit enough to hand off to locked execution without guessing
+- `verify-wave` runs the active wave's `Verify:` bullets and appends one-line evidence to `Verification Ledger`
+- `regression-check` reruns the active regression/protected-boundary checks, preferring the current wave, then `Latest Phase Close -> Verification completed`, and only then `Next verify`
+- `close-wave` marks the active verified wave done, can auto-route to the next same-phase wave defined in `Verified Plan -> Waves`, and can write `Latest Phase Close` when the phase is complete
 - `CONTINUITY-CONTRACT.md` defines which surface owns run, lock, pointer, and guidance continuity state
 
 `STATE.md` stays pointer-only:
@@ -151,6 +165,8 @@ If you are updating an older lock artifact:
 - add the compact bridge fields instead of copying flow sections
 - keep `STATE.md` pointer-only; use optional `Active lock` when locked execution is the active handoff
 - smoke check with `status`, `resume`, and `doctor-run` on both the flow run and the lock artifact
+- use `close-wave --phase-done` when the active wave also completes the phase and you want a mechanical `Latest Phase Close`
+- if you want `close-wave` to surface the next wave automatically, keep the `## Waves` table current in the `qc-flow` run
 
 ## 5. What to expect
 
@@ -176,8 +192,10 @@ If you are editing the skill package itself:
 2. Restart Codex if needed
 3. Re-run a real task through the skill with a persistent run artifact
 4. Verify affected area, evidence basis, and handoff behavior with concrete artifacts, not only by reading the docs
-5. Exercise `status`, `resume`, or `doctor-run` when the task uses `qc-flow`
-6. If Experience Engine warnings affect scope or verify, persist them into `Experience Snapshot` before pausing or running broad verification
+5. Exercise `status`, `resume`, `lock-check`, `verify-wave`, `close-wave`, or `doctor-run` when the task uses `qc-flow`
+6. Use `regression-check` before phase close when protected-boundary verification should not rely on chat narration
+7. Use `close-wave --phase-done` to write `Latest Phase Close` instead of summarizing that step only in chat
+8. If Experience Engine warnings affect scope or verify, persist them into `Experience Snapshot` before pausing or running broad verification
 
 Optional commands:
 
@@ -188,5 +206,5 @@ node bin/quick-codex.js uninstall --dir /path/to/project
 ```
 
 `uninstall` behavior:
-- without `--dir`, it removes installed skills from `~/.codex/skills`
+- without `--dir`, it removes installed skills from the current target (default: `~/.agents/skills`)
 - with `--dir`, it also removes `.quick-codex-flow/` and any quick-codex-only AGENTS scaffold in that project

@@ -2,7 +2,7 @@
 
 ## Codex Skills
 
-This project uses local Codex skills installed under `~/.codex/skills`.
+This project uses local Codex skills installed under `~/.agents/skills` by default. Legacy installs under `~/.codex/skills` are still supported when explicitly targeted.
 
 Recommended entry points:
 - Use `$qc-flow` for non-trivial work that needs clarify, affected-area discussion, evidence-based planning, and durable artifacts.

@@ -14,7 +14,9 @@ const PACKAGE_NAME = PACKAGE_JSON.name;
 const PACKAGE_VERSION = PACKAGE_JSON.version;
 const SKILLS = ["qc-flow", "qc-lock"];
 const LEGACY_SKILLS = ["codex-gsd-flow", "codex-locked-loop"];
-const DEFAULT_TARGET = path.join(os.homedir(), ".codex", "skills");
+const DEFAULT_TARGET = path.join(os.homedir(), ".agents", "skills");
+const LEGACY_TARGET = path.join(os.homedir(), ".codex", "skills");
+const SUPPORTED_DISCOVERY_TARGETS = [DEFAULT_TARGET, LEGACY_TARGET];
 const FLOW_DIRNAME = ".quick-codex-flow";
 const UPDATE_CACHE_PATH = path.join(os.homedir(), ".quick-codex", "update-check.json");
 const UPDATE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
@@ -27,6 +29,10 @@ function usage() {
   quick-codex init [--dir <project-dir>] [--force]
   quick-codex status [--dir <project-dir>] [--run <path>]
   quick-codex resume [--dir <project-dir>] [--run <path>]
+  quick-codex lock-check [--dir <project-dir>] [--run <path>]
+  quick-codex verify-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>]
+  quick-codex regression-check [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>]
+  quick-codex close-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--phase-done]
   quick-codex capture-hooks [--dir <project-dir>] [--run <path>] [--input <path>]
   quick-codex sync-experience [--dir <project-dir>] [--run <path>] --tool <name> [--tool-input <json>] [--tool-input-file <path>] [--engine-url <url>] [--timeout-ms <ms>]
   quick-codex checkpoint-digest [--dir <project-dir>] [--run <path>]
@@ -38,11 +44,15 @@ function usage() {
   quick-codex --help
 
 Commands:
-  install    Install qc-flow and qc-lock into ~/.codex/skills
+  install    Install qc-flow and qc-lock into ~/.agents/skills
   doctor     Check package shape, skill files, local install, and lint status
   init       Scaffold AGENTS.md guidance, .quick-codex-flow/, and a sample run artifact
   status     Show the current active run, gate, risks, experience constraints, and next command
   resume     Print the exact next prompt(s) plus active experience constraints to resume safely
+  lock-check Validate that a flow or lock artifact is explicit enough for locked execution
+  verify-wave Run the active wave verification commands and append bounded evidence to the run artifact
+  regression-check Run protected-boundary verification commands and append bounded evidence to the run artifact
+  close-wave Mark the active wave done after verification evidence exists and optionally record phase close
   capture-hooks Capture Experience Engine hook text into the active run's Experience Snapshot
   sync-experience Query Experience Engine /api/intercept for a tool action and sync returned warnings into the active run
   checkpoint-digest  Print the compact-safe handoff for the active run
@@ -60,9 +70,13 @@ function parseArgs(argv) {
     copy: false,
     force: false,
     target: DEFAULT_TARGET,
+    targetExplicit: false,
     dir: process.cwd(),
     dirExplicit: false,
     run: null,
+    phase: null,
+    wave: null,
+    phaseDone: false,
     input: null,
     tool: null,
     toolInput: null,
@@ -92,6 +106,7 @@ function parseArgs(argv) {
         throw new Error("--target requires a directory");
       }
       result.target = path.resolve(argv[i]);
+      result.targetExplicit = true;
       continue;
     }
     if (arg === "--dir") {
@@ -117,6 +132,26 @@ function parseArgs(argv) {
         throw new Error("--input requires a path");
       }
       result.input = path.resolve(argv[i]);
+      continue;
+    }
+    if (arg === "--phase") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--phase requires a phase id");
+      }
+      result.phase = argv[i];
+      continue;
+    }
+    if (arg === "--wave") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--wave requires a wave id");
+      }
+      result.wave = argv[i];
+      continue;
+    }
+    if (arg === "--phase-done") {
+      result.phaseDone = true;
       continue;
     }
     if (arg === "--tool") {
@@ -285,9 +320,21 @@ function checkSkillDir(baseDir, skillName) {
   };
 }
 
-function doctorCommand({ target }) {
+function uniquePaths(paths) {
+  return [...new Set(paths.map((entry) => path.resolve(entry)))];
+}
+
+function installDirsForDoctor(target, targetExplicit) {
+  if (targetExplicit) {
+    return [path.resolve(target)];
+  }
+  return uniquePaths([target, ...SUPPORTED_DISCOVERY_TARGETS]);
+}
+
+function doctorCommand({ target, targetExplicit }) {
   console.log(`Package root: ${ROOT_DIR}`);
   console.log(`Install target: ${target}`);
+  console.log(`Supported discovery targets: ${SUPPORTED_DISCOVERY_TARGETS.join(", ")}`);
 
   let hasFailure = false;
 
@@ -299,10 +346,17 @@ function doctorCommand({ target }) {
     }
   }
 
+  const installDirs = installDirsForDoctor(target, targetExplicit);
   for (const skillName of SKILLS) {
-    const installCheck = checkSkillDir(target, skillName);
-    console.log(`install:${skillName} exists=${installCheck.exists} skill_md=${installCheck.skillMd} openai_yaml=${installCheck.openaiYaml}`);
-    if (!installCheck.exists || !installCheck.skillMd || !installCheck.openaiYaml) {
+    let foundInDiscoveryPath = false;
+    for (const baseDir of installDirs) {
+      const installCheck = checkSkillDir(baseDir, skillName);
+      console.log(`install:${skillName} dir=${baseDir} exists=${installCheck.exists} skill_md=${installCheck.skillMd} openai_yaml=${installCheck.openaiYaml}`);
+      if (installCheck.exists && installCheck.skillMd && installCheck.openaiYaml) {
+        foundInDiscoveryPath = true;
+      }
+    }
+    if (!foundInDiscoveryPath) {
       hasFailure = true;
     }
   }
@@ -547,6 +601,78 @@ function findSectionBulletValue(text, heading, label) {
     }
   }
   return null;
+}
+
+function splitMarkdownTableLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) {
+    return null;
+  }
+  return trimmed.slice(1, -1).split("|").map((cell) => cell.trim());
+}
+
+function parseMarkdownTableInSection(text, heading) {
+  const lines = text.split(/\r?\n/);
+  const range = findSectionRange(lines, heading);
+  if (!range) {
+    return null;
+  }
+
+  const sectionLines = lines.slice(range.start + 1, range.end);
+  const tableStart = sectionLines.findIndex((line) => line.trim().startsWith("|"));
+  if (tableStart === -1 || tableStart + 1 >= sectionLines.length) {
+    return null;
+  }
+
+  const headers = splitMarkdownTableLine(sectionLines[tableStart]);
+  const separator = splitMarkdownTableLine(sectionLines[tableStart + 1]);
+  if (!headers || !separator || headers.length !== separator.length) {
+    return null;
+  }
+
+  const rows = [];
+  let offset = tableStart + 2;
+  while (offset < sectionLines.length && sectionLines[offset].trim().startsWith("|")) {
+    const values = splitMarkdownTableLine(sectionLines[offset]);
+    if (values && values.length === headers.length) {
+      rows.push(Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""])));
+    }
+    offset += 1;
+  }
+
+  return {
+    headers,
+    beforeLines: sectionLines.slice(0, tableStart),
+    afterLines: sectionLines.slice(offset),
+    rows
+  };
+}
+
+function renderMarkdownTable(headers, rows) {
+  const headerLine = `| ${headers.join(" | ")} |`;
+  const separatorLine = `| ${headers.map(() => "---").join(" | ")} |`;
+  const rowLines = rows.map((row) => `| ${headers.map((header) => row[header] ?? "").join(" | ")} |`);
+  return [headerLine, separatorLine, ...rowLines];
+}
+
+function replaceMarkdownTableInSection(text, heading, table) {
+  return replaceOrInsertSection(
+    text,
+    heading,
+    [...table.beforeLines, ...renderMarkdownTable(table.headers, table.rows), ...table.afterLines],
+    null
+  );
+}
+
+function normalizeCommandText(value) {
+  if (!value) {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (trimmed.startsWith("`") && trimmed.endsWith("`") && trimmed.length >= 2) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
 }
 
 function detectArtifactType(runPath, text) {
@@ -1042,6 +1168,482 @@ function statusCommand({ dir, run }) {
   }
 }
 
+function firstMeaningfulLine(text) {
+  return String(text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? null;
+}
+
+function boundedEvidence(commandResult) {
+  const stderrLine = firstMeaningfulLine(commandResult.stderr);
+  if (stderrLine) {
+    return stderrLine;
+  }
+  const stdoutLine = firstMeaningfulLine(commandResult.stdout);
+  if (stdoutLine) {
+    return stdoutLine;
+  }
+  return `exit code ${commandResult.status}`;
+}
+
+function runVerifyCommand(command, cwd) {
+  return spawnSync("bash", ["-lc", command], {
+    cwd,
+    encoding: "utf8"
+  });
+}
+
+function isPlaceholderLedgerEntry(value) {
+  return /^(none(?:\s+yet)?|n\/a|not recorded)$/i.test(value.trim());
+}
+
+function appendVerificationLedger(text, entries) {
+  const existing = findSectionBullets(text, "Verification Ledger");
+  return replaceOrInsertSection(
+    text,
+    "Verification Ledger",
+    [
+      ...existing.filter((value) => !isPlaceholderLedgerEntry(value)).map((value) => `- ${value}`),
+      ...entries.map((value) => `- ${value}`)
+    ],
+    "Recommended Next Command"
+  );
+}
+
+function currentPhaseWaveMatches(metadata, phase, wave) {
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  const phaseMatches = !phase || phaseWave.phase === phase;
+  const waveMatches = !wave || phaseWave.wave === wave;
+  return phaseMatches && waveMatches;
+}
+
+function validateRequestedPhaseWave(metadata, phase, wave) {
+  if (currentPhaseWaveMatches(metadata, phase, wave)) {
+    return;
+  }
+  const current = phaseWaveFromMetadata(metadata);
+  throw new Error(`Requested phase/wave ${phase ?? current.phase} / ${wave ?? current.wave} does not match the active artifact state ${current.phase} / ${current.wave}`);
+}
+
+function findMeaningfulCommands(values) {
+  return uniqueValues(values.map(normalizeCommandText)).filter((value) => meaningfulList([value]).length > 0);
+}
+
+function lockCheckResultLines(metadata) {
+  const grayAreaTriggers = meaningfulList(metadata.grayAreaTriggers);
+  const affectedArea = meaningfulList(metadata.affectedArea);
+  const protectedBoundaries = meaningfulList(metadata.protectedBoundaries);
+  const evidenceBasis = meaningfulList(metadata.evidenceBasis);
+  const verifyCommands = findMeaningfulCommands([
+    ...metadata.currentExecutionWaveVerify,
+    ...metadata.lockCurrentVerify,
+    metadata.nextVerify ?? ""
+  ]);
+  const checks = [
+    ["Affected area explicit", affectedArea.length > 0],
+    ["Protected boundaries or explicit exclusions", protectedBoundaries.length > 0],
+    ["Evidence basis explicit", evidenceBasis.length > 0],
+    ["Verify path explicit", verifyCommands.length > 0],
+    ["No active gray-area trigger", grayAreaTriggers.length === 0]
+  ];
+  return { checks, verifyCommands, grayAreaTriggers };
+}
+
+function lockCheckCommand({ dir, run }) {
+  const runPath = resolveRunPath(dir, run);
+  const metadata = runMetadata(runPath);
+  const relativeRunPath = relPathFrom(dir, runPath);
+  const { checks, verifyCommands, grayAreaTriggers } = lockCheckResultLines(metadata);
+  let failed = false;
+
+  console.log(`Run: ${relativeRunPath}`);
+  console.log(`Artifact type: ${metadata.artifactType}`);
+  for (const [label, passed] of checks) {
+    console.log(`${passed ? "PASS" : "FAIL"}: ${label}`);
+    if (!passed) {
+      failed = true;
+    }
+  }
+  if (verifyCommands.length > 0) {
+    console.log("Verify commands:");
+    for (const command of verifyCommands) {
+      console.log(`- ${command}`);
+    }
+  }
+  if (grayAreaTriggers.length > 0) {
+    console.log("Active gray-area triggers:");
+    for (const trigger of grayAreaTriggers) {
+      console.log(`- ${trigger}`);
+    }
+  }
+  if (failed) {
+    throw new Error("lock-check found one or more lock-readiness gaps");
+  }
+  console.log("Lock-check passed.");
+}
+
+function commandSetForVerification(metadata, mode) {
+  const activeCommands = findMeaningfulCommands([
+    ...metadata.currentExecutionWaveVerify,
+    ...metadata.lockCurrentVerify
+  ]);
+  if (activeCommands.length > 0) {
+    return activeCommands;
+  }
+  if (mode === "regression-check") {
+    const broaderRegressionCommands = findMeaningfulCommands(
+      metadata.latestPhaseCloseVerificationCompleted
+        .map(commandFromRecordedVerification)
+        .filter(Boolean)
+    );
+    if (broaderRegressionCommands.length > 0) {
+      return broaderRegressionCommands;
+    }
+    const fallback = findMeaningfulCommands([metadata.nextVerify ?? ""]);
+    if (fallback.length > 0) {
+      return fallback;
+    }
+  }
+  return [];
+}
+
+function executeVerificationCommands({ dir, run, phase, wave, mode }) {
+  const runPath = resolveRunPath(dir, run);
+  const metadata = runMetadata(runPath);
+  validateRequestedPhaseWave(metadata, phase, wave);
+  const relativeRunPath = relPathFrom(dir, runPath);
+  const commands = commandSetForVerification(metadata, mode);
+  if (commands.length === 0) {
+    throw new Error(`${mode} could not find any verification commands in the active artifact`);
+  }
+
+  const results = [];
+  for (const command of commands) {
+    const result = runVerifyCommand(command, dir);
+    results.push({
+      command,
+      status: result.status ?? 1,
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? ""
+    });
+    if ((result.status ?? 1) !== 0) {
+      break;
+    }
+  }
+
+  const timestamp = new Date().toISOString();
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  const ledgerEntries = results.map((result) => {
+    const outcome = result.status === 0 ? "pass" : "fail";
+    return `${timestamp} ${mode} ${phaseWave.phase}/${phaseWave.wave} \`${result.command}\` -> ${outcome} (${boundedEvidence(result)})`;
+  });
+
+  let nextText = appendVerificationLedger(metadata.text, ledgerEntries);
+  fs.writeFileSync(runPath, nextText, "utf8");
+
+  console.log(`Run: ${relativeRunPath}`);
+  for (const result of results) {
+    const outcome = result.status === 0 ? "pass" : "fail";
+    console.log(`Result: ${outcome}`);
+    console.log(`Command or method: ${result.command}`);
+    console.log(`Small evidence: ${boundedEvidence(result)}`);
+    if (result.status !== 0) {
+      console.log("Next action: fix the failing verify or relock before continuing");
+      throw new Error(`${mode} failed`);
+    }
+  }
+  console.log("Next action: verification evidence appended to the run artifact");
+}
+
+function verifyWaveCommand(args) {
+  executeVerificationCommands({ ...args, mode: "verify-wave" });
+}
+
+function regressionCheckCommand(args) {
+  executeVerificationCommands({ ...args, mode: "regression-check" });
+}
+
+function replaceFirstLabelValue(text, label, value) {
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i].trim();
+    if (trimmed === `${label}:`) {
+      let bulletIndex = i + 1;
+      while (bulletIndex < lines.length && lines[bulletIndex].trim().length === 0) {
+        bulletIndex += 1;
+      }
+      if (bulletIndex < lines.length && lines[bulletIndex].trim().startsWith("- ")) {
+        lines[bulletIndex] = `- ${value}`;
+      } else {
+        lines.splice(i + 1, 0, `- ${value}`);
+      }
+      return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+    }
+    if (trimmed.startsWith(`${label}:`)) {
+      lines[i] = `${label}: ${value}`;
+      return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+    }
+  }
+  return text;
+}
+
+function commandFromRecordedVerification(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const commandMatch = trimmed.match(/`([^`]+)`/);
+  if (!commandMatch) {
+    return null;
+  }
+  return normalizeCommandText(commandMatch[1]);
+}
+
+function plannedNextWaveRoute(metadata, currentPhase, currentWave, phaseDone) {
+  if (phaseDone || metadata.verifiedPlanWaves.length === 0) {
+    return null;
+  }
+
+  const currentIndex = metadata.verifiedPlanWaves.findIndex((row) => row.Phase === currentPhase && row.Wave === currentWave);
+  if (currentIndex === -1) {
+    return null;
+  }
+
+  for (let index = currentIndex + 1; index < metadata.verifiedPlanWaves.length; index += 1) {
+    const row = metadata.verifiedPlanWaves[index];
+    if (row.Phase !== currentPhase) {
+      break;
+    }
+    const status = (row.Status ?? "").trim().toLowerCase();
+    if (status === "pending" || status.length === 0) {
+      return {
+        phase: row.Phase,
+        wave: row.Wave,
+        change: row.Change,
+        doneWhen: row["Done when"],
+        verify: row.Verify
+      };
+    }
+  }
+
+  return null;
+}
+
+function executionWaveLinesForRoute(route, metadata) {
+  const requirements = metadata.currentExecutionWaveRequirements.length > 0
+    ? metadata.currentExecutionWaveRequirements
+    : metadata.requirementsStillSatisfied;
+  const invariantRequirements = metadata.currentExecutionWaveInvariantRequirements.length > 0
+    ? metadata.currentExecutionWaveInvariantRequirements
+    : requirements;
+  const lines = [
+    "Phase:",
+    `- ${route.phase}`,
+    "Wave:",
+    `- ${route.wave}`,
+    "Purpose:",
+    `- ${route.change || `Execute ${route.phase} / ${route.wave}`}`
+  ];
+
+  if (requirements.length > 0) {
+    lines.push("Covers requirements:", ...requirements.map((value) => `- ${value}`));
+  }
+
+  lines.push("Work:", `- ${route.change || `Start ${route.phase} / ${route.wave}`}`);
+
+  if (route.doneWhen) {
+    lines.push("Done when:", `- ${route.doneWhen}`);
+  }
+  if (route.verify) {
+    lines.push("Verify:", `- ${route.verify}`);
+  }
+  if (invariantRequirements.length > 0) {
+    lines.push("Invariant requirements:", ...invariantRequirements.map((value) => `- ${value}`));
+  }
+
+  return lines;
+}
+
+function updateWaveTableStatuses(text, currentPhase, currentWave) {
+  const table = parseMarkdownTableInSection(text, "Waves");
+  if (!table) {
+    return text;
+  }
+
+  table.rows = table.rows.map((row) => {
+    if (row.Phase === currentPhase && row.Wave === currentWave) {
+      return { ...row, Status: "done" };
+    }
+    return row;
+  });
+
+  return replaceMarkdownTableInSection(text, "Waves", table);
+}
+
+function verificationLedgerEntries(text) {
+  return findSectionBullets(text, "Verification Ledger")
+    .map((value) => {
+      const match = value.match(/^(?<timestamp>\S+)\s+(?<mode>[A-Za-z-]+)\s+(?<phase>[^/\s]+)\/(?<wave>[^\s]+)\s+`(?<command>.+?)`\s+->\s+(?<outcome>pass|fail)\s+\((?<evidence>.*)\)$/);
+      if (!match?.groups) {
+        return null;
+      }
+      return {
+        raw: value,
+        timestamp: match.groups.timestamp,
+        mode: match.groups.mode,
+        phase: match.groups.phase,
+        wave: match.groups.wave,
+        command: match.groups.command,
+        outcome: match.groups.outcome,
+        evidence: match.groups.evidence
+      };
+    })
+    .filter(Boolean);
+}
+
+function currentStatusLines(phase, wave, executionState) {
+  return [
+    `Current phase: ${phase}`,
+    `Current wave: ${wave}`,
+    `Execution state: ${executionState}`
+  ];
+}
+
+function closeWaveRecommendedCommand(relativeRunPath, phase, wave, phaseDone, nextWaveRoute = null) {
+  if (phaseDone) {
+    return `Use $qc-flow and resume from ${relativeRunPath} to review the phase close for ${phase} and either start the next phase or mark the run done.`;
+  }
+  if (nextWaveRoute) {
+    return `Use $qc-flow and resume from ${relativeRunPath} to review and execute ${nextWaveRoute.phase} / ${nextWaveRoute.wave}.`;
+  }
+  return `Use $qc-flow and resume from ${relativeRunPath} to lock the next wave after ${phase} / ${wave}.`;
+}
+
+function closeWavePhaseCloseLines(phase, requirementsCovered, requirementsStillSatisfied, verificationEntries) {
+  const covered = requirementsCovered.length > 0 ? requirementsCovered : ["not recorded"];
+  const stillSatisfied = requirementsStillSatisfied.length > 0 ? requirementsStillSatisfied : covered;
+  const verificationCompleted = verificationEntries.length > 0
+    ? verificationEntries.map((entry) => `${entry.mode} ${entry.phase}/${entry.wave} \`${entry.command}\` -> ${entry.outcome}`)
+    : ["not recorded"];
+
+  return [
+    `Phase: ${phase}`,
+    "Result:",
+    `- Wave ${phase}/${verificationEntries[0]?.wave ?? "unknown"} verified cleanly and is ready for phase close.`,
+    "Requirements covered:",
+    ...covered.map((value) => `- ${value}`),
+    "Verification completed:",
+    ...verificationCompleted.map((value) => `- ${value}`),
+    "Requirements still satisfied:",
+    ...stillSatisfied.map((value) => `- ${value}`),
+    "Carry-forward notes:",
+    `- Choose the next phase explicitly before more execution.`,
+    "Open risks:",
+    "- none",
+    "Decision:",
+    "- next-phase-ready",
+    "Why:",
+    "- The verification ledger contains passing entries for the active wave and no failing entries for that same phase/wave."
+  ];
+}
+
+function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
+  const runPath = resolveRunPath(dir, run);
+  const metadata = runMetadata(runPath);
+  validateRequestedPhaseWave(metadata, phase, wave);
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  const relativeRunPath = relPathFrom(dir, runPath);
+  const verificationEntries = verificationLedgerEntries(metadata.text)
+    .filter((entry) => entry.phase === phaseWave.phase && entry.wave === phaseWave.wave);
+  const passingEntries = verificationEntries.filter((entry) => entry.outcome === "pass");
+  const failingEntries = verificationEntries.filter((entry) => entry.outcome !== "pass");
+
+  if (passingEntries.length === 0) {
+    throw new Error("close-wave requires at least one passing verification ledger entry for the active phase/wave");
+  }
+  if (failingEntries.length > 0) {
+    throw new Error("close-wave cannot complete while the active phase/wave still has failing verification ledger entries");
+  }
+
+  const requirementsCovered = uniqueValues(findSectionLabelBullets(metadata.text, "Current Execution Wave", "Covers requirements"));
+  const nextRequirementsStillSatisfied = uniqueValues([
+    ...metadata.requirementsStillSatisfied,
+    ...requirementsCovered
+  ]);
+  const nextWaveRoute = plannedNextWaveRoute(metadata, phaseWave.phase, phaseWave.wave, phaseDone);
+  const nextGate = phaseDone ? "phase-close" : "execute";
+  const nextBlockers = phaseDone || nextWaveRoute ? "none" : `next wave not yet locked after ${phaseWave.phase} / ${phaseWave.wave}`;
+  const nextVerify = phaseDone
+    ? `review the phase close for ${phaseWave.phase} and decide the next phase or mark the run done`
+    : (nextWaveRoute?.verify ?? `lock the next wave after ${phaseWave.phase} / ${phaseWave.wave}`);
+  const nextCommand = closeWaveRecommendedCommand(relativeRunPath, phaseWave.phase, phaseWave.wave, phaseDone, nextWaveRoute);
+
+  let nextText = metadata.text;
+  nextText = replaceFirstLabelValue(nextText, "Current gate", nextGate);
+  nextText = updateWaveTableStatuses(nextText, phaseWave.phase, phaseWave.wave);
+  nextText = replaceOrInsertSection(
+    nextText,
+    "Current Status",
+    currentStatusLines(nextWaveRoute?.phase ?? phaseWave.phase, nextWaveRoute?.wave ?? phaseWave.wave, nextWaveRoute ? "pending" : "done"),
+    "Latest Phase Close"
+  );
+  nextText = replaceOrInsertSection(nextText, "Blockers", [`- ${nextBlockers}`], "Verification Ledger");
+  nextText = replaceOrInsertSection(
+    nextText,
+    "Requirements Still Satisfied",
+    (nextRequirementsStillSatisfied.length > 0 ? nextRequirementsStillSatisfied : ["not recorded"]).map((value) => `- ${value}`),
+    "Blockers"
+  );
+  nextText = replaceOrInsertSection(nextText, "Recommended Next Command", [`- ${nextCommand}`], "Current Status");
+  if (nextWaveRoute) {
+    nextText = replaceOrInsertSection(
+      nextText,
+      "Current Execution Wave",
+      executionWaveLinesForRoute(nextWaveRoute, metadata),
+      "Verified Plan"
+    );
+  }
+  if (phaseDone) {
+    nextText = replaceOrInsertSection(
+      nextText,
+      "Latest Phase Close",
+      closeWavePhaseCloseLines(phaseWave.phase, requirementsCovered, nextRequirementsStillSatisfied, passingEntries),
+      "Current Execution Wave"
+    );
+  }
+
+  const nextMetadata = runMetadataFromText(runPath, nextText);
+  const summaryMetadata = {
+    ...nextMetadata,
+    currentGate: nextGate,
+    blockers: nextBlockers,
+    nextVerify,
+    recommendedCommands: [nextCommand],
+    executionState: nextWaveRoute ? "pending" : "done",
+    currentPhase: nextWaveRoute?.phase ?? nextMetadata.currentPhase,
+    currentWave: nextWaveRoute?.wave ?? nextMetadata.currentWave,
+    requirementsStillSatisfied: nextRequirementsStillSatisfied
+  };
+
+  nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(summaryMetadata, relativeRunPath), "Requirement Baseline");
+  nextText = replaceOrInsertSection(nextText, "Compact-Safe Summary", compactSafeSummaryLines(summaryMetadata, relativeRunPath), "Resume Digest");
+  fs.writeFileSync(runPath, nextText, "utf8");
+
+  const refreshedMetadata = runMetadata(runPath);
+  const statePath = stateFileFor(dir);
+  ensureDir(path.dirname(statePath));
+  fs.writeFileSync(statePath, renderStateFile(relativeRunPath, refreshedMetadata), "utf8");
+
+  console.log(`Run: ${relativeRunPath}`);
+  console.log(`Closed wave: ${phaseWave.phase} / ${phaseWave.wave}`);
+  console.log(`Current gate: ${nextGate}`);
+  if (phaseDone) {
+    console.log(`Phase close: updated for ${phaseWave.phase}`);
+  }
+  console.log(`Next action: ${nextCommand}`);
+}
+
 function readJsonIfExists(filePath) {
   if (!fs.existsSync(filePath)) {
     return null;
@@ -1468,6 +2070,28 @@ function runMetadataStruct(runPath, text) {
       ...lockRequirementsStillSatisfied
     ]),
     verificationEvidence: lockVerificationEvidence,
+    affectedArea: uniqueValues([
+      ...findSectionLabelBullets(text, "Requirement Baseline", "Affected area / blast radius"),
+      ...findSectionLabelBullets(text, "Requirement Baseline", "Affected area"),
+      ...findSectionLabelBullets(text, "Locked Plan", "Affected area")
+    ]),
+    protectedBoundaries: uniqueValues([
+      ...findSectionLabelBullets(text, "Requirement Baseline", "Out of scope"),
+      ...findSectionLabelBullets(text, "Requirement Baseline", "Protected boundaries"),
+      ...findSectionLabelBullets(text, "Locked Plan", "Protected boundaries"),
+      ...findSectionLabelBullets(text, "Current Execution Wave", "Invariant requirements")
+    ]),
+    evidenceBasis: uniqueValues([
+      ...findSectionBullets(text, "Evidence Basis"),
+      ...findSectionLabelBullets(text, "Locked Plan", "Evidence basis")
+    ]),
+    grayAreaTriggers: findSectionLabelBullets(text, "Clarify State", "Gray-area triggers"),
+    currentExecutionWaveVerify: findSectionLabelBullets(text, "Current Execution Wave", "Verify"),
+    currentExecutionWaveRequirements: findSectionLabelBullets(text, "Current Execution Wave", "Covers requirements"),
+    currentExecutionWaveInvariantRequirements: findSectionLabelBullets(text, "Current Execution Wave", "Invariant requirements"),
+    latestPhaseCloseVerificationCompleted: findSectionLabelBullets(text, "Latest Phase Close", "Verification completed"),
+    verifiedPlanWaves: parseMarkdownTableInSection(text, "Waves")?.rows ?? [],
+    lockCurrentVerify,
     hasExperienceSnapshot: text.includes("## Experience Snapshot"),
     experienceConstraints: uniqueValues([
       ...findSectionLabelBullets(text, "Experience Snapshot", "Experience constraints"),
@@ -1680,6 +2304,18 @@ async function main() {
         break;
       case "resume":
         resumeCommand(args);
+        break;
+      case "lock-check":
+        lockCheckCommand(args);
+        break;
+      case "verify-wave":
+        verifyWaveCommand(args);
+        break;
+      case "regression-check":
+        regressionCheckCommand(args);
+        break;
+      case "close-wave":
+        closeWaveCommand(args);
         break;
       case "capture-hooks":
         captureHooksCommand(args);
