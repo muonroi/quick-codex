@@ -8,6 +8,8 @@ Fastest install from npm:
 npx quick-codex install
 ```
 
+If you previously installed the skills in both `~/.agents/skills` and legacy `~/.codex/skills`, rerunning `install` or `upgrade` against a discovery root now removes the duplicate discovery entry automatically.
+
 Fastest local command:
 
 ```bash
@@ -84,6 +86,11 @@ node bin/quick-codex.js regression-check --dir /path/to/project --run .quick-cod
 node bin/quick-codex.js close-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
 ```
 
+Verification trust boundary:
+- `verify-wave` and `regression-check` execute artifact commands without a shell by default
+- shell features such as `>`, `|`, `&&`, leading `FOO=bar`, or subshell syntax require `--allow-shell-verify`
+- only opt in when you trust the run artifact content and the shell syntax is actually required
+
 ## 2. Start from the pain point, not the theory
 
 If Codex is losing the thread on a medium task:
@@ -128,14 +135,16 @@ node bin/quick-codex.js resume --dir /path/to/project
 
 Expected behavior:
 - `status` tells you the active continuity artifact, gate, risks, and next verify
-- `resume` prints the exact next prompt to paste plus the active experience constraints to keep in view
-- `checkpoint-digest` prints the compact-safe handoff before a pause or a broad verify
-- `repair-run` rewrites stale flow-run resumability sections, preserves compact lock artifacts, and realigns `STATE.md`
-- `doctor-run` tells you if the flow run or lock artifact is stale, incomplete, or missing required continuity fields
+- `resume` prints the exact next prompt to paste plus the active carry-forward cues and any experience constraints to keep in view
+- `checkpoint-digest` prints a resume card plus deliberate-compaction cues before a pause or a broad verify, including `Baseline action`, optional `Brain verdict`, `Explicit suggested action`, and any same-phase `Next Wave Pack`
+- `repair-run` rewrites stale flow-run resumability sections, including `Wave Handoff`, preserves compact lock artifacts, and realigns `STATE.md`
+- `doctor-run` tells you if the flow run or lock artifact is stale, incomplete, or missing required continuity fields, including a scored handoff-sufficiency check for flow runs
 - `lock-check` tells you whether a run is explicit enough to hand off to locked execution without guessing
 - `verify-wave` runs the active wave's `Verify:` bullets and appends one-line evidence to `Verification Ledger`
 - `regression-check` reruns the active regression/protected-boundary checks, preferring the current wave, then `Latest Phase Close -> Verification completed`, and only then `Next verify`
-- `close-wave` marks the active verified wave done, can auto-route to the next same-phase wave defined in `Verified Plan -> Waves`, and can write `Latest Phase Close` when the phase is complete
+- if either verification command reports a blocked unsafe command, inspect the artifact and rerun with `--allow-shell-verify` only when the shell syntax is intentional
+- `close-wave` marks the active verified wave done, can auto-route to the next same-phase wave defined in `Verified Plan -> Waves`, and can write `Latest Phase Close` with `Phase Relation` plus keep/drop carry-forward fields when the phase is complete
+- when the next route stays in the same phase, `close-wave` also writes a narrow `Next Wave Pack` so the next wave can resume without rereading the whole execution-wave narrative
 - `CONTINUITY-CONTRACT.md` defines which surface owns run, lock, pointer, and guidance continuity state
 
 `STATE.md` stays pointer-only:
@@ -149,6 +158,11 @@ node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
 ```
 
+After repair, expect the flow artifact to carry:
+- `Compact-Safe Summary` with `Phase relation`, `Compaction action`, optional brain verdict fields, `Carry-forward invariants`, `What to forget`, and `What must remain loaded`
+- `Wave Handoff` with trigger, source checkpoint, next target, optional brain verdict fields, and sealed decisions
+- `Next Wave Pack` whenever a same-phase route is already explicit
+
 If you already have recent Experience Engine hook output:
 
 ```bash
@@ -160,6 +174,11 @@ If you want Experience Engine to evaluate the next tool action directly:
 ```bash
 node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
 ```
+
+`single is good, better together`:
+- without Experience Engine, Quick Codex still produces the protocol baseline and a safe suggested action
+- with Experience Engine, the same checkpoint can also carry a guarded brain verdict that confirms or vetoes the baseline action
+- model choice and cost routing stay upstream in Experience Engine; Quick Codex only consumes the returned verdict
 
 If you are updating an older lock artifact:
 - add the compact bridge fields instead of copying flow sections

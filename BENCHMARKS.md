@@ -11,6 +11,8 @@ Current proof set:
 - [BENCHMARK-PROOF-FAILURE.md](./BENCHMARK-PROOF-FAILURE.md)
 - [BENCHMARK-PROOF-POSITIONING.md](./BENCHMARK-PROOF-POSITIONING.md)
 - [BENCHMARK-PROOF-WORKFLOW-HARDENING.md](./BENCHMARK-PROOF-WORKFLOW-HARDENING.md)
+- [BENCHMARK-PROOF-CARRY-FORWARD.md](./BENCHMARK-PROOF-CARRY-FORWARD.md)
+- [BENCHMARK-PROOF-BRAIN-SESSION-ACTION.md](./BENCHMARK-PROOF-BRAIN-SESSION-ACTION.md)
 
 ## 1. Multi-turn Drift
 
@@ -27,6 +29,7 @@ Compare:
 - was the next verify still explicit at turn 8
 - did the workflow reopen scope without saying so
 - could another engineer resume from the artifact without reading the whole transcript
+- what was the `doctor-run` handoff-sufficiency score at the checkpoint being resumed
 
 Expected Quick Codex advantage:
 - the run file still holds the active gate, next verify, blockers, and next command
@@ -46,6 +49,7 @@ Compare:
 - number of turns spent reconstructing context
 - whether the resumed workflow chose the right gate
 - whether the next prompt was obvious without rereading the whole thread
+- whether the artifact exposed a `Next Wave Pack` or an equivalent same-phase resume packet when that route was already known
 
 Expected Quick Codex advantage:
 - `STATE.md`, the run file, `quick-codex status`, and `quick-codex resume` should reduce recovery to one read and one pasteable prompt
@@ -100,6 +104,46 @@ Ask a user to find the answer to these without extra coaching:
 
 Expected Quick Codex advantage:
 - the README, quickstart, task selection, and examples should answer these directly
+
+## 7. Carry-Forward Footprint
+
+Goal:
+- measure whether deliberate compaction keeps the resume payload materially smaller than carrying the whole artifact forward
+
+Setup:
+- choose a completed wave with an explicit same-phase route or a phase-close checkpoint
+- record the full run-artifact size in lines or bytes
+- record the size of `Compact-Safe Summary`, `Wave Handoff`, and `Next Wave Pack` when present
+
+Compare:
+- full artifact lines or bytes versus compact carry-forward lines or bytes
+- whether the compact payload still preserves the next verify and resume payload
+- whether `doctor-run` reports a complete handoff-sufficiency score after the checkpoint
+
+Measurement note:
+- when direct Codex token accounting is unavailable, use line count, byte count, or token-estimation proxies explicitly labeled as proxies
+
+Expected Quick Codex advantage:
+- the compact payload should be much smaller than the whole artifact while still preserving the deterministic next route
+
+## 8. Brain-Advised Session Action
+
+Goal:
+- verify that Quick Codex stays safe alone but becomes sharper when Experience Engine adds a guarded verdict for `/compact` or `/clear`
+
+Setup:
+- verify the Experience Engine `/api/brain` endpoint is reachable through the configured proxy or tunnel
+- run one same-phase `close-wave` checkpoint with an explicit next-wave route
+- run one `--phase-done` close so the protocol baseline requires `relock`
+
+Compare:
+- whether the same-phase checkpoint records a brain verdict such as `allow-compact` without losing the `Next Wave Pack`
+- whether the phase-close checkpoint records `relock-first` (or a protocol-guardrailed equivalent) instead of a compact-style action
+- whether `Suggested session action` stays aligned with the protocol guardrails when the advisor is absent, noisy, or contradictory
+
+Expected Quick Codex advantage:
+- `single is good`: the protocol baseline still yields a safe action without the advisor
+- `better together`: the artifact also carries `Brain session-action verdict`, confidence, rationale, source, and an explicit operator-facing action when Experience Engine is configured
 
 ## 6. Workflow Hardening
 

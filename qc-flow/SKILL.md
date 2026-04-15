@@ -134,6 +134,7 @@ Required handoff fields:
 - affected area
 - current gate
 - current phase and wave, or the next active wave if execution is about to start
+- phase relation
 - remaining blockers
 - experience constraints when active
 - active hook-derived invariants when active
@@ -141,6 +142,9 @@ Required handoff fields:
 - evidence basis for the handoff
 - burn risk and last budget trigger when relevant
 - approval strategy when relevant
+- carry-forward invariants
+- what to forget
+- what must remain loaded
 - next verify
 - exact `Recommended next command`
 
@@ -224,6 +228,7 @@ The run file must preserve:
 - experience snapshot when hook warnings affect scope, verify, or invariants
 - execution mode
 - resume digest
+- wave handoff
 - session risk
 - context risk
 - stall status
@@ -348,6 +353,14 @@ The summary must capture:
 - remaining blockers
 - experience constraints
 - active hook-derived invariants
+- phase relation
+- compaction action
+- brain session-action verdict when available
+- brain verdict rationale when available
+- suggested session action
+- carry-forward invariants
+- what to forget
+- what must remain loaded
 - next verify
 - exact resume command
 
@@ -362,6 +375,88 @@ Summary rules:
 - prefer stable facts over rationale
 - if only one field changed, update only that field instead of rewriting the whole artifact
 - treat a stale compact-safe summary as a resumability bug, not a cosmetic issue
+
+## Wave Handoff
+
+Every non-trivial run must maintain a short `Wave Handoff` inside the run file.
+
+Purpose:
+- make deliberate compaction explicit instead of implicit
+- distinguish what should survive the next checkpoint from what should be dropped
+- give `qc-flow`, `$qc-lock`, and later CLI recovery one deterministic carry-forward payload
+
+The handoff must capture:
+- trigger
+- source checkpoint
+- next target
+- phase relation
+- brain session-action verdict when available
+- brain verdict rationale when available
+- suggested session action
+- sealed decisions
+- carry-forward invariants
+- expired context
+- what to forget
+- what must remain loaded
+- exact resume payload
+
+`Phase Relation` values:
+- `same-phase`
+- `dependent-next-phase`
+- `independent-next-phase`
+- `relock-before-next-phase`
+
+Compaction-action mapping:
+- `same-phase` -> `compact`
+- `dependent-next-phase` -> downstream-only `compact`
+- `independent-next-phase` -> `clear`
+- `relock-before-next-phase` -> `relock`
+
+Advisor rule:
+- `single is good`: the protocol-derived compaction action must still be safe without any external system
+- `better together`: when Experience Engine is configured, record its brain verdict as an advisor on top of the protocol baseline
+- the brain verdict may confirm or veto the baseline action, but it must not bypass protocol guardrails or invent a route outside the current `Phase Relation`
+
+Update the handoff:
+- after every completed wave
+- at every phase close
+- before any broad or long-running verify
+- before stopping for a pause, handoff, or likely context reset
+
+Handoff rules:
+- keep it shorter than surrounding narrative or worklog prose
+- treat `Wave Handoff` as the canonical deliberate-compaction payload
+- when the route stays in the same phase and the next target is already explicit, emit a narrow `Next Wave Pack`
+- if the checkpoint is `independent-next-phase`, clear phase-local detail down to global continuity plus proof
+- if the checkpoint is `relock-before-next-phase`, stop automatic continuation and route back through plan-check or a fresh lock
+- treat a stale wave handoff as a resumability bug, not as cosmetic drift
+
+## Next Wave Pack
+
+Emit `Next Wave Pack` only when the run already knows the exact next same-phase wave.
+
+Purpose:
+- make the next same-phase route cheaper to resume than rereading the full execution-wave narrative
+- project the `Wave Handoff` into one execution-local packet
+
+The pack must capture:
+- target
+- derived from
+- phase relation
+- compaction action
+- wave goal
+- done when
+- next verify
+- carry-forward invariants
+- what to forget
+- what must remain loaded
+- exact resume payload
+
+Rules:
+- emit it after a completed wave only when `Phase Relation` is `same-phase`
+- remove it when the route is no longer deterministic or the checkpoint is no longer same-phase
+- keep it narrower than the full execution-wave section
+- treat a missing same-phase `Next Wave Pack` as a resumability bug, not a cosmetic omission
 
 ## Session and context risk
 
@@ -594,16 +689,19 @@ Execution rules:
 - verify the wave before the next one
 - if verification fails, fix inside the same wave
 - after each wave, update the run file
-- after each wave, refresh both `Resume Digest` and `Compact-Safe Summary`
+- after each wave, refresh `Resume Digest`, `Compact-Safe Summary`, and `Wave Handoff`
+- after each wave, emit `Next Wave Pack` when the next same-phase route is already explicit; otherwise remove any stale pack
 - keep the active wave artifact current while a wave is in progress
 - after each phase, create or update a phase-close artifact using [references/phase-close-template.md](references/phase-close-template.md)
-- at every phase close, refresh both `Resume Digest` and `Compact-Safe Summary` before continuing
+- at every phase close, refresh `Resume Digest`, `Compact-Safe Summary`, and `Wave Handoff` before continuing
 - keep the current approval strategy explicit when escalation may be needed
 - for coding tasks, when a wave or phase verifies cleanly and the worktree is in a coherent state, create a checkpoint commit before opening the next wave or phase
 - prefer one logical checkpoint commit per completed wave or per completed phase, not one large multi-wave dump
 - if unrelated local changes would make the checkpoint commit noisy or unsafe, stop and surface that instead of forcing a broad commit
 - before any broad or long-running verify, emit a deterministic compact-safe handoff in the run file first
 - before any intentional pause or stop, emit the same compact-safe handoff before leaving execution
+- before any deliberate compaction checkpoint, classify `Phase Relation` and update `Wave Handoff` so the next route knows what to keep and what to drop
+- use `same-phase` for `compact`, `dependent-next-phase` for downstream-only `compact`, `independent-next-phase` for `clear`, and `relock-before-next-phase` for `relock`
 
 Task-type completion rules:
 - for coding tasks:

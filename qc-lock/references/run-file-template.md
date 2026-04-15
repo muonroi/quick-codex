@@ -57,8 +57,57 @@ Evidence basis:
 Preflight decision:
 - ready-to-lock | keep-researching | hand-back-to-qc-flow
 
-## Current Locked Plan
-<paste the current locked plan block here>
+## Locked Plan
+Goal: <one sentence>
+Current gate: execute
+Execution mode: <manual | auto when provided by upstream handoff>
+Phase: <phase id>
+Phase purpose: <why this phase exists>
+Covers requirements: <R1, R2>
+Affected area: <which surfaces this lock may touch>
+Protected boundaries: <what must not regress while changing this scope>
+Scope: <what this run is allowed to change>
+Out of scope: <explicit exclusions>
+Evidence basis: <upstream plan, repo evidence, or preflight findings>
+Lock rule: No scope expansion without relock.
+Status: active
+
+| Step | Status | Change | Done when | Verify |
+|---|---|---|---|---|
+| S1 | pending | ... | ... | ... |
+| S2 | pending | ... | ... | ... |
+| S3 | pending | ... | ... | ... |
+
+Current step: S1
+Current verify:
+- <smallest reliable verify for the current step>
+
+Recommended next command:
+- <exact next locked step or relock command>
+
+Invariant requirements:
+- <required outcomes that must still hold after this phase>
+
+Invariant affected area:
+- <surfaces that remain in scope>
+
+Blockers:
+- none
+
+Risks:
+- <current technical risk>
+
+Experience inputs:
+- none
+
+Verification evidence:
+- none yet
+
+Requirements still satisfied:
+- <R1, R2>
+
+Assumptions:
+- <assumption that could block execution>
 
 ## Phase Notes
 ### P1
@@ -96,3 +145,4 @@ Rules:
 - after every phase, record `Requirements still satisfied`
 - when resuming, read this file before doing anything else
 - after each verified wave or phase, record any checkpoint commit before continuing
+- prefer `## Locked Plan` as the canonical heading; legacy `## Current Locked Plan` remains migration-only

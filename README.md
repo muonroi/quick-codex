@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">Quick Codex</h1>
   <p align="center">
-    <strong>Make Codex CLI more resumable, auditable, and harder to derail on medium-sized work.</strong>
+    <strong>A bounded-context workflow layer for Codex CLI: resume cleanly, compact deliberately, and keep medium-sized work from drifting.</strong>
   </p>
   <p align="center">
     <a href="#quick-start">Quick Start</a> ·
@@ -27,6 +27,8 @@
 
 Codex is strong at focused execution. It gets weaker when the workflow lives only in chat memory.
 
+That gets worse when the task is larger than one clean burst: the context window gets crowded, the session may compact at an awkward moment, and the next safe move becomes fuzzy.
+
 Quick Codex gives Codex a small, local workflow layer:
 - `qc-flow` for front-half thinking, affected-area discussion, evidence-based planning, active-run discovery, and durable execution artifacts
 - `qc-lock` for strict `preflight -> plan -> lock -> execute -> verify -> fix`
@@ -34,8 +36,14 @@ Quick Codex gives Codex a small, local workflow layer:
 
 The goal is simple: keep non-trivial work readable, resumable, and harder to derail.
 
+Design rule:
+- `single is good`: Quick Codex must still produce a safe protocol baseline with no external advisor
+- `better together`: when Experience Engine is configured, the same checkpoint can also carry a guarded brain verdict that confirms or vetoes the baseline action
+
 In practice, that means:
 - resume from files instead of guessing from stale chat state
+- compact at safe checkpoints instead of waiting for context loss to happen at random
+- carry forward only the next phase or wave actually needs instead of dragging the whole transcript forward
 - surface blast radius before implementation pretends to be obvious
 - force planning to rest on repo evidence or an explicit research-skip rationale
 - treat unresolved gray areas as a hard stop for fast-path and premature execution lock
@@ -51,26 +59,27 @@ Without a workflow layer:
 Turn 1: clarify a medium-sized task
 Turn 2: research a few gaps
 Turn 3: start implementation
-Turn 6: context is fuzzy, next step is unclear, drift starts
+Turn 6: context is crowded, the session compacts awkwardly, next step is unclear
 ```
 
 With Quick Codex:
 
 ```text
 Turn 1: create a run artifact with baseline, risks, and a checked plan
-Turn 2: resume from the artifact, not from memory
-Turn 3: execute one wave or one locked step
-Turn 6: next command is already written down
+Turn 2: execute one wave or one locked step
+Turn 3: checkpoint the wave and write a deliberate carry-forward handoff
+Turn 6: resume from the artifact, not from whatever the session still remembers
 ```
 
 Quick Codex is for teams and solo developers who want:
 - stronger planning before coding
 - explicit handoff from plan to execution
-- durable state across long tasks
+- bounded-context continuity across long tasks
 - a cleaner way to resume after interruptions
 
 It is especially useful when the pain point is:
 - "Codex keeps losing the thread"
+- "The context window is getting full and I do not want to drag the whole transcript into the next wave"
 - "This task tends to drift after a few turns"
 - "I want step-by-step execution with real verification"
 - "I came back later and do not trust the current chat state"
@@ -86,6 +95,8 @@ Current proof set:
 - [Failure Recovery](./BENCHMARK-PROOF-FAILURE.md): shows recovery behavior when the workflow gets awkward or partial rather than ideal
 - [Positioning](./BENCHMARK-PROOF-POSITIONING.md): explains the product claim this package can defend today without overclaiming
 - [Workflow Hardening](./BENCHMARK-PROOF-WORKFLOW-HARDENING.md): shows the updated workflow now forces affected-area discussion, evidence-based planning, and `qc-lock` preflight more explicitly than before
+- [Carry-Forward Footprint](./BENCHMARK-PROOF-CARRY-FORWARD.md): shows a same-phase next-wave pack is materially smaller than the whole artifact while still passing handoff-sufficiency validation
+- [Brain-Advised Session Action](./BENCHMARK-PROOF-BRAIN-SESSION-ACTION.md): shows the protocol works alone and becomes sharper when Experience Engine adds a guarded brain verdict for `/compact` or `/clear`
 
 The benchmark index lives in [BENCHMARKS.md](./BENCHMARKS.md).
 
@@ -170,6 +181,7 @@ Raw Codex can already code well. The problem is not code generation alone. The p
 |---|---|---|
 | **Planning state** | Often lives in chat only | Lives in explicit artifacts |
 | **Resume after interruption** | Easy to lose the thread | Resume from run file and `STATE.md` |
+| **Context compaction** | Keep carrying transcript or lose continuity | Deliberate compaction with carry-forward cues |
 | **Large-task handoff** | Often implicit | Explicit next command |
 | **Execution control** | Can drift on medium tasks | `qc-lock` keeps the loop strict |
 | **Recovery surface** | Reconstruct state manually | `status`, `resume`, and `doctor-run` |
@@ -205,6 +217,7 @@ The common idea is that workflow state should live in files, not just in chat.
 Quick Codex is not trying to be a project operating system. It is trying to solve a smaller Codex CLI problem set well:
 - task durability when work spans multiple turns
 - reliable resume after interruption or stale session state
+- proactive compaction at safe checkpoints when carrying the whole transcript forward is wasteful
 - scope drift during medium-sized engineering tasks
 - verification thrash where the same broad checks are repeated without narrowing
 - vague handoff between planning and execution
@@ -302,8 +315,8 @@ quick-codex snapshot [--dir <project-dir>] [--run <path>]
 quick-codex repair-run [--dir <project-dir>] [--run <path>]
 quick-codex doctor-run [--dir <project-dir>] [--run <path>]
 quick-codex lock-check [--dir <project-dir>] [--run <path>]
-quick-codex verify-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>]
-quick-codex regression-check [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>]
+quick-codex verify-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
+quick-codex regression-check [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
 quick-codex close-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--phase-done]
 quick-codex upgrade [--copy] [--target <dir>]
 quick-codex uninstall [--target <dir>] [--dir <project-dir>]
@@ -311,19 +324,22 @@ quick-codex uninstall [--target <dir>] [--dir <project-dir>]
 
 Recommended usage:
 - `install` installs `qc-flow` and `qc-lock` into `~/.agents/skills` by default
+- `install` and `upgrade` remove duplicate `quick-codex` installs from the alternate discovery root when the target is a real Codex discovery root, so Codex does not autocomplete the same skill twice
 - `doctor` validates package shape, installed skills, and lint status across supported discovery targets unless `--target` is passed
 - `init` scaffolds `AGENTS.md`, `.quick-codex-flow/`, `STATE.md`, and a sample run artifact with an optional `Active lock` pointer
 - `status` shows the active continuity artifact, gate, risks, and next verify for either a flow run or a lock artifact
-- `resume` prints the exact next prompt(s) to paste when resuming, plus the active experience constraints that still matter for flow or lock execution
+- `resume` prints the exact next prompt(s) to paste when resuming, plus the active carry-forward cues (`Phase relation`, `What to forget`, `What must remain loaded`) and any experience constraints that still matter
 - `capture-hooks` parses hook text from a file or stdin and syncs it into `Experience Snapshot`
 - `sync-experience` calls Experience Engine `/api/intercept` for a concrete tool action and syncs returned warnings into `Experience Snapshot`
-- `checkpoint-digest` prints the compact-safe handoff that should survive context compaction or a pause
+- `checkpoint-digest` prints a resume card plus deliberate-compaction cues so the keep/drop carry-forward state is visible at a glance
+- `checkpoint-digest` now also surfaces `Baseline action`, `Brain verdict`, and `Explicit suggested action`, plus the same-phase `Next Wave Pack` when it exists
 - `snapshot` is a shorter alias for `checkpoint-digest`
-- `repair-run` backfills flow-run resumability sections, preserves compact lock artifacts, and realigns `STATE.md` for flow or lock handoff
-- `doctor-run` validates a flow run or lock artifact against the continuity contract and checks the `STATE.md` handoff
+- `repair-run` backfills flow-run resumability sections, including `Wave Handoff`, preserves compact lock artifacts, and realigns `STATE.md` for flow or lock handoff
+- `doctor-run` validates a flow run or lock artifact against the continuity contract, including a scored handoff-sufficiency check for flow runs, and checks the `STATE.md` handoff
 - `lock-check` validates that a flow or lock artifact is explicit enough for locked execution before handing work to a narrow executor
 - `verify-wave` runs the active wave verify commands from the artifact and appends bounded evidence into `Verification Ledger`
 - `regression-check` reruns the active protected-boundary verification commands, preferring the current wave, then `Latest Phase Close -> Verification completed`, and only falling back to `Next verify` when no broader command source exists
+- verification commands run without a shell by default; shell syntax such as redirection, pipelines, leading env assignment, or subshells requires `--allow-shell-verify` or `QUICK_CODEX_ALLOW_SHELL_VERIFY=1`
 - `close-wave` marks the active verified wave done, refreshes the summaries, auto-routes to the next same-phase wave when `Verified Plan -> Waves` already defines it, and can write `Latest Phase Close` when `--phase-done` is passed
 - `upgrade` reruns install behavior and removes legacy skill names if present
 - `uninstall` removes installed skills from the target path and can also remove project scaffolds when `--dir` is provided explicitly
@@ -331,7 +347,11 @@ Recommended usage:
 
 Migration notes for older artifacts:
 - older `qc-flow` runs can be repaired forward with `repair-run`
-- older `qc-lock` artifacts should gain bridge fields incrementally: `Current gate`, `Current verify`, `Recommended next command`, `Blockers`, `Verification evidence`, and `Requirements still satisfied`
+- repaired `qc-flow` runs now gain `Wave Handoff`, the compact keep/drop fields (`Phase relation`, `Carry-forward invariants`, `What to forget`, `What must remain loaded`), and optional brain verdict fields
+- same-phase auto-routing can also emit a narrow `Next Wave Pack` so the next wave does not need the whole execution-wave narrative to resume safely
+- canonical `qc-lock` artifacts should keep their bridge fields inside `## Locked Plan`
+- older `qc-lock` artifacts may still use legacy `## Current Locked Plan`, but they should gain bridge fields incrementally: `Current gate`, `Current verify`, `Recommended next command`, `Blockers`, `Verification evidence`, and `Requirements still satisfied`
+- if you previously installed to both `~/.agents/skills` and `~/.codex/skills`, rerun `install` or `upgrade` once to remove the duplicate discovery entry
 - do not copy `Resume Digest` or `Compact-Safe Summary` into `qc-lock`; keep the lock artifact compact
 
 Minimum smoke-check path for continuity adoption:
@@ -341,7 +361,9 @@ Minimum smoke-check path for continuity adoption:
 - `node bin/quick-codex.js lock-check --dir /path/to/project --run .quick-codex-flow/<run>.md`
 - `node bin/quick-codex.js verify-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn`
 - `node bin/quick-codex.js regression-check --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn`
+- if a verify command depends on shell syntax, rerun with `--allow-shell-verify` only after you trust the artifact content
 - `node bin/quick-codex.js close-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn`
+- confirm the flow run now carries both `Compact-Safe Summary` and `Wave Handoff`; phase-close checkpoints should classify `Phase Relation`
 - `node bin/quick-codex.js status --dir /path/to/project --run .quick-codex-lock/<task>.md`
 - `node bin/quick-codex.js doctor-run --dir /path/to/project --run .quick-codex-lock/<task>.md`
 - if `STATE.md` uses `Active lock`, confirm plain `status` and `resume` without `--run` resolve to the lock artifact
@@ -361,6 +383,7 @@ node bin/quick-codex.js doctor-run --dir /path/to/project
 node bin/quick-codex.js lock-check --dir /path/to/project --run .quick-codex-flow/<run>.md
 node bin/quick-codex.js verify-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
 node bin/quick-codex.js regression-check --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
+# add --allow-shell-verify only when the artifact verify command truly needs shell syntax
 node bin/quick-codex.js close-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
 ```
 
@@ -387,6 +410,11 @@ Important:
 
 Quick Codex works on its own, but it pairs well with [Experience Engine](https://github.com/muonroi/experience-engine).
 
+Recommended division of responsibility:
+- Quick Codex owns the protocol baseline: `Phase Relation`, `Compaction action`, and the final safety guardrails
+- Experience Engine owns the advisor layer: hook warnings, optional brain verdict, and any upstream model-choice or cost routing
+- Quick Codex does not hardcode one SiliconFlow model; it consumes the verdict returned by Experience Engine and falls back cleanly when that advisor is unavailable
+
 For the authoritative field ownership and surface roles behind resume, lock, and scaffold behavior, see [CONTINUITY-CONTRACT.md](./CONTINUITY-CONTRACT.md).
 
 Recommended routing for relevant hook warnings:
@@ -395,6 +423,8 @@ Recommended routing for relevant hook warnings:
 - `Research Pack` -> evidence, answered questions, unresolved risks
 - `Execution Wave` -> `Risks`, `Invariant requirements`, `Verify`
 - `Phase Close` -> carry-forward notes, open risks
+- `Phase Close` -> `Phase Relation`, sealed decisions, carry-forward invariants, expired context
+- `Phase Relation` -> compaction action: `same-phase` => `compact`, `dependent-next-phase` => downstream-only `compact`, `independent-next-phase` => `clear`, `relock-before-next-phase` => `relock`
 - `Experience Snapshot` -> active warnings, decision impact, carry-forward constraints, ignored warnings
 
 Recommended routing for the hook `Why:` line:
@@ -407,6 +437,9 @@ Persist the warning impact into the run file:
 - `Resume Digest` -> `Experience constraints`
 - `Compact-Safe Summary` -> `Experience constraints`
 - `Compact-Safe Summary` -> `Active hook-derived invariants`
+- `Compact-Safe Summary` -> `Phase relation`, `Compaction action`, optional brain verdict fields, `Carry-forward invariants`, `What to forget`, `What must remain loaded`
+- `Wave Handoff` -> trigger, source checkpoint, next target, optional brain verdict fields, sealed decisions, keep/drop carry-forward payload
+- `Next Wave Pack` -> same-phase-only execution packet: target, next verify, carry-forward invariants, and resume payload
 
 When you already have recent hook text, sync it directly:
 

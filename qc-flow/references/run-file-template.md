@@ -65,8 +65,54 @@ Execution mode:
 - Remaining blockers: none
 - Experience constraints: none
 - Active hook-derived invariants: none
+- Phase relation: same-phase | dependent-next-phase | independent-next-phase | relock-before-next-phase
+- Compaction action: compact | clear | relock
+- Brain session-action verdict: allow-compact | allow-clear | relock-first | block-action | unavailable | not-evaluated
+- Brain verdict confidence: high | medium | low | n/a
+- Brain verdict rationale: ...
+- Brain verdict source: experience-engine-brain | protocol-fallback | not-recorded
+- Suggested session action: ...
+- Carry-forward invariants: ...
+- What to forget: ...
+- What must remain loaded: ...
 - Next verify: ...
 - Resume with: `Use $qc-flow and resume from .quick-codex-flow/<task-slug>.md ...`
+
+## Wave Handoff
+- Trigger: completed wave | phase close | broad verify | escalation | deliberate pause
+- Source checkpoint: P1 / W1
+- Next target: P1 / W2 | phase-close | done
+- Phase relation: same-phase | dependent-next-phase | independent-next-phase | relock-before-next-phase
+- Brain session-action verdict: allow-compact | allow-clear | relock-first | block-action | unavailable | not-evaluated
+- Brain verdict confidence: high | medium | low | n/a
+- Brain verdict rationale: ...
+- Brain verdict source: experience-engine-brain | protocol-fallback | not-recorded
+- Suggested session action: ...
+- Sealed decisions: ...
+- Carry-forward invariants: ...
+- Expired context: ...
+- What to forget: ...
+- What must remain loaded: ...
+- Resume payload: `Use $qc-flow and resume from .quick-codex-flow/<task-slug>.md ...`
+
+## Next Wave Pack
+- optional: only emit when `Phase relation` is `same-phase` and the next target is already explicit
+- Target: P1 / W2
+- Derived from: P1 / W1
+- Phase relation: same-phase
+- Compaction action: compact
+- Brain session-action verdict: allow-compact | allow-clear | relock-first | block-action | unavailable | not-evaluated
+- Brain verdict confidence: high | medium | low | n/a
+- Brain verdict rationale: ...
+- Brain verdict source: experience-engine-brain | protocol-fallback | not-recorded
+- Suggested session action: ...
+- Wave goal: ...
+- Done when: ...
+- Next verify: ...
+- Carry-forward invariants: ...
+- What to forget: ...
+- What must remain loaded: ...
+- Resume payload: `Use $qc-flow and resume from .quick-codex-flow/<task-slug>.md ...`
 
 ## Session Risk
 - low | medium | high
@@ -173,8 +219,18 @@ Rules:
 - do not mark a planning-only run complete until `Recommended Next Command` is filled in
 - refresh `Resume Digest` after planning handoff, wave completion, and phase close
 - refresh `Compact-Safe Summary` after every completed wave and phase
+- refresh `Wave Handoff` after every completed wave and phase
+- refresh `Next Wave Pack` when same-phase routing is explicit after a completed wave; remove it when the route is no longer explicit
 - refresh `Compact-Safe Summary` before any broad or long-running verify and before stopping for a pause
+- refresh `Wave Handoff` before any broad or long-running verify and before stopping for a pause
+- treat `same-phase` as `compact`, `dependent-next-phase` as downstream-only `compact`, `independent-next-phase` as `clear`, and `relock-before-next-phase` as `relock`
+- keep the protocol-derived `Compaction action` as the single-good baseline even when no brain verdict is available
+- if Experience Engine is configured, record the brain verdict fields; if it is unavailable, record the fallback explicitly instead of leaving the field blank
+- treat the brain verdict as advisor-in-guardrails: it may confirm or veto the baseline action, but it must not bypass protocol guardrails
 - refresh the experience lines in both summaries when active hook-derived constraints change
+- keep `Wave Handoff` shorter than surrounding execution prose; it exists to survive deliberate compaction
+- keep `Next Wave Pack` narrower than the full execution-wave narrative; it exists to make the next same-phase route cheap to resume
+- treat stale `Wave Handoff` fields as a resumability bug, not as cosmetic drift
 - if `Session Risk` or `Context Risk` is `high`, checkpoint before opening new scope
 - refresh `Stall Status` after any stalled or long-running verify step
 - refresh `Burn Risk` after thrash, stall, or repeated unchanged-state turns

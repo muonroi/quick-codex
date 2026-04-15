@@ -23,6 +23,94 @@ They do need a shared contract for what continuity state exists and where that s
 | `C5 experience continuity` | Preserve active experience-derived constraints and invariants | experience constraints, hook-derived invariants, active warnings and ignored warnings when relevant |
 | `C6 proof continuity` | Preserve what has already been verified and what still holds | verification ledger, requirements still satisfied, phase-close or checkpoint evidence when present |
 
+## Deterministic Carry-Forward Protocol
+
+Proactive compaction is a continuity protocol, not a claim that the model keeps latent working memory forever.
+
+Quick Codex should treat carry-forward as three nested scopes:
+- `global continuity`
+  - stable goal, required outcomes, global constraints, and cross-phase invariants
+- `phase-local continuity`
+  - current phase purpose, active affected area, phase proof, and phase-to-phase dependency state
+- `wave-local continuity`
+  - the active step, narrow verify path, temporary implementation notes, and wave-scoped hypotheses
+
+Checkpoint rules:
+- after a verified wave, drop wave-local detail unless it is still needed for the next route
+- after a phase close with `independent-next-phase`, keep only global continuity and the minimum proof needed to justify the transition
+- after a phase close with `dependent-next-phase`, keep global continuity plus the specific phase-local subset required downstream
+- after a checkpoint that is `relock-before-next-phase`, stop automatic continuation and require a new plan or lock
+
+`single is good, better together` rule:
+- `single is good`: the protocol alone must still produce a safe baseline action even when Experience Engine is absent, unreachable, or noisy
+- `better together`: when Experience Engine is available, it may add a `brain session-action verdict` that confirms or vetoes the baseline action inside protocol guardrails
+- the brain verdict may make the workflow stricter, but it must not bypass protocol guardrails or invent an action family the protocol already ruled out
+
+Compaction-action rules:
+- `same-phase` -> `compact`
+- `dependent-next-phase` -> downstream-only `compact`
+- `independent-next-phase` -> `clear`
+- `relock-before-next-phase` -> `relock`
+
+The contract therefore needs an explicit carry-forward payload, not just broad recap prose.
+
+### `Wave Handoff` minimum fields
+
+`Wave Handoff` is the canonical `qc-flow` payload for deliberate compaction.
+
+It must capture:
+- source checkpoint
+- next target
+- phase relation
+- brain session-action verdict
+- brain verdict confidence
+- brain verdict rationale
+- sealed decisions
+- carry-forward invariants
+- expired context
+- what to forget
+- what must remain loaded
+- resume payload or exact resume command
+
+### `Phase Relation` values
+
+`Phase Relation` must classify how aggressively the next checkpoint may compact:
+- `same-phase`
+- `dependent-next-phase`
+- `independent-next-phase`
+- `relock-before-next-phase`
+
+Meaning:
+- `same-phase` -> keep the current phase-local continuity plus the minimum next-wave payload
+- `dependent-next-phase` -> keep only the downstream-relevant phase subset
+- `independent-next-phase` -> clear phase-local detail and keep only global continuity plus proof
+- `relock-before-next-phase` -> do not auto-continue; the next phase needs a fresh lock or plan check
+
+### `Next Wave Pack`
+
+`Next Wave Pack` is the canonical same-phase projection of `Wave Handoff`.
+
+Emit it only when:
+- the current checkpoint already resolved the next wave deterministically
+- `Phase Relation` is `same-phase`
+- the next target is narrower than rereading the whole execution-wave narrative
+
+It must capture:
+- target
+- derived from
+- phase relation
+- compaction action
+- brain session-action verdict
+- brain verdict confidence
+- brain verdict rationale
+- wave goal
+- done when
+- next verify
+- carry-forward invariants
+- what to forget
+- what must remain loaded
+- resume payload
+
 ## Surface Roles
 
 | Surface | Role |
@@ -73,6 +161,11 @@ Legend:
 | next verify | `C3` | required | bridge | read | none | teach |
 | recommended next command | `C3` | required | bridge | read | none | teach |
 | compact-safe handoff | `C3` | required | optional | read when present | none | none |
+| wave handoff | `C3` | required | optional bridge | read | none | none |
+| phase relation | `C3` | required | optional bridge | read | none | teach |
+| carry-forward invariants | `C3` | required | optional bridge | read | none | teach |
+| expired context / what to forget | `C3` | required | optional bridge | read | none | none |
+| what must remain loaded | `C3` | required | optional bridge | read | none | none |
 | session, context, and burn risk | `C4` | required | bridge when execution-local | read | none | teach |
 | stall or approval state | `C4` | required | bridge when execution-local | read | none | none |
 | experience constraints | `C5` | required | bridge when active | read | none | teach |
@@ -101,6 +194,11 @@ It must carry:
 - next verify
 - recommended next command
 - compact-safe handoff
+- wave handoff
+- phase relation
+- carry-forward invariants
+- expired context / what to forget
+- what must remain loaded
 - enough risk state to justify continue versus stop
 - enough experience state to preserve active constraints
 - requirements still satisfied
@@ -133,6 +231,10 @@ It must be able to:
 - recover current execution position from `phase / wave`, `phase / step`, or equivalent locked-step state
 - print or validate the next verify path
 - print or validate the recommended next command
+- print or validate the `Wave Handoff` payload when present
+- print or validate `Next Wave Pack` when the route stays in the same phase
+- validate that `Phase Relation` matches the intended resume or stop behavior when present
+- score or gap-check handoff sufficiency instead of only checking that sections exist
 - detect missing baseline, state, risk, or proof fields by artifact type
 - treat stale pointer state as a warning, not as the canonical source of truth
 
@@ -183,6 +285,8 @@ This map freezes where each continuity layer should land next.
 
 `C3 resume continuity`:
 - owned in `Resume Digest`, `Compact-Safe Summary`, and `Recommended Next Command`
+- owned in `Wave Handoff` for deliberate compaction checkpoints
+- owned in `Next Wave Pack` when the next same-phase route is already explicit
 - bridged in `qc-lock` through current verify path and next locked step
 - surfaced in `README.md` and `QUICKSTART.md` as operator guidance, not as the source of truth
 
@@ -210,6 +314,7 @@ This map freezes where each continuity layer should land next.
 For `qc-flow` runs, it should require:
 - the full `qc-flow` required subset
 - continuity carry-forward sections such as `Resume Digest`, `Compact-Safe Summary`, and `Experience Snapshot`
+- `Wave Handoff` and `Phase Relation` when the run has crossed a verified wave, phase close, broad verify checkpoint, or deliberate pause
 - proof that `Recommended Next Command` and `Verification Ledger` are still present and coherent
 
 For `qc-lock` artifacts, it should require:
@@ -252,6 +357,7 @@ Minimum verify path for the contract rollout:
 - lint skill and template shape
 - verify continuity-contract anchors and touched-file guidance
 - run `doctor-run` on a representative `qc-flow` artifact
+- verify that a representative `Wave Handoff` survives deliberate-compaction readback
 - once `qc-lock` adoption lands, add a lock-aware doctor smoke check
 
 ## Implementation Order

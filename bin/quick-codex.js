@@ -30,8 +30,8 @@ function usage() {
   quick-codex status [--dir <project-dir>] [--run <path>]
   quick-codex resume [--dir <project-dir>] [--run <path>]
   quick-codex lock-check [--dir <project-dir>] [--run <path>]
-  quick-codex verify-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>]
-  quick-codex regression-check [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>]
+  quick-codex verify-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
+  quick-codex regression-check [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
   quick-codex close-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--phase-done]
   quick-codex capture-hooks [--dir <project-dir>] [--run <path>] [--input <path>]
   quick-codex sync-experience [--dir <project-dir>] [--run <path>] --tool <name> [--tool-input <json>] [--tool-input-file <path>] [--engine-url <url>] [--timeout-ms <ms>]
@@ -82,7 +82,8 @@ function parseArgs(argv) {
     toolInput: null,
     toolInputFile: null,
     engineUrl: null,
-    timeoutMs: 3000
+    timeoutMs: 3000,
+    allowShellVerify: false
   };
 
   if (argv.length === 0 || ["-h", "--help", "help"].includes(argv[0])) {
@@ -152,6 +153,10 @@ function parseArgs(argv) {
     }
     if (arg === "--phase-done") {
       result.phaseDone = true;
+      continue;
+    }
+    if (arg === "--allow-shell-verify") {
+      result.allowShellVerify = true;
       continue;
     }
     if (arg === "--tool") {
@@ -228,16 +233,47 @@ function installOne(skillName, targetDir, copyMode) {
   }
 }
 
+function alternateDiscoveryTargets(target) {
+  const resolvedTarget = path.resolve(target);
+  const supportedTargets = uniquePaths(SUPPORTED_DISCOVERY_TARGETS);
+  if (!supportedTargets.includes(resolvedTarget)) {
+    return [];
+  }
+  return supportedTargets.filter((entry) => entry !== resolvedTarget);
+}
+
+function removeSkillInstallsFromTargets(targets, skillNames) {
+  const removed = [];
+  for (const baseDir of uniquePaths(targets)) {
+    for (const skillName of skillNames) {
+      const destDir = path.join(baseDir, skillName);
+      if (fs.existsSync(destDir)) {
+        removeIfExists(destDir);
+        removed.push(destDir);
+      }
+    }
+  }
+  return removed;
+}
+
 function installCommand({ copy, target }) {
   ensureDir(target);
   for (const legacySkill of LEGACY_SKILLS) {
     removeIfExists(path.join(target, legacySkill));
   }
+  const duplicateTargets = alternateDiscoveryTargets(target);
+  const removedDuplicates = removeSkillInstallsFromTargets(duplicateTargets, [...SKILLS, ...LEGACY_SKILLS]);
   for (const skillName of SKILLS) {
     installOne(skillName, target, copy);
   }
   console.log(`Installed ${SKILLS.join(", ")} to ${target} using ${copy ? "copy" : "symlink"} mode.`);
   console.log(`Removed legacy skill names if present: ${LEGACY_SKILLS.join(", ")}.`);
+  if (removedDuplicates.length > 0) {
+    console.log("Removed duplicate installs from other discovery roots:");
+    for (const removedPath of removedDuplicates) {
+      console.log(`- ${removedPath}`);
+    }
+  }
   console.log("Restart Codex to reload the skills.");
 }
 
@@ -273,16 +309,10 @@ function removeProjectScaffold(dir) {
   return { removed, kept };
 }
 
-function uninstallCommand({ target, dir, dirExplicit }) {
-  let removed = 0;
-  for (const skillName of [...SKILLS, ...LEGACY_SKILLS]) {
-    const destDir = path.join(target, skillName);
-    if (fs.existsSync(destDir)) {
-      removeIfExists(destDir);
-      removed += 1;
-    }
-  }
-  console.log(`Removed ${removed} skill install(s) from ${target}.`);
+function uninstallCommand({ target, targetExplicit, dir, dirExplicit }) {
+  const uninstallTargets = targetExplicit ? [target] : uniquePaths([target, ...SUPPORTED_DISCOVERY_TARGETS]);
+  const removed = removeSkillInstallsFromTargets(uninstallTargets, [...SKILLS, ...LEGACY_SKILLS]);
+  console.log(`Removed ${removed.length} skill install(s) from ${uninstallTargets.join(", ")}.`);
 
   if (dirExplicit) {
     const projectResult = removeProjectScaffold(dir);
@@ -524,6 +554,25 @@ function findLabelValueInSection(text, heading, label) {
   return null;
 }
 
+function normalizeHeadings(headings) {
+  return Array.isArray(headings) ? headings : [headings];
+}
+
+function hasSection(text, headings) {
+  const lines = text.split(/\r?\n/);
+  return normalizeHeadings(headings).some((heading) => findSectionRange(lines, heading) !== null);
+}
+
+function findLabelValueInAnySection(text, headings, label) {
+  for (const heading of normalizeHeadings(headings)) {
+    const value = findLabelValueInSection(text, heading, label);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
 function findSectionBullets(text, heading) {
   const lines = text.split(/\r?\n/);
   const headingLine = `## ${heading}`;
@@ -545,6 +594,16 @@ function findSectionBullets(text, heading) {
   }
 
   return values;
+}
+
+function findSectionBulletsAny(text, headings) {
+  for (const heading of normalizeHeadings(headings)) {
+    const values = findSectionBullets(text, heading);
+    if (values.length > 0 || hasSection(text, heading)) {
+      return values;
+    }
+  }
+  return [];
 }
 
 function findSectionLabelBullets(text, heading, label) {
@@ -591,6 +650,16 @@ function findSectionLabelBullets(text, heading, label) {
   }
 
   return values;
+}
+
+function findSectionLabelBulletsAny(text, headings, label) {
+  for (const heading of normalizeHeadings(headings)) {
+    const values = findSectionLabelBullets(text, heading, label);
+    if (values.length > 0 || hasSection(text, heading)) {
+      return values;
+    }
+  }
+  return [];
 }
 
 function findSectionBulletValue(text, heading, label) {
@@ -676,7 +745,7 @@ function normalizeCommandText(value) {
 }
 
 function detectArtifactType(runPath, text) {
-  if (runPath.includes(".quick-codex-lock") || text.includes("## Locked Plan")) {
+  if (runPath.includes(".quick-codex-lock") || text.includes("## Locked Plan") || text.includes("## Current Locked Plan")) {
     return "lock";
   }
   return "flow";
@@ -700,6 +769,277 @@ function meaningfulList(values) {
 function summarizeList(values, fallback = "none recorded") {
   const meaningful = meaningfulList(values);
   return meaningful.length > 0 ? meaningful.join("; ") : fallback;
+}
+
+function normalizeBrainVerdict(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return [
+    "allow-compact",
+    "allow-clear",
+    "relock-first",
+    "block-action",
+    "unavailable",
+    "not-evaluated"
+  ].includes(normalized)
+    ? normalized
+    : null;
+}
+
+function normalizeBrainConfidence(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["high", "medium", "low", "n/a"].includes(normalized) ? normalized : "n/a";
+}
+
+function brainSessionActionState(metadata) {
+  const verdict = normalizeBrainVerdict(
+    metadata.waveHandoffBrainSessionActionVerdict
+      ?? metadata.summaryBrainSessionActionVerdict
+      ?? metadata.nextWavePackBrainSessionActionVerdict
+      ?? "not-evaluated"
+  ) ?? "not-evaluated";
+  return {
+    verdict,
+    confidence: normalizeBrainConfidence(
+      metadata.waveHandoffBrainVerdictConfidence
+        ?? metadata.summaryBrainVerdictConfidence
+        ?? metadata.nextWavePackBrainVerdictConfidence
+        ?? "n/a"
+    ),
+    rationale: metadata.waveHandoffBrainVerdictRationale
+      ?? metadata.summaryBrainVerdictRationale
+      ?? metadata.nextWavePackBrainVerdictRationale
+      ?? "Experience Engine verdict is not recorded yet; fall back to the protocol baseline.",
+    source: metadata.waveHandoffBrainVerdictSource
+      ?? metadata.summaryBrainVerdictSource
+      ?? metadata.nextWavePackBrainVerdictSource
+      ?? "not-recorded"
+  };
+}
+
+function carryForwardState(metadata) {
+  const phaseRelation = metadata.waveHandoffPhaseRelation
+    ?? metadata.summaryPhaseRelation
+    ?? metadata.nextWavePackPhaseRelation
+    ?? (metadata.currentGate === "phase-close" ? "dependent-next-phase" : "same-phase");
+  const compactionAction = compactionActionForRelation(phaseRelation);
+  const brainVerdict = brainSessionActionState(metadata);
+  return {
+    phaseRelation,
+    compactionAction,
+    brainVerdict,
+    suggestedSessionAction: metadata.waveHandoffSuggestedSessionAction
+      ?? metadata.summarySuggestedSessionAction
+      ?? metadata.nextWavePackSuggestedSessionAction
+      ?? explicitSuggestedSessionAction({
+        phaseRelation,
+        compactionAction,
+        brainVerdict
+      }),
+    carryForwardInvariants: summarizeList(uniqueValues([
+      metadata.waveHandoffCarryForwardInvariants ?? "",
+      metadata.summaryCarryForwardInvariants ?? "",
+      metadata.nextWavePackCarryForwardInvariants ?? "",
+      ...metadata.currentExecutionWaveInvariantRequirements,
+      ...metadata.experienceHookInvariants
+    ]), "preserve the active affected area and verified outcomes"),
+    whatToForget: metadata.waveHandoffWhatToForget
+      ?? metadata.summaryWhatToForget
+      ?? metadata.nextWavePackWhatToForget
+      ?? "broad chat recap that does not change the next safe move",
+    whatMustRemainLoaded: metadata.waveHandoffWhatMustRemainLoaded
+      ?? metadata.summaryWhatMustRemainLoaded
+      ?? metadata.nextWavePackWhatMustRemainLoaded
+      ?? "current phase / wave, next verify, and recommended next command"
+  };
+}
+
+function compactionActionForRelation(phaseRelation) {
+  switch (phaseRelation) {
+    case "independent-next-phase":
+      return "clear";
+    case "relock-before-next-phase":
+      return "relock";
+    case "same-phase":
+    case "dependent-next-phase":
+    default:
+      return "compact";
+  }
+}
+
+function defaultSuggestedSessionAction({ phaseRelation, compactionAction, relativeRunPath = ".", nextWavePack = null }) {
+  const artifactRef = relativeRunPath === "." ? "the current run artifact" : relativeRunPath;
+  if (compactionAction === "clear") {
+    return "`/clear` only after this summary is recorded and the next phase is confirmed independent.";
+  }
+  if (compactionAction === "relock") {
+    return `Do not run \`/compact\` or \`/clear\` yet; relock from ${artifactRef} before continuing.`;
+  }
+  if (nextWavePack) {
+    return `\`/compact\` after reviewing this summary and keeping the next-wave pack for ${nextWavePack.target.phase} / ${nextWavePack.target.wave}.`;
+  }
+  if (phaseRelation === "dependent-next-phase") {
+    return "`/compact` after reviewing this summary and keeping only the downstream-relevant carry-forward subset.";
+  }
+  return "`/compact` after reviewing this summary and resume payload.";
+}
+
+function explicitSuggestedSessionAction({ phaseRelation, compactionAction, brainVerdict, relativeRunPath = ".", nextWavePack = null }) {
+  const verdict = brainVerdict?.verdict ?? "not-evaluated";
+  if (verdict === "relock-first") {
+    return `Do not run \`/compact\` or \`/clear\` yet; relock from ${relativeRunPath === "." ? "the current run artifact" : relativeRunPath} before continuing.`;
+  }
+  if (verdict === "block-action") {
+    return "Do not run `/compact` or `/clear` yet; keep the current session, review the blockers and verify path, then refresh the handoff.";
+  }
+  if (verdict === "allow-clear") {
+    return "`/clear` only after this summary is recorded and the next phase is confirmed independent.";
+  }
+  if (verdict === "allow-compact") {
+    return defaultSuggestedSessionAction({ phaseRelation, compactionAction, relativeRunPath, nextWavePack });
+  }
+  return defaultSuggestedSessionAction({ phaseRelation, compactionAction, relativeRunPath, nextWavePack });
+}
+
+function parsePhaseWaveSpec(value) {
+  const trimmed = String(value ?? "").trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const match = trimmed.match(/([A-Za-z0-9._-]+)\s*\/\s*([A-Za-z0-9._-]+)/);
+  if (!match) {
+    return null;
+  }
+  return { phase: match[1], wave: match[2] };
+}
+
+function requiresExplicitNextWavePack(metadata) {
+  const carryForward = carryForwardState(metadata);
+  if (carryForward.phaseRelation !== "same-phase") {
+    return false;
+  }
+  const target = parsePhaseWaveSpec(metadata.nextWavePackTarget ?? metadata.waveHandoffNextTarget ?? "");
+  const source = parsePhaseWaveSpec(metadata.waveHandoffSourceCheckpoint ?? "");
+  if (!target || !source) {
+    return false;
+  }
+  return target.phase !== source.phase || target.wave !== source.wave;
+}
+
+function nextWavePackTargetFromMetadata(metadata) {
+  const explicitTarget = parsePhaseWaveSpec(metadata.nextWavePackTarget ?? "");
+  if (explicitTarget) {
+    return explicitTarget;
+  }
+  if (!requiresExplicitNextWavePack(metadata)) {
+    return null;
+  }
+  return parsePhaseWaveSpec(metadata.waveHandoffNextTarget ?? "");
+}
+
+function nextWavePackState(metadata, relativeRunPath = ".") {
+  const target = nextWavePackTargetFromMetadata(metadata);
+  if (!target) {
+    return null;
+  }
+  const carryForward = carryForwardState(metadata);
+  const phaseRelation = metadata.nextWavePackPhaseRelation ?? carryForward.phaseRelation;
+  const compactionAction = compactionActionForRelation(phaseRelation);
+  const brainVerdict = {
+    verdict: normalizeBrainVerdict(metadata.nextWavePackBrainSessionActionVerdict ?? carryForward.brainVerdict.verdict) ?? "not-evaluated",
+    confidence: normalizeBrainConfidence(metadata.nextWavePackBrainVerdictConfidence ?? carryForward.brainVerdict.confidence),
+    rationale: metadata.nextWavePackBrainVerdictRationale ?? carryForward.brainVerdict.rationale,
+    source: metadata.nextWavePackBrainVerdictSource ?? carryForward.brainVerdict.source
+  };
+  return {
+    target,
+    derivedFrom: metadata.nextWavePackDerivedFrom ?? metadata.waveHandoffSourceCheckpoint ?? "not recorded",
+    phaseRelation,
+    compactionAction,
+    brainVerdict,
+    waveGoal: metadata.nextWavePackWaveGoal ?? metadata.currentExecutionWavePurpose ?? "not recorded",
+    doneWhen: metadata.nextWavePackDoneWhen ?? metadata.currentExecutionWaveDoneWhen ?? "not recorded",
+    nextVerify: metadata.nextWavePackNextVerify ?? metadata.nextVerify ?? "not recorded",
+    carryForwardInvariants: metadata.nextWavePackCarryForwardInvariants ?? carryForward.carryForwardInvariants,
+    whatToForget: metadata.nextWavePackWhatToForget ?? carryForward.whatToForget,
+    whatMustRemainLoaded: metadata.nextWavePackWhatMustRemainLoaded ?? carryForward.whatMustRemainLoaded,
+    resumePayload: metadata.nextWavePackResumePayload
+      ?? metadata.waveHandoffResumePayload
+      ?? metadata.recommendedCommands[0]
+      ?? defaultResumeCommand(relativeRunPath, metadata.artifactType),
+    suggestedSessionAction: metadata.nextWavePackSuggestedSessionAction ?? explicitSuggestedSessionAction({
+      phaseRelation,
+      compactionAction,
+      brainVerdict,
+      relativeRunPath,
+      nextWavePack: { target }
+    })
+  };
+}
+
+function handoffSufficiency(metadata, relativeRunPath = ".") {
+  const carryForward = carryForwardState(metadata);
+  const nextWavePack = nextWavePackState(metadata, relativeRunPath);
+  const target = nextWavePackTargetFromMetadata(metadata);
+  const scoreItems = [
+    ["summary phase relation", meaningfulList([metadata.summaryPhaseRelation ?? ""]).length > 0],
+    ["summary carry-forward invariants", meaningfulList([metadata.summaryCarryForwardInvariants ?? ""]).length > 0],
+    ["summary what to forget", meaningfulList([metadata.summaryWhatToForget ?? ""]).length > 0],
+    ["summary what must remain loaded", meaningfulList([metadata.summaryWhatMustRemainLoaded ?? ""]).length > 0],
+    ["summary brain verdict", meaningfulList([metadata.summaryBrainSessionActionVerdict ?? ""]).length > 0],
+    ["summary brain rationale", meaningfulList([metadata.summaryBrainVerdictRationale ?? ""]).length > 0],
+    ["summary suggested session action", meaningfulList([metadata.summarySuggestedSessionAction ?? ""]).length > 0],
+    ["wave handoff trigger", meaningfulList([metadata.waveHandoffTrigger ?? ""]).length > 0],
+    ["wave handoff source checkpoint", meaningfulList([metadata.waveHandoffSourceCheckpoint ?? ""]).length > 0],
+    ["wave handoff next target", meaningfulList([metadata.waveHandoffNextTarget ?? ""]).length > 0],
+    ["wave handoff phase relation", meaningfulList([metadata.waveHandoffPhaseRelation ?? ""]).length > 0],
+    ["wave handoff sealed decisions", meaningfulList([metadata.waveHandoffSealedDecisions ?? ""]).length > 0],
+    ["wave handoff carry-forward invariants", meaningfulList([metadata.waveHandoffCarryForwardInvariants ?? ""]).length > 0],
+    ["wave handoff expired context", meaningfulList([metadata.waveHandoffExpiredContext ?? ""]).length > 0],
+    ["wave handoff what to forget", meaningfulList([metadata.waveHandoffWhatToForget ?? ""]).length > 0],
+    ["wave handoff what must remain loaded", meaningfulList([metadata.waveHandoffWhatMustRemainLoaded ?? ""]).length > 0],
+    ["wave handoff brain verdict", meaningfulList([metadata.waveHandoffBrainSessionActionVerdict ?? ""]).length > 0],
+    ["wave handoff brain rationale", meaningfulList([metadata.waveHandoffBrainVerdictRationale ?? ""]).length > 0],
+    ["wave handoff suggested session action", meaningfulList([metadata.waveHandoffSuggestedSessionAction ?? ""]).length > 0],
+    ["wave handoff resume payload", meaningfulList([metadata.waveHandoffResumePayload ?? ""]).length > 0],
+    ["next verify", meaningfulList([metadata.nextVerify ?? ""]).length > 0],
+    ["recommended next command", metadata.recommendedCommands.length > 0],
+    ["phase relation alignment", carryForward.phaseRelation === (metadata.waveHandoffPhaseRelation ?? carryForward.phaseRelation)]
+  ];
+
+  const requiresPack = requiresExplicitNextWavePack(metadata);
+  if (requiresPack) {
+    scoreItems.push(
+      ["next-wave pack target", nextWavePack !== null],
+      ["next-wave pack phase relation", meaningfulList([metadata.nextWavePackPhaseRelation ?? ""]).length > 0],
+      ["next-wave pack next verify", meaningfulList([metadata.nextWavePackNextVerify ?? ""]).length > 0],
+      ["next-wave pack brain verdict", meaningfulList([metadata.nextWavePackBrainSessionActionVerdict ?? ""]).length > 0],
+      ["next-wave pack brain rationale", meaningfulList([metadata.nextWavePackBrainVerdictRationale ?? ""]).length > 0],
+      ["next-wave pack suggested session action", meaningfulList([metadata.nextWavePackSuggestedSessionAction ?? ""]).length > 0],
+      ["next-wave pack resume payload", meaningfulList([metadata.nextWavePackResumePayload ?? ""]).length > 0],
+      [
+        "next-wave pack route alignment",
+        Boolean(
+          nextWavePack &&
+          target &&
+          metadata.currentPhase === target.phase &&
+          metadata.currentWave === target.wave
+        )
+      ]
+    );
+  }
+
+  const missing = scoreItems.filter(([, passed]) => !passed).map(([label]) => label);
+  const score = scoreItems.length - missing.length;
+  return {
+    score,
+    maxScore: scoreItems.length,
+    missing,
+    passed: missing.length === 0,
+    phaseRelation: carryForward.phaseRelation,
+    compactionAction: carryForward.compactionAction,
+    requiresNextWavePack: requiresPack,
+    nextWavePack
+  };
 }
 
 function ignoredWarningsMissingFeedback(values) {
@@ -1032,6 +1372,284 @@ async function fetchExperienceSuggestions({ tool, toolInput, engineUrl, timeoutM
   };
 }
 
+function parseBrainJsonResult(raw) {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  const candidates = [trimmed];
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]+?)```/i);
+  if (fenced?.[1]) {
+    candidates.push(fenced[1].trim());
+  }
+  const objectMatch = trimmed.match(/\{[\s\S]*\}/);
+  if (objectMatch?.[0]) {
+    candidates.push(objectMatch[0]);
+  }
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function parseBrainVerdictResponse(raw) {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const normalized = raw.trim().toLowerCase().replace(/[`"'{}\[\]]/g, " ");
+  const verdict = [
+    "allow-compact",
+    "allow-clear",
+    "relock-first",
+    "block-action"
+  ].find((candidate) => normalized.includes(candidate));
+  const confidence = ["high", "medium", "low"].find((candidate) => normalized.includes(candidate)) ?? "medium";
+  return verdict ? { verdict, confidence } : null;
+}
+
+function brainVerdictRationale({ verdict, carryForward, nextWavePack }) {
+  switch (verdict) {
+    case "allow-compact":
+      if (nextWavePack) {
+        return `Experience Engine agreed that the next-wave pack for ${nextWavePack.target.phase} / ${nextWavePack.target.wave} is explicit enough to compact safely.`;
+      }
+      if (carryForward.phaseRelation === "dependent-next-phase") {
+        return "Experience Engine agreed that only the downstream-relevant subset needs to survive the next checkpoint.";
+      }
+      return "Experience Engine agreed that the current handoff keeps enough verified carry-forward state to compact safely.";
+    case "allow-clear":
+      return "Experience Engine agreed that the next phase is independent enough to clear after the summary is recorded.";
+    case "relock-first":
+      return "Experience Engine agreed that the run should be relocked before any session action is taken.";
+    case "block-action":
+      return "Experience Engine judged that the current blockers or verify state make both `/compact` and `/clear` unsafe right now.";
+    default:
+      return "Experience Engine verdict is not recorded yet; fall back to the protocol baseline.";
+  }
+}
+
+function protocolAlignedVerdict(compactionAction) {
+  switch (compactionAction) {
+    case "clear":
+      return "allow-clear";
+    case "relock":
+      return "relock-first";
+    case "compact":
+    default:
+      return "allow-compact";
+  }
+}
+
+function isBrainVerdictCompatibleWithProtocol(verdict, compactionAction) {
+  switch (compactionAction) {
+    case "clear":
+      return verdict === "allow-clear" || verdict === "block-action" || verdict === "relock-first";
+    case "relock":
+      return verdict === "relock-first" || verdict === "block-action";
+    case "compact":
+    default:
+      return verdict === "allow-compact" || verdict === "block-action" || verdict === "relock-first";
+  }
+}
+
+function boundBrainVerdictToProtocol({ verdict, confidence, carryForward, source }) {
+  if (isBrainVerdictCompatibleWithProtocol(verdict, carryForward.compactionAction)) {
+    return { verdict, confidence, source, overridden: false };
+  }
+  return {
+    verdict: protocolAlignedVerdict(carryForward.compactionAction),
+    confidence: "low",
+    source: `${source}-guardrailed`,
+    overridden: true
+  };
+}
+
+function buildSessionActionBrainPrompt({ metadata, relativeRunPath, nextWavePack, carryForward }) {
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  const requirements = metadata.requirementsStillSatisfied.length > 0
+    ? metadata.requirementsStillSatisfied.join("; ")
+    : "not recorded";
+  const blockers = metadata.blockers ?? "none";
+  const nextVerify = metadata.nextVerify ?? "not recorded";
+  const nextTarget = nextWavePack
+    ? `${nextWavePack.target.phase} / ${nextWavePack.target.wave}`
+    : (metadata.waveHandoffNextTarget ?? `resume ${phaseWave.phase} / ${phaseWave.wave}`);
+  const activeWarnings = summarizeList(metadata.experienceActiveWarnings, "none");
+  const constraints = summarizeList(metadata.experienceConstraints, "none");
+  const invariants = summarizeList(metadata.experienceHookInvariants, "none");
+  const evidenceBasis = summarizeList(metadata.evidenceBasis, "not recorded");
+  return [
+    "You are the Experience Engine brain deciding whether Quick Codex should recommend `/compact`, `/clear`, or neither.",
+    "Reply with exactly one of these strings and nothing else:",
+    "allow-compact|high",
+    "allow-compact|medium",
+    "allow-compact|low",
+    "allow-clear|high",
+    "allow-clear|medium",
+    "allow-clear|low",
+    "relock-first|high",
+    "relock-first|medium",
+    "relock-first|low",
+    "block-action|high",
+    "block-action|medium",
+    "block-action|low",
+    "Rules:",
+    "- allow-compact only when compact keeps the needed carry-forward state.",
+    "- allow-clear only when the next phase is independent and the summary is sufficient.",
+    "- relock-first when the artifact should be relocked before any session action.",
+    "- block-action when the summary, verify path, or blockers make both `/compact` and `/clear` unsafe.",
+    "- Never say to auto-execute slash commands; the operator stays in control.",
+    "- Never reply with OK, JSON, prose, or markdown.",
+    `Run artifact: ${relativeRunPath}`,
+    `Goal: ${metadata.goal ?? "not recorded"}`,
+    `Current gate: ${metadata.currentGate ?? "unknown"}`,
+    `Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`,
+    `Phase relation: ${carryForward.phaseRelation}`,
+    `Baseline action: ${carryForward.compactionAction}`,
+    `Next target: ${nextTarget}`,
+    `Requirements still satisfied: ${requirements}`,
+    `Blockers: ${blockers}`,
+    `Next verify: ${nextVerify}`,
+    `What to forget: ${carryForward.whatToForget}`,
+    `What must remain loaded: ${carryForward.whatMustRemainLoaded}`,
+    `Experience constraints: ${constraints}`,
+    `Active hook-derived invariants: ${invariants}`,
+    `Active warnings: ${activeWarnings}`,
+    `Evidence basis: ${evidenceBasis}`
+  ].join("\n");
+}
+
+function brainSessionActionFallback({ carryForward, error = null }) {
+  return {
+    verdict: "unavailable",
+    confidence: "low",
+    rationale: error
+      ? `Experience Engine was unavailable (${error}); fall back to the protocol baseline.`
+      : "Experience Engine verdict is unavailable; fall back to the protocol baseline.",
+    suggestedAction: defaultSuggestedSessionAction({
+      phaseRelation: carryForward.phaseRelation,
+      compactionAction: carryForward.compactionAction
+    }),
+    source: "protocol-fallback"
+  };
+}
+
+function sessionActionBrainFixture() {
+  const raw = process.env.QUICK_CODEX_SESSION_ACTION_BRAIN_FIXTURE;
+  if (!raw) {
+    return null;
+  }
+  const parsed = parseBrainJsonResult(raw);
+  if (!parsed) {
+    throw new Error("QUICK_CODEX_SESSION_ACTION_BRAIN_FIXTURE must be valid JSON");
+  }
+  return parsed;
+}
+
+async function fetchSessionActionBrainVerdict({ metadata, relativeRunPath, projectDir }) {
+  const fixture = sessionActionBrainFixture();
+  const carryForward = carryForwardState(metadata);
+  const nextWavePack = nextWavePackState(metadata, relativeRunPath);
+  if (fixture) {
+    const verdict = normalizeBrainVerdict(fixture.verdict) ?? "unavailable";
+    const confidence = normalizeBrainConfidence(fixture.confidence);
+    const source = fixture.source ? String(fixture.source) : "fixture";
+    const rationale = String(fixture.rationale ?? "Fixture verdict supplied for deterministic testing.");
+    return {
+      verdict,
+      confidence,
+      rationale,
+      suggestedAction: String(
+        fixture.suggestedAction
+          ?? explicitSuggestedSessionAction({
+            phaseRelation: carryForward.phaseRelation,
+            compactionAction: carryForward.compactionAction,
+            brainVerdict: { verdict, confidence, rationale, source },
+            relativeRunPath,
+            nextWavePack
+          })
+      ),
+      source
+    };
+  }
+
+  if (process.env.QUICK_CODEX_DISABLE_SESSION_ACTION_BRAIN === "1") {
+    return brainSessionActionFallback({ carryForward, error: "disabled by QUICK_CODEX_DISABLE_SESSION_ACTION_BRAIN" });
+  }
+
+  const expCfg = experienceConfig();
+  const baseUrl = defaultEngineUrl(expCfg);
+  const authToken = defaultEngineAuthToken(expCfg);
+  const headers = { "Content-Type": "application/json" };
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/api/brain`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: buildSessionActionBrainPrompt({ metadata, relativeRunPath, nextWavePack, carryForward }),
+        timeoutMs: Number(process.env.QUICK_CODEX_SESSION_ACTION_BRAIN_TIMEOUT_MS ?? 2500)
+      }),
+      signal: AbortSignal.timeout(Number(process.env.QUICK_CODEX_SESSION_ACTION_BRAIN_TIMEOUT_MS ?? 3000))
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.ok || !data?.result) {
+      return brainSessionActionFallback({ carryForward, error: data?.error ?? response.statusText });
+    }
+    const parsedJson = parseBrainJsonResult(data.result);
+    const parsed = parsedJson
+      ? {
+        verdict: normalizeBrainVerdict(parsedJson.verdict),
+        confidence: normalizeBrainConfidence(parsedJson.confidence)
+      }
+      : parseBrainVerdictResponse(data.result);
+    if (!parsed?.verdict) {
+      return brainSessionActionFallback({ carryForward, error: "brain returned non-JSON output" });
+    }
+    const rawVerdict = normalizeBrainVerdict(parsed.verdict) ?? "unavailable";
+    const rawConfidence = normalizeBrainConfidence(parsed.confidence);
+    const boundedVerdict = boundBrainVerdictToProtocol({
+      verdict: rawVerdict,
+      confidence: rawConfidence,
+      carryForward,
+      source: "experience-engine-brain"
+    });
+    const verdict = boundedVerdict.verdict;
+    const confidence = boundedVerdict.confidence;
+    const source = boundedVerdict.source;
+    const rationale = boundedVerdict.overridden
+      ? `Experience Engine returned ${rawVerdict}, but protocol guardrails keep ${verdict} for phase relation ${carryForward.phaseRelation}.`
+      : (parsedJson?.rationale
+        ? String(parsedJson.rationale)
+        : brainVerdictRationale({ verdict, carryForward, nextWavePack }));
+    return {
+      verdict,
+      confidence,
+      rationale,
+      suggestedAction: String(
+        parsed.suggestedAction
+          ?? explicitSuggestedSessionAction({
+            phaseRelation: carryForward.phaseRelation,
+            compactionAction: carryForward.compactionAction,
+            brainVerdict: { verdict, confidence, rationale, source },
+            relativeRunPath,
+            nextWavePack
+          })
+      ),
+      source
+    };
+  } catch (error) {
+    return brainSessionActionFallback({ carryForward, error: error.message });
+  }
+}
+
 function relPathFrom(baseDir, targetPath) {
   return path.relative(baseDir, targetPath) || ".";
 }
@@ -1187,7 +1805,99 @@ function boundedEvidence(commandResult) {
   return `exit code ${commandResult.status}`;
 }
 
-function runVerifyCommand(command, cwd) {
+function shellVerifyAllowed(args) {
+  return args.allowShellVerify || process.env.QUICK_CODEX_ALLOW_SHELL_VERIFY === "1";
+}
+
+function verifyShellOptInHint() {
+  return "Re-run with --allow-shell-verify or set QUICK_CODEX_ALLOW_SHELL_VERIFY=1 if you trust this artifact command.";
+}
+
+function tokenizeSafeVerifyCommand(command) {
+  const source = String(command ?? "").trim();
+  if (!source) {
+    return { ok: false, reason: "empty verify command" };
+  }
+  if (/[\r\n]/.test(source)) {
+    return { ok: false, reason: "multi-line verify commands require shell parsing" };
+  }
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(source)) {
+    return { ok: false, reason: "leading environment assignment requires shell parsing" };
+  }
+
+  const tokens = [];
+  let current = "";
+  let quote = null;
+  let escaping = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaping = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if ("|&;<>$()".includes(char)) {
+      return { ok: false, reason: `shell metacharacter ${char} requires explicit opt-in` };
+    }
+    current += char;
+  }
+
+  if (escaping) {
+    return { ok: false, reason: "trailing escape requires shell parsing" };
+  }
+  if (quote) {
+    return { ok: false, reason: "unclosed quote requires shell parsing" };
+  }
+  if (current.length > 0) {
+    tokens.push(current);
+  }
+  if (tokens.length === 0) {
+    return { ok: false, reason: "empty verify command" };
+  }
+  return { ok: true, tokens };
+}
+
+function runVerifyCommand(command, cwd, args) {
+  const parsed = tokenizeSafeVerifyCommand(command);
+  if (parsed.ok) {
+    const [program, ...programArgs] = parsed.tokens;
+    return spawnSync(program, programArgs, {
+      cwd,
+      encoding: "utf8"
+    });
+  }
+
+  if (!shellVerifyAllowed(args)) {
+    return {
+      status: 1,
+      stdout: "",
+      stderr: `Blocked unsafe verify command: ${parsed.reason}. ${verifyShellOptInHint()}`
+    };
+  }
+
   return spawnSync("bash", ["-lc", command], {
     cwd,
     encoding: "utf8"
@@ -1308,7 +2018,8 @@ function commandSetForVerification(metadata, mode) {
   return [];
 }
 
-function executeVerificationCommands({ dir, run, phase, wave, mode }) {
+function executeVerificationCommands(args) {
+  const { dir, run, phase, wave, mode } = args;
   const runPath = resolveRunPath(dir, run);
   const metadata = runMetadata(runPath);
   validateRequestedPhaseWave(metadata, phase, wave);
@@ -1320,7 +2031,7 @@ function executeVerificationCommands({ dir, run, phase, wave, mode }) {
 
   const results = [];
   for (const command of commands) {
-    const result = runVerifyCommand(command, dir);
+    const result = runVerifyCommand(command, dir, args);
     results.push({
       command,
       status: result.status ?? 1,
@@ -1520,12 +2231,32 @@ function closeWaveRecommendedCommand(relativeRunPath, phase, wave, phaseDone, ne
   return `Use $qc-flow and resume from ${relativeRunPath} to lock the next wave after ${phase} / ${wave}.`;
 }
 
-function closeWavePhaseCloseLines(phase, requirementsCovered, requirementsStillSatisfied, verificationEntries) {
+function closeWavePhaseRelation(metadata, phase, phaseDone, nextWaveRoute = null) {
+  if (nextWaveRoute) {
+    return "same-phase";
+  }
+  if (!phaseDone) {
+    return "relock-before-next-phase";
+  }
+
+  const hasLaterPhase = metadata.verifiedPlanWaves.some((row) => {
+    if (row.Phase === phase) {
+      return false;
+    }
+    const status = (row.Status ?? "").trim().toLowerCase();
+    return status === "pending" || status === "in_progress" || status.length === 0;
+  });
+
+  return hasLaterPhase ? "dependent-next-phase" : "relock-before-next-phase";
+}
+
+function closeWavePhaseCloseLines(metadata, phase, requirementsCovered, requirementsStillSatisfied, verificationEntries, phaseRelation) {
   const covered = requirementsCovered.length > 0 ? requirementsCovered : ["not recorded"];
   const stillSatisfied = requirementsStillSatisfied.length > 0 ? requirementsStillSatisfied : covered;
   const verificationCompleted = verificationEntries.length > 0
     ? verificationEntries.map((entry) => `${entry.mode} ${entry.phase}/${entry.wave} \`${entry.command}\` -> ${entry.outcome}`)
     : ["not recorded"];
+  const carryForwardInvariants = stillSatisfied.length > 0 ? stillSatisfied : ["preserve the validated outcomes from the completed phase"];
 
   return [
     `Phase: ${phase}`,
@@ -1537,8 +2268,20 @@ function closeWavePhaseCloseLines(phase, requirementsCovered, requirementsStillS
     ...verificationCompleted.map((value) => `- ${value}`),
     "Requirements still satisfied:",
     ...stillSatisfied.map((value) => `- ${value}`),
+    "Phase Relation:",
+    `- ${phaseRelation}`,
+    "Sealed decisions:",
+    `- Verification for ${phase} is complete and the current phase output should not be rediscovered.`,
+    "Carry-forward invariants:",
+    ...carryForwardInvariants.map((value) => `- ${value}`),
+    "Expired context:",
+    "- Wave-local execution notes from the completed phase no longer need to stay loaded once the proof is captured.",
+    "What to forget:",
+    "- Broad chat recap and temporary wave-local narration that do not change the next safe route.",
+    "What must remain loaded:",
+    `- Phase relation ${phaseRelation}, requirements still satisfied, and the next recommended command.`,
     "Carry-forward notes:",
-    `- Choose the next phase explicitly before more execution.`,
+    `- ${phaseRelation === "dependent-next-phase" ? "Carry forward only the downstream-relevant subset into the next phase." : "Choose the next phase explicitly before more execution."}`,
     "Open risks:",
     "- none",
     "Decision:",
@@ -1548,7 +2291,7 @@ function closeWavePhaseCloseLines(phase, requirementsCovered, requirementsStillS
   ];
 }
 
-function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
+async function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
   const runPath = resolveRunPath(dir, run);
   const metadata = runMetadata(runPath);
   validateRequestedPhaseWave(metadata, phase, wave);
@@ -1572,13 +2315,14 @@ function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
     ...requirementsCovered
   ]);
   const nextWaveRoute = plannedNextWaveRoute(metadata, phaseWave.phase, phaseWave.wave, phaseDone);
+  const phaseRelation = closeWavePhaseRelation(metadata, phaseWave.phase, phaseDone, nextWaveRoute);
+  const compactionAction = compactionActionForRelation(phaseRelation);
   const nextGate = phaseDone ? "phase-close" : "execute";
   const nextBlockers = phaseDone || nextWaveRoute ? "none" : `next wave not yet locked after ${phaseWave.phase} / ${phaseWave.wave}`;
   const nextVerify = phaseDone
     ? `review the phase close for ${phaseWave.phase} and decide the next phase or mark the run done`
     : (nextWaveRoute?.verify ?? `lock the next wave after ${phaseWave.phase} / ${phaseWave.wave}`);
   const nextCommand = closeWaveRecommendedCommand(relativeRunPath, phaseWave.phase, phaseWave.wave, phaseDone, nextWaveRoute);
-
   let nextText = metadata.text;
   nextText = replaceFirstLabelValue(nextText, "Current gate", nextGate);
   nextText = updateWaveTableStatuses(nextText, phaseWave.phase, phaseWave.wave);
@@ -1608,12 +2352,44 @@ function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
     nextText = replaceOrInsertSection(
       nextText,
       "Latest Phase Close",
-      closeWavePhaseCloseLines(phaseWave.phase, requirementsCovered, nextRequirementsStillSatisfied, passingEntries),
+      closeWavePhaseCloseLines(metadata, phaseWave.phase, requirementsCovered, nextRequirementsStillSatisfied, passingEntries, phaseRelation),
       "Current Execution Wave"
     );
   }
 
   const nextMetadata = runMetadataFromText(runPath, nextText);
+  const preliminaryBrainVerdict = await fetchSessionActionBrainVerdict({
+    metadata: nextMetadata,
+    relativeRunPath,
+    projectDir: dir
+  });
+  const guardrailedBrainVerdict = boundBrainVerdictToProtocol({
+    verdict: preliminaryBrainVerdict.verdict,
+    confidence: preliminaryBrainVerdict.confidence,
+    carryForward: { phaseRelation, compactionAction },
+    source: preliminaryBrainVerdict.source
+  });
+  const finalBrainVerdict = guardrailedBrainVerdict.overridden
+    ? {
+      ...preliminaryBrainVerdict,
+      verdict: guardrailedBrainVerdict.verdict,
+      confidence: guardrailedBrainVerdict.confidence,
+      source: guardrailedBrainVerdict.source,
+      rationale: `Experience Engine returned ${preliminaryBrainVerdict.verdict}, but protocol guardrails keep ${guardrailedBrainVerdict.verdict} for phase relation ${phaseRelation}.`
+    }
+    : {
+      ...preliminaryBrainVerdict,
+      verdict: guardrailedBrainVerdict.verdict,
+      confidence: guardrailedBrainVerdict.confidence,
+      source: guardrailedBrainVerdict.source
+    };
+  const explicitSuggestedAction = explicitSuggestedSessionAction({
+    phaseRelation,
+    compactionAction,
+    brainVerdict: finalBrainVerdict,
+    relativeRunPath,
+    nextWavePack: nextWaveRoute ? { target: { phase: nextWaveRoute.phase, wave: nextWaveRoute.wave } } : null
+  });
   const summaryMetadata = {
     ...nextMetadata,
     currentGate: nextGate,
@@ -1623,11 +2399,65 @@ function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
     executionState: nextWaveRoute ? "pending" : "done",
     currentPhase: nextWaveRoute?.phase ?? nextMetadata.currentPhase,
     currentWave: nextWaveRoute?.wave ?? nextMetadata.currentWave,
-    requirementsStillSatisfied: nextRequirementsStillSatisfied
+    requirementsStillSatisfied: nextRequirementsStillSatisfied,
+    summaryPhaseRelation: phaseRelation,
+    summaryBrainSessionActionVerdict: finalBrainVerdict.verdict,
+    summaryBrainVerdictConfidence: finalBrainVerdict.confidence,
+    summaryBrainVerdictRationale: finalBrainVerdict.rationale,
+    summaryBrainVerdictSource: finalBrainVerdict.source,
+    summarySuggestedSessionAction: explicitSuggestedAction,
+    summaryCarryForwardInvariants: nextRequirementsStillSatisfied.join("; "),
+    summaryWhatToForget: "broad chat recap and temporary wave-local narration that do not change the next safe route",
+    summaryWhatMustRemainLoaded: nextWaveRoute
+      ? `current phase / wave ${nextWaveRoute.phase} / ${nextWaveRoute.wave}, next verify, and recommended next command`
+      : `phase relation ${phaseRelation}, requirements still satisfied, and the next recommended command`,
+    waveHandoffTrigger: phaseDone ? "phase close" : "completed wave",
+    waveHandoffSourceCheckpoint: `${phaseWave.phase} / ${phaseWave.wave}`,
+    waveHandoffNextTarget: nextWaveRoute ? `${nextWaveRoute.phase} / ${nextWaveRoute.wave}` : `review phase close for ${phaseWave.phase}`,
+    waveHandoffPhaseRelation: phaseRelation,
+    waveHandoffBrainSessionActionVerdict: finalBrainVerdict.verdict,
+    waveHandoffBrainVerdictConfidence: finalBrainVerdict.confidence,
+    waveHandoffBrainVerdictRationale: finalBrainVerdict.rationale,
+    waveHandoffBrainVerdictSource: finalBrainVerdict.source,
+    waveHandoffSuggestedSessionAction: explicitSuggestedAction,
+    waveHandoffSealedDecisions: phaseDone
+      ? `Verification for ${phaseWave.phase} is complete and the current phase output should not be rediscovered.`
+      : `Wave ${phaseWave.phase} / ${phaseWave.wave} is complete and the next same-phase wave may start without rebuilding earlier proof.`,
+    waveHandoffCarryForwardInvariants: nextRequirementsStillSatisfied.join("; "),
+    waveHandoffExpiredContext: phaseDone
+      ? "wave-local execution notes from the completed phase no longer need to stay loaded once the proof is captured"
+      : "the completed wave's temporary implementation narration no longer needs to stay loaded once the route is updated",
+    waveHandoffWhatToForget: "broad chat recap and temporary wave-local narration that do not change the next safe route",
+    waveHandoffWhatMustRemainLoaded: nextWaveRoute
+      ? `current phase / wave ${nextWaveRoute.phase} / ${nextWaveRoute.wave}, next verify, and recommended next command`
+      : `phase relation ${phaseRelation}, requirements still satisfied, and the next recommended command`,
+    nextWavePackTarget: nextWaveRoute ? `${nextWaveRoute.phase} / ${nextWaveRoute.wave}` : null,
+    nextWavePackDerivedFrom: `${phaseWave.phase} / ${phaseWave.wave}`,
+    nextWavePackPhaseRelation: nextWaveRoute ? phaseRelation : null,
+    nextWavePackCompactionAction: nextWaveRoute ? compactionAction : null,
+    nextWavePackBrainSessionActionVerdict: nextWaveRoute ? finalBrainVerdict.verdict : null,
+    nextWavePackBrainVerdictConfidence: nextWaveRoute ? finalBrainVerdict.confidence : null,
+    nextWavePackBrainVerdictRationale: nextWaveRoute ? finalBrainVerdict.rationale : null,
+    nextWavePackBrainVerdictSource: nextWaveRoute ? finalBrainVerdict.source : null,
+    nextWavePackSuggestedSessionAction: nextWaveRoute ? explicitSuggestedAction : null,
+    nextWavePackWaveGoal: nextWaveRoute?.change ?? null,
+    nextWavePackDoneWhen: nextWaveRoute?.doneWhen ?? null,
+    nextWavePackNextVerify: nextWaveRoute?.verify ?? null,
+    nextWavePackCarryForwardInvariants: nextWaveRoute ? nextRequirementsStillSatisfied.join("; ") : null,
+    nextWavePackWhatToForget: nextWaveRoute ? "completed-wave narration that does not change the next same-phase route" : null,
+    nextWavePackWhatMustRemainLoaded: nextWaveRoute
+      ? `target ${nextWaveRoute.phase} / ${nextWaveRoute.wave}, next verify, and the resume payload`
+      : null,
+    nextWavePackResumePayload: nextWaveRoute ? nextCommand : null
   };
 
   nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(summaryMetadata, relativeRunPath), "Requirement Baseline");
   nextText = replaceOrInsertSection(nextText, "Compact-Safe Summary", compactSafeSummaryLines(summaryMetadata, relativeRunPath), "Resume Digest");
+  nextText = replaceOrInsertSection(nextText, "Wave Handoff", waveHandoffLines(summaryMetadata, relativeRunPath), "Compact-Safe Summary");
+  const nextWavePack = nextWavePackLines(summaryMetadata, relativeRunPath);
+  nextText = nextWavePack
+    ? replaceOrInsertSection(nextText, "Next Wave Pack", nextWavePack, "Wave Handoff")
+    : removeSection(nextText, "Next Wave Pack");
   fs.writeFileSync(runPath, nextText, "utf8");
 
   const refreshedMetadata = runMetadata(runPath);
@@ -1641,6 +2471,13 @@ function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
   if (phaseDone) {
     console.log(`Phase close: updated for ${phaseWave.phase}`);
   }
+  if (nextWavePack) {
+    const target = nextWavePackState(summaryMetadata, relativeRunPath)?.target;
+    if (target) {
+      console.log(`Next-wave pack: ${target.phase} / ${target.wave}`);
+    }
+  }
+  console.log(`Brain verdict: ${finalBrainVerdict.verdict} (${finalBrainVerdict.confidence})`);
   console.log(`Next action: ${nextCommand}`);
 }
 
@@ -1807,14 +2644,34 @@ function resumeCommand({ dir, run }) {
   const commands = metadata.recommendedCommands.length > 0
     ? metadata.recommendedCommands
     : [defaultResumeCommand(relativeRunPath, metadata.artifactType)];
+  const carryForward = carryForwardState(metadata);
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  const executionState = metadata.executionState ?? metadata.status ?? "unknown";
+  const nextWavePack = nextWavePackState(metadata, relativeRunPath);
 
   console.log(`Project: ${dir}`);
   console.log(`Active run: ${relativeRunPath}`);
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
-  console.log("Do not forget:");
+  console.log(`Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`);
+  console.log(`Execution state: ${executionState}`);
+  console.log("Keep in view:");
+  console.log(`- Next verify: ${metadata.nextVerify ?? "not recorded"}`);
+  console.log(`- Phase relation: ${carryForward.phaseRelation}`);
+  console.log(`- Baseline action: ${carryForward.compactionAction}`);
+  console.log(`- Brain verdict: ${carryForward.brainVerdict.verdict} (${carryForward.brainVerdict.confidence})`);
+  console.log(`- Brain rationale: ${carryForward.brainVerdict.rationale}`);
+  console.log(`- Explicit suggested action: ${carryForward.suggestedSessionAction}`);
+  console.log(`- What to forget: ${carryForward.whatToForget}`);
+  console.log(`- What must remain loaded: ${carryForward.whatMustRemainLoaded}`);
   console.log(`- Experience constraints: ${summarizeList(metadata.experienceConstraints)}`);
   console.log(`- Hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`);
   console.log(`- Warnings to respect on next step: ${summarizeList(metadata.experienceActiveWarnings)}`);
+  if (metadata.waveHandoffSealedDecisions) {
+    console.log(`- Sealed decisions: ${metadata.waveHandoffSealedDecisions}`);
+  }
+  if (nextWavePack) {
+    console.log(`- Next-wave pack: ${nextWavePack.target.phase} / ${nextWavePack.target.wave} -> ${nextWavePack.nextVerify}`);
+  }
   console.log("Paste one of these next:");
   for (const command of commands) {
     console.log(`- ${command}`);
@@ -1822,7 +2679,17 @@ function resumeCommand({ dir, run }) {
 }
 
 function checkpointDigestLines(metadata, relativeRunPath, { preferExisting = true } = {}) {
-  if (preferExisting && metadata.compactSafeSummary.length > 0) {
+  const hasCarryForwardSummary = meaningfulList([
+    metadata.summaryPhaseRelation ?? "",
+    metadata.summaryCarryForwardInvariants ?? "",
+    metadata.summaryWhatToForget ?? "",
+    metadata.summaryWhatMustRemainLoaded ?? "",
+    metadata.summaryBrainSessionActionVerdict ?? "",
+    metadata.summaryBrainVerdictRationale ?? "",
+    metadata.summarySuggestedSessionAction ?? ""
+  ]).length === 7;
+
+  if (preferExisting && metadata.compactSafeSummary.length > 0 && hasCarryForwardSummary) {
     return metadata.compactSafeSummary;
   }
 
@@ -1832,6 +2699,7 @@ function checkpointDigestLines(metadata, relativeRunPath, { preferExisting = tru
     : "not recorded";
   const resumeWith = metadata.recommendedCommands[0]
     ?? defaultResumeCommand(relativeRunPath, metadata.artifactType);
+  const carryForward = carryForwardState(metadata);
 
   return [
     `Goal: ${metadata.goal ?? "not recorded"}`,
@@ -1841,6 +2709,16 @@ function checkpointDigestLines(metadata, relativeRunPath, { preferExisting = tru
     `Remaining blockers: ${metadata.blockers ?? "none"}`,
     `Experience constraints: ${summarizeList(metadata.experienceConstraints)}`,
     `Active hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`,
+    `Phase relation: ${carryForward.phaseRelation}`,
+    `Compaction action: ${carryForward.compactionAction}`,
+    `Brain session-action verdict: ${carryForward.brainVerdict.verdict}`,
+    `Brain verdict confidence: ${carryForward.brainVerdict.confidence}`,
+    `Brain verdict rationale: ${carryForward.brainVerdict.rationale}`,
+    `Brain verdict source: ${carryForward.brainVerdict.source}`,
+    `Suggested session action: ${carryForward.suggestedSessionAction}`,
+    `Carry-forward invariants: ${carryForward.carryForwardInvariants}`,
+    `What to forget: ${carryForward.whatToForget}`,
+    `What must remain loaded: ${carryForward.whatMustRemainLoaded}`,
     `Next verify: ${metadata.nextVerify ?? "not recorded"}`,
     `Resume with: ${resumeWith}`
   ];
@@ -1866,6 +2744,74 @@ function resumeDigestLines(metadata, relativeRunPath) {
 
 function compactSafeSummaryLines(metadata, relativeRunPath) {
   return checkpointDigestLines(metadata, relativeRunPath, { preferExisting: false }).map((line) => `- ${line}`);
+}
+
+function waveHandoffLines(metadata, relativeRunPath) {
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  const resumePayload = metadata.waveHandoffResumePayload
+    ?? metadata.recommendedCommands[0]
+    ?? defaultResumeCommand(relativeRunPath, metadata.artifactType);
+  const carryForward = carryForwardState(metadata);
+
+  return [
+    `- Trigger: ${metadata.waveHandoffTrigger ?? "resume checkpoint"}`,
+    `- Source checkpoint: ${metadata.waveHandoffSourceCheckpoint ?? `${phaseWave.phase} / ${phaseWave.wave}`}`,
+    `- Next target: ${metadata.waveHandoffNextTarget ?? `resume ${phaseWave.phase} / ${phaseWave.wave}`}`,
+    `- Phase relation: ${carryForward.phaseRelation}`,
+    `- Brain session-action verdict: ${carryForward.brainVerdict.verdict}`,
+    `- Brain verdict confidence: ${carryForward.brainVerdict.confidence}`,
+    `- Brain verdict rationale: ${carryForward.brainVerdict.rationale}`,
+    `- Brain verdict source: ${carryForward.brainVerdict.source}`,
+    `- Suggested session action: ${carryForward.suggestedSessionAction}`,
+    `- Sealed decisions: ${metadata.waveHandoffSealedDecisions ?? `Current gate ${metadata.currentGate ?? "unknown"} and next verify ${metadata.nextVerify ?? "not recorded"} remain the active route.`}`,
+    `- Carry-forward invariants: ${carryForward.carryForwardInvariants}`,
+    `- Expired context: ${metadata.waveHandoffExpiredContext ?? "broad narration already captured in the run artifact"}`,
+    `- What to forget: ${carryForward.whatToForget}`,
+    `- What must remain loaded: ${carryForward.whatMustRemainLoaded}`,
+    `- Resume payload: ${resumePayload}`
+  ];
+}
+
+function nextWavePackLines(metadata, relativeRunPath) {
+  const pack = nextWavePackState(metadata, relativeRunPath);
+  if (!pack) {
+    return null;
+  }
+
+  return [
+    "Target:",
+    `- ${pack.target.phase} / ${pack.target.wave}`,
+    "Derived from:",
+    `- ${pack.derivedFrom}`,
+    "Phase relation:",
+    `- ${pack.phaseRelation}`,
+    "Compaction action:",
+    `- ${pack.compactionAction}`,
+    "Brain session-action verdict:",
+    `- ${pack.brainVerdict.verdict}`,
+    "Brain verdict confidence:",
+    `- ${pack.brainVerdict.confidence}`,
+    "Brain verdict rationale:",
+    `- ${pack.brainVerdict.rationale}`,
+    "Brain verdict source:",
+    `- ${pack.brainVerdict.source}`,
+    "Suggested session action:",
+    `- ${pack.suggestedSessionAction}`,
+    "Wave goal:",
+    `- ${pack.waveGoal}`,
+    "Done when:",
+    `- ${pack.doneWhen}`,
+    "Next verify:",
+    `- ${pack.nextVerify}`,
+    "Carry-forward invariants:",
+    `- ${pack.carryForwardInvariants}`,
+    "What to forget:",
+    `- ${pack.whatToForget}`,
+    "What must remain loaded:",
+    `- ${pack.whatMustRemainLoaded}`,
+    "Resume payload:",
+    `- ${pack.resumePayload}`
+  ];
 }
 
 function defaultExperienceSnapshotLines() {
@@ -1920,6 +2866,17 @@ function replaceOrInsertSection(text, heading, bodyLines, afterHeading = null) {
   return `${lines.join("\n").replace(/\n+$/, "")}\n`;
 }
 
+function removeSection(text, heading) {
+  const lines = text.split(/\r?\n/);
+  const range = findSectionRange(lines, heading);
+  if (!range) {
+    return text;
+  }
+  const deleteStart = range.start > 0 && lines[range.start - 1].trim() === "" ? range.start - 1 : range.start;
+  lines.splice(deleteStart, range.end - deleteStart);
+  return `${lines.join("\n").replace(/\n+$/, "")}\n`;
+}
+
 function inferStateStatus(metadata) {
   if (isRunDone(metadata)) {
     return "done";
@@ -1960,12 +2917,39 @@ function checkpointDigestCommand({ dir, run }) {
   const metadata = runMetadata(runPath);
   const relativeRunPath = relPathFrom(dir, runPath);
   const lines = checkpointDigestLines(metadata, relativeRunPath);
+  const carryForward = carryForwardState(metadata);
+  const nextWavePack = nextWavePackState(metadata, relativeRunPath);
+  const waveHandoff = metadata.artifactType === "flow"
+    ? (metadata.waveHandoff.length > 0 ? metadata.waveHandoff : waveHandoffLines(metadata, relativeRunPath).map((line) => line.replace(/^- /, "")))
+    : [];
 
   console.log(`Project: ${dir}`);
   console.log(`Active run: ${relativeRunPath}`);
-  console.log("Compact-safe handoff:");
+  console.log("Resume card:");
   for (const line of lines) {
     console.log(`- ${line}`);
+  }
+  if (waveHandoff.length > 0) {
+    console.log("Deliberate compaction:");
+    console.log(`- Phase relation: ${carryForward.phaseRelation}`);
+    console.log(`- Baseline action: ${carryForward.compactionAction}`);
+    console.log(`- Brain verdict: ${carryForward.brainVerdict.verdict} (${carryForward.brainVerdict.confidence})`);
+    console.log(`- Brain rationale: ${carryForward.brainVerdict.rationale}`);
+    console.log(`- Explicit suggested action: ${carryForward.suggestedSessionAction}`);
+    console.log(`- Sealed decisions: ${metadata.waveHandoffSealedDecisions ?? "not recorded"}`);
+    console.log(`- What to forget: ${carryForward.whatToForget}`);
+    console.log(`- What must remain loaded: ${carryForward.whatMustRemainLoaded}`);
+    console.log(`- Resume payload: ${metadata.waveHandoffResumePayload ?? metadata.recommendedCommands[0] ?? defaultResumeCommand(relativeRunPath, metadata.artifactType)}`);
+  }
+  if (nextWavePack) {
+    console.log("Next-wave pack:");
+    console.log(`- Target: ${nextWavePack.target.phase} / ${nextWavePack.target.wave}`);
+    console.log(`- Baseline action: ${nextWavePack.compactionAction}`);
+    console.log(`- Brain verdict: ${nextWavePack.brainVerdict.verdict} (${nextWavePack.brainVerdict.confidence})`);
+    console.log(`- Brain rationale: ${nextWavePack.brainVerdict.rationale}`);
+    console.log(`- Explicit suggested action: ${nextWavePack.suggestedSessionAction}`);
+    console.log(`- Next verify: ${nextWavePack.nextVerify}`);
+    console.log(`- Resume payload: ${nextWavePack.resumePayload}`);
   }
 }
 
@@ -2016,14 +3000,15 @@ function runMetadataFromText(runPath, text) {
 
 function runMetadataStruct(runPath, text) {
   const artifactType = detectArtifactType(runPath, text);
-  const lockCurrentStep = findLabelValueInSection(text, "Locked Plan", "Current step")
+  const lockHeadings = ["Locked Plan", "Current Locked Plan"];
+  const lockCurrentStep = findLabelValueInAnySection(text, lockHeadings, "Current step")
     ?? findLabelValue(text, "Current step");
-  const lockCurrentVerify = findSectionLabelBullets(text, "Locked Plan", "Current verify");
-  const lockRecommendedCommands = findSectionLabelBullets(text, "Locked Plan", "Recommended next command");
-  const lockBlockers = findSectionLabelBullets(text, "Locked Plan", "Blockers");
-  const lockRequirementsStillSatisfied = findSectionLabelBullets(text, "Locked Plan", "Requirements still satisfied");
-  const lockVerificationEvidence = findSectionLabelBullets(text, "Locked Plan", "Verification evidence");
-  const lockExperienceInputs = findSectionLabelBullets(text, "Locked Plan", "Experience inputs");
+  const lockCurrentVerify = findSectionLabelBulletsAny(text, lockHeadings, "Current verify");
+  const lockRecommendedCommands = findSectionLabelBulletsAny(text, lockHeadings, "Recommended next command");
+  const lockBlockers = findSectionLabelBulletsAny(text, lockHeadings, "Blockers");
+  const lockRequirementsStillSatisfied = findSectionLabelBulletsAny(text, lockHeadings, "Requirements still satisfied");
+  const lockVerificationEvidence = findSectionLabelBulletsAny(text, lockHeadings, "Verification evidence");
+  const lockExperienceInputs = findSectionLabelBulletsAny(text, lockHeadings, "Experience inputs");
 
   return {
     path: runPath,
@@ -2065,27 +3050,33 @@ function runMetadataStruct(runPath, text) {
     sessionRisk: findLabelValue(text, "Session Risk") ?? findHeadingValue(text, "Session Risk"),
     contextRisk: findLabelValue(text, "Context Risk") ?? findHeadingValue(text, "Context Risk"),
     compactSafeSummary: findSectionBullets(text, "Compact-Safe Summary"),
+    waveHandoff: findSectionBullets(text, "Wave Handoff"),
     requirementsStillSatisfied: uniqueValues([
       ...findSectionBullets(text, "Requirements Still Satisfied"),
       ...lockRequirementsStillSatisfied
     ]),
-    verificationEvidence: lockVerificationEvidence,
+    verificationEvidence: uniqueValues([
+      ...lockVerificationEvidence,
+      ...(artifactType === "lock" ? findSectionBullets(text, "Verification Ledger") : [])
+    ]),
     affectedArea: uniqueValues([
       ...findSectionLabelBullets(text, "Requirement Baseline", "Affected area / blast radius"),
       ...findSectionLabelBullets(text, "Requirement Baseline", "Affected area"),
-      ...findSectionLabelBullets(text, "Locked Plan", "Affected area")
+      ...findSectionLabelBulletsAny(text, lockHeadings, "Affected area")
     ]),
     protectedBoundaries: uniqueValues([
       ...findSectionLabelBullets(text, "Requirement Baseline", "Out of scope"),
       ...findSectionLabelBullets(text, "Requirement Baseline", "Protected boundaries"),
-      ...findSectionLabelBullets(text, "Locked Plan", "Protected boundaries"),
+      ...findSectionLabelBulletsAny(text, lockHeadings, "Protected boundaries"),
       ...findSectionLabelBullets(text, "Current Execution Wave", "Invariant requirements")
     ]),
     evidenceBasis: uniqueValues([
       ...findSectionBullets(text, "Evidence Basis"),
-      ...findSectionLabelBullets(text, "Locked Plan", "Evidence basis")
+      ...findSectionLabelBulletsAny(text, lockHeadings, "Evidence basis")
     ]),
     grayAreaTriggers: findSectionLabelBullets(text, "Clarify State", "Gray-area triggers"),
+    currentExecutionWavePurpose: findSectionLabelBullets(text, "Current Execution Wave", "Purpose")[0] ?? null,
+    currentExecutionWaveDoneWhen: findSectionLabelBullets(text, "Current Execution Wave", "Done when")[0] ?? null,
     currentExecutionWaveVerify: findSectionLabelBullets(text, "Current Execution Wave", "Verify"),
     currentExecutionWaveRequirements: findSectionLabelBullets(text, "Current Execution Wave", "Covers requirements"),
     currentExecutionWaveInvariantRequirements: findSectionLabelBullets(text, "Current Execution Wave", "Invariant requirements"),
@@ -2108,12 +3099,52 @@ function runMetadataStruct(runPath, text) {
     ignoredWarnings: findSectionLabelBullets(text, "Experience Snapshot", "Ignored warnings"),
     digestExperienceConstraints: findResumeDigestField(text, "Experience constraints"),
     digestHookInvariants: findResumeDigestField(text, "Active hook-derived invariants"),
+    summaryPhaseRelation: findSectionBulletValue(text, "Compact-Safe Summary", "Phase relation"),
+    summaryBrainSessionActionVerdict: findSectionBulletValue(text, "Compact-Safe Summary", "Brain session-action verdict"),
+    summaryBrainVerdictConfidence: findSectionBulletValue(text, "Compact-Safe Summary", "Brain verdict confidence"),
+    summaryBrainVerdictRationale: findSectionBulletValue(text, "Compact-Safe Summary", "Brain verdict rationale"),
+    summaryBrainVerdictSource: findSectionBulletValue(text, "Compact-Safe Summary", "Brain verdict source"),
+    summarySuggestedSessionAction: findSectionBulletValue(text, "Compact-Safe Summary", "Suggested session action"),
+    summaryCarryForwardInvariants: findSectionBulletValue(text, "Compact-Safe Summary", "Carry-forward invariants"),
+    summaryWhatToForget: findSectionBulletValue(text, "Compact-Safe Summary", "What to forget"),
+    summaryWhatMustRemainLoaded: findSectionBulletValue(text, "Compact-Safe Summary", "What must remain loaded"),
     summaryExperienceConstraints: findSectionBulletValue(text, "Compact-Safe Summary", "Experience constraints"),
-    summaryHookInvariants: findSectionBulletValue(text, "Compact-Safe Summary", "Active hook-derived invariants")
+    summaryHookInvariants: findSectionBulletValue(text, "Compact-Safe Summary", "Active hook-derived invariants"),
+    waveHandoffTrigger: findSectionBulletValue(text, "Wave Handoff", "Trigger"),
+    waveHandoffSourceCheckpoint: findSectionBulletValue(text, "Wave Handoff", "Source checkpoint"),
+    waveHandoffNextTarget: findSectionBulletValue(text, "Wave Handoff", "Next target"),
+    waveHandoffPhaseRelation: findSectionBulletValue(text, "Wave Handoff", "Phase relation"),
+    waveHandoffBrainSessionActionVerdict: findSectionBulletValue(text, "Wave Handoff", "Brain session-action verdict"),
+    waveHandoffBrainVerdictConfidence: findSectionBulletValue(text, "Wave Handoff", "Brain verdict confidence"),
+    waveHandoffBrainVerdictRationale: findSectionBulletValue(text, "Wave Handoff", "Brain verdict rationale"),
+    waveHandoffBrainVerdictSource: findSectionBulletValue(text, "Wave Handoff", "Brain verdict source"),
+    waveHandoffSuggestedSessionAction: findSectionBulletValue(text, "Wave Handoff", "Suggested session action"),
+    waveHandoffSealedDecisions: findSectionBulletValue(text, "Wave Handoff", "Sealed decisions"),
+    waveHandoffCarryForwardInvariants: findSectionBulletValue(text, "Wave Handoff", "Carry-forward invariants"),
+    waveHandoffExpiredContext: findSectionBulletValue(text, "Wave Handoff", "Expired context"),
+    waveHandoffWhatToForget: findSectionBulletValue(text, "Wave Handoff", "What to forget"),
+    waveHandoffWhatMustRemainLoaded: findSectionBulletValue(text, "Wave Handoff", "What must remain loaded"),
+    waveHandoffResumePayload: findSectionBulletValue(text, "Wave Handoff", "Resume payload"),
+    nextWavePackTarget: findSectionLabelBullets(text, "Next Wave Pack", "Target")[0] ?? null,
+    nextWavePackDerivedFrom: findSectionLabelBullets(text, "Next Wave Pack", "Derived from")[0] ?? null,
+    nextWavePackPhaseRelation: findSectionLabelBullets(text, "Next Wave Pack", "Phase relation")[0] ?? null,
+    nextWavePackCompactionAction: findSectionLabelBullets(text, "Next Wave Pack", "Compaction action")[0] ?? null,
+    nextWavePackBrainSessionActionVerdict: findSectionLabelBullets(text, "Next Wave Pack", "Brain session-action verdict")[0] ?? null,
+    nextWavePackBrainVerdictConfidence: findSectionLabelBullets(text, "Next Wave Pack", "Brain verdict confidence")[0] ?? null,
+    nextWavePackBrainVerdictRationale: findSectionLabelBullets(text, "Next Wave Pack", "Brain verdict rationale")[0] ?? null,
+    nextWavePackBrainVerdictSource: findSectionLabelBullets(text, "Next Wave Pack", "Brain verdict source")[0] ?? null,
+    nextWavePackSuggestedSessionAction: findSectionLabelBullets(text, "Next Wave Pack", "Suggested session action")[0] ?? null,
+    nextWavePackWaveGoal: findSectionLabelBullets(text, "Next Wave Pack", "Wave goal")[0] ?? null,
+    nextWavePackDoneWhen: findSectionLabelBullets(text, "Next Wave Pack", "Done when")[0] ?? null,
+    nextWavePackNextVerify: findSectionLabelBullets(text, "Next Wave Pack", "Next verify")[0] ?? null,
+    nextWavePackCarryForwardInvariants: findSectionLabelBullets(text, "Next Wave Pack", "Carry-forward invariants")[0] ?? null,
+    nextWavePackWhatToForget: findSectionLabelBullets(text, "Next Wave Pack", "What to forget")[0] ?? null,
+    nextWavePackWhatMustRemainLoaded: findSectionLabelBullets(text, "Next Wave Pack", "What must remain loaded")[0] ?? null,
+    nextWavePackResumePayload: findSectionLabelBullets(text, "Next Wave Pack", "Resume payload")[0] ?? null
   };
 }
 
-function repairRunCommand({ dir, run }) {
+async function repairRunCommand({ dir, run }) {
   const runPath = resolveRunPath(dir, run);
   const relativeRunPath = relPathFrom(dir, runPath);
   const metadata = runMetadata(runPath);
@@ -2152,21 +3183,63 @@ Status:
   }
 
   let nextText = metadata.text;
+  const repairedMetadata = {
+    ...metadata,
+    nextVerify: metadata.nextVerify
+      ?? metadata.currentExecutionWaveVerify[0]
+      ?? "review the current verify path before continuing",
+    recommendedCommands: metadata.recommendedCommands.length > 0
+      ? metadata.recommendedCommands
+      : [defaultResumeCommand(relativeRunPath, metadata.artifactType)]
+  };
+  const brainVerdict = await fetchSessionActionBrainVerdict({
+    metadata: repairedMetadata,
+    relativeRunPath,
+    projectDir: dir
+  });
+  const enrichedMetadata = {
+    ...repairedMetadata,
+    summaryBrainSessionActionVerdict: brainVerdict.verdict,
+    summaryBrainVerdictConfidence: brainVerdict.confidence,
+    summaryBrainVerdictRationale: brainVerdict.rationale,
+    summaryBrainVerdictSource: brainVerdict.source,
+    summarySuggestedSessionAction: brainVerdict.suggestedAction,
+    waveHandoffBrainSessionActionVerdict: brainVerdict.verdict,
+    waveHandoffBrainVerdictConfidence: brainVerdict.confidence,
+    waveHandoffBrainVerdictRationale: brainVerdict.rationale,
+    waveHandoffBrainVerdictSource: brainVerdict.source,
+    waveHandoffSuggestedSessionAction: brainVerdict.suggestedAction,
+    nextWavePackBrainSessionActionVerdict: nextWavePackTargetFromMetadata(repairedMetadata) ? brainVerdict.verdict : null,
+    nextWavePackBrainVerdictConfidence: nextWavePackTargetFromMetadata(repairedMetadata) ? brainVerdict.confidence : null,
+    nextWavePackBrainVerdictRationale: nextWavePackTargetFromMetadata(repairedMetadata) ? brainVerdict.rationale : null,
+    nextWavePackBrainVerdictSource: nextWavePackTargetFromMetadata(repairedMetadata) ? brainVerdict.source : null,
+    nextWavePackSuggestedSessionAction: nextWavePackTargetFromMetadata(repairedMetadata) ? brainVerdict.suggestedAction : null
+  };
 
-  nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(metadata, relativeRunPath), "Requirement Baseline");
-  nextText = replaceOrInsertSection(nextText, "Compact-Safe Summary", compactSafeSummaryLines(metadata, relativeRunPath), "Resume Digest");
+  nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(enrichedMetadata, relativeRunPath), "Requirement Baseline");
+  nextText = replaceOrInsertSection(nextText, "Compact-Safe Summary", compactSafeSummaryLines(enrichedMetadata, relativeRunPath), "Resume Digest");
+  nextText = replaceOrInsertSection(nextText, "Wave Handoff", waveHandoffLines(enrichedMetadata, relativeRunPath), "Compact-Safe Summary");
+  const normalizedMetadata = runMetadataFromText(runPath, nextText);
+  const nextWavePack = nextWavePackLines(normalizedMetadata, relativeRunPath);
+  nextText = nextWavePack
+    ? replaceOrInsertSection(nextText, "Next Wave Pack", nextWavePack, "Wave Handoff")
+    : removeSection(nextText, "Next Wave Pack");
   nextText = replaceOrInsertSection(nextText, "Experience Snapshot", metadata.hasExperienceSnapshot
-    ? experienceSnapshotLines(metadata)
+    ? experienceSnapshotLines(enrichedMetadata)
     : defaultExperienceSnapshotLines(), "Approval Strategy");
   fs.writeFileSync(runPath, nextText, "utf8");
 
-  const repairedMetadata = runMetadata(runPath);
-  fs.writeFileSync(statePath, renderStateFile(relativeRunPath, repairedMetadata), "utf8");
+  const refreshedMetadata = runMetadata(runPath);
+  fs.writeFileSync(statePath, renderStateFile(relativeRunPath, refreshedMetadata), "utf8");
 
   console.log(`Repaired run: ${relativeRunPath}`);
   console.log("Refreshed:");
   console.log("- Resume Digest");
   console.log("- Compact-Safe Summary");
+  console.log("- Wave Handoff");
+  if (nextWavePack) {
+    console.log("- Next Wave Pack");
+  }
   console.log("- Experience Snapshot");
   console.log(`- ${relPathFrom(dir, statePath)}`);
 }
@@ -2174,7 +3247,12 @@ Status:
 function doctorRunCommand({ dir, run }) {
   const runPath = resolveRunPath(dir, run);
   const metadata = runMetadata(runPath);
+  const relativeRunPath = relPathFrom(dir, runPath);
   const text = metadata.text;
+  const lockHeadings = ["Locked Plan", "Current Locked Plan"];
+  const handoffScore = metadata.artifactType === "flow"
+    ? handoffSufficiency(metadata, relativeRunPath)
+    : null;
   const requiresExperienceCarryForward = meaningfulList([
     ...metadata.experienceActiveWarnings,
     ...metadata.experienceDecisionImpact,
@@ -2187,11 +3265,16 @@ function doctorRunCommand({ dir, run }) {
     ["Requirement Baseline", text.includes("## Requirement Baseline")],
     ["Resume Digest", text.includes("## Resume Digest")],
     ["Compact-Safe Summary", text.includes("## Compact-Safe Summary")],
+    ["Wave Handoff", text.includes("## Wave Handoff")],
     ["Experience Snapshot", metadata.hasExperienceSnapshot],
     ["Current gate", metadata.currentGate !== null],
     ["Execution mode", metadata.executionMode !== null],
     ["Burn Risk", metadata.burnRisk !== null],
     ["Approval Strategy", metadata.approvalStrategy !== null],
+    [
+      "Handoff sufficiency score",
+      handoffScore?.passed ?? false
+    ],
     [
       "Experience carry-forward",
       !requiresExperienceCarryForward || (
@@ -2207,12 +3290,12 @@ function doctorRunCommand({ dir, run }) {
   ];
   const lockChecks = [
     ["Requirement Baseline", text.includes("## Requirement Baseline")],
-    ["Locked Plan", text.includes("## Locked Plan")],
+    ["Locked Plan", hasSection(text, lockHeadings)],
     ["Current gate", metadata.currentGate !== null],
     ["Current execution position", metadata.currentPhase !== null && (metadata.currentStep !== null || metadata.currentWave !== null)],
     ["Current verify", metadata.nextVerify !== null],
     ["Recommended Next Command", metadata.recommendedCommands.length > 0],
-    ["Blockers", text.includes("Blockers:")],
+    ["Blockers", hasSection(text, "Blockers") || findSectionLabelBulletsAny(text, lockHeadings, "Blockers").length > 0],
     ["Verification evidence", metadata.verificationEvidence.length > 0],
     ["Requirements still satisfied", metadata.requirementsStillSatisfied.length > 0],
     ["Ignored warning feedback ids", missingIgnoredWarningFeedback.length === 0]
@@ -2220,11 +3303,23 @@ function doctorRunCommand({ dir, run }) {
   const checks = metadata.artifactType === "lock" ? lockChecks : flowChecks;
 
   let failed = false;
-  console.log(`Run: ${relPathFrom(dir, runPath)}`);
+  console.log(`Run: ${relativeRunPath}`);
   for (const [name, passed] of checks) {
     console.log(`${passed ? "PASS" : "FAIL"}: ${name}`);
     if (!passed) {
       failed = true;
+    }
+  }
+  if (handoffScore) {
+    console.log(`Handoff sufficiency: ${handoffScore.score}/${handoffScore.maxScore} (${handoffScore.phaseRelation} -> ${handoffScore.compactionAction})`);
+    if (handoffScore.requiresNextWavePack) {
+      console.log("Handoff mode: same-phase next-wave pack required");
+    }
+    if (handoffScore.missing.length > 0) {
+      console.log("Handoff sufficiency gaps:");
+      for (const gap of handoffScore.missing) {
+        console.log(`- ${gap}`);
+      }
     }
   }
   if (missingIgnoredWarningFeedback.length > 0) {
@@ -2238,19 +3333,24 @@ function doctorRunCommand({ dir, run }) {
   if (stateText) {
     const activeRun = normalizeStatePointer(findLabelValue(stateText, "Active run"));
     const activeLock = normalizeStatePointer(findLabelValue(stateText, "Active lock"));
+    const completedInactiveLock = metadata.artifactType === "lock" && isRunDone(metadata) && activeLock === null;
     const expectedPointer = metadata.artifactType === "lock"
-      ? (activeLock ?? activeRun)
+      ? (completedInactiveLock ? runPath : (activeLock ?? activeRun))
       : activeRun;
     const expectedPath = expectedPointer ? path.resolve(dir, expectedPointer) : null;
     const stateMatches = expectedPath === runPath;
     const pointerLabel = metadata.artifactType === "lock" ? "lock pointer" : "active run";
-    console.log(`${stateMatches ? "PASS" : "WARN"}: STATE.md ${pointerLabel} ${stateMatches ? "matches" : "does not match"} this run`);
+    if (completedInactiveLock) {
+      console.log("PASS: STATE.md has no active lock pointer because this lock artifact is already complete");
+    } else {
+      console.log(`${stateMatches ? "PASS" : "WARN"}: STATE.md ${pointerLabel} ${stateMatches ? "matches" : "does not match"} this run`);
+    }
   } else {
     console.log("WARN: STATE.md not found");
   }
 
   if (failed) {
-    console.log(`Suggested fix: node bin/quick-codex.js repair-run --dir ${dir} --run ${relPathFrom(dir, runPath)}`);
+    console.log(`Suggested fix: node bin/quick-codex.js repair-run --dir ${dir} --run ${relativeRunPath}`);
     throw new Error("doctor-run found one or more issues");
   }
 
@@ -2315,7 +3415,7 @@ async function main() {
         regressionCheckCommand(args);
         break;
       case "close-wave":
-        closeWaveCommand(args);
+        await closeWaveCommand(args);
         break;
       case "capture-hooks":
         captureHooksCommand(args);
@@ -2328,7 +3428,7 @@ async function main() {
         checkpointDigestCommand(args);
         break;
       case "repair-run":
-        repairRunCommand(args);
+        await repairRunCommand(args);
         break;
       case "doctor-run":
         doctorRunCommand(args);

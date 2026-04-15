@@ -40,22 +40,46 @@ Execution mode:
 - Current gate: plan-check
 - Current phase / wave: P1 / W1
 - Remaining blockers: none
-- Experience constraints: capture hook-derived constraints before resume
-- Active hook-derived invariants: do not rebuild context from chat memory when the run file already carries the hook impact
+- Experience constraints: checkpoint hook-derived constraints before a broad verify or likely pause
+- Active hook-derived invariants: a relevant warning stays active until the run records that it is no longer relevant
 - Next verify: confirm the verified plan
 - Recommended next command: `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
-
 ## Compact-Safe Summary
 - Goal: demonstrate the run-file structure
 - Current gate: plan-check
 - Current phase / wave: P1 / W1
 - Requirements still satisfied: R1, R2, R3, R4
 - Remaining blockers: none
-- Experience constraints: capture hook-derived constraints before resume
-- Active hook-derived invariants: do not rebuild context from chat memory when the run file already carries the hook impact
+- Experience constraints: checkpoint hook-derived constraints before a broad verify or likely pause
+- Active hook-derived invariants: a relevant warning stays active until the run records that it is no longer relevant
+- Phase relation: same-phase
+- Compaction action: compact
+- Brain session-action verdict: not-evaluated
+- Brain verdict confidence: n/a
+- Brain verdict rationale: Experience Engine verdict is not recorded yet; fall back to the protocol baseline.
+- Brain verdict source: not-recorded
+- Suggested session action: `/compact` after reviewing this summary and resume payload.
+- Carry-forward invariants: keep the hook-derived guardrail and the verified-plan checkpoint active during resume; preserve the active hook-derived guardrail and the verified-plan checkpoint; a relevant warning stays active until the run records that it is no longer relevant
+- What to forget: broad narration that does not change the next command
+- What must remain loaded: current phase/wave, next verify, recommended next command, and active experience constraint
 - Next verify: confirm the verified plan
 - Resume with: `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
-
+## Wave Handoff
+- Trigger: planning handoff
+- Source checkpoint: P1 / W1
+- Next target: execute P1 / W1
+- Phase relation: same-phase
+- Brain session-action verdict: not-evaluated
+- Brain verdict confidence: n/a
+- Brain verdict rationale: Experience Engine verdict is not recorded yet; fall back to the protocol baseline.
+- Brain verdict source: not-recorded
+- Suggested session action: `/compact` after reviewing this summary and resume payload.
+- Sealed decisions: the sample uses the run artifact as the source of truth for resume
+- Carry-forward invariants: keep the hook-derived guardrail and the verified-plan checkpoint active during resume; preserve the active hook-derived guardrail and the verified-plan checkpoint; a relevant warning stays active until the run records that it is no longer relevant
+- Expired context: exploratory chat recap that is already captured by the artifact
+- What to forget: broad narration that does not change the next command
+- What must remain loaded: current phase/wave, next verify, recommended next command, and active experience constraint
+- Resume payload: `Use $qc-flow and resume from .quick-codex-flow/sample-run.md.`
 ## Session Risk
 - low
 Why:
@@ -100,7 +124,6 @@ Still relevant:
 - yes, this sample demonstrates experience-preserving resume
 Ignored warnings:
 - none
-
 ## Clarify State
 Goal:
 - show the artifact structure
