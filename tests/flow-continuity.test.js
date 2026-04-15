@@ -6,6 +6,8 @@ import path from "node:path";
 
 import {
   baseRun,
+  finalRoadmapRun,
+  independentPhaseRun,
   makeProject,
   routedWaveRun,
   runCli,
@@ -175,6 +177,54 @@ test("close-wave --phase-done writes Latest Phase Close and moves the gate to ph
   assert.match(updated, /Decision:\n- next-phase-ready/);
   assert.match(updated, /- Current gate: phase-close/);
   assert.match(updated, /- Recommended next command: Use \$qc-flow and resume from \.quick-codex-flow\/sample\.md to review the phase close for P1 and either start the next phase or mark the run done\./);
+});
+
+test("close-wave --phase-done derives clear-style handoff when the next phase is independent", () => {
+  const project = makeProject(independentPhaseRun);
+  const result = runCliWithEnv(project.dir, {
+    QUICK_CODEX_SESSION_ACTION_BRAIN_FIXTURE: JSON.stringify({
+      verdict: "allow-clear",
+      confidence: "high",
+      rationale: "The next phase is independent, so clearing after recording the summary is safe."
+    })
+  }, "close-wave", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir, "--phase", "P1", "--wave", "W1", "--phase-done");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const updated = fs.readFileSync(project.runPath, "utf8");
+  assert.match(updated, /\| P1 \| done \| finish current phase \| R1 \| none \| phase close is recorded \| focused checks \|/);
+  assert.match(updated, /## Latest Phase Close[\s\S]*Phase Relation:\n- independent-next-phase/);
+  assert.match(updated, /## Compact-Safe Summary[\s\S]*- Phase relation: independent-next-phase/);
+  assert.match(updated, /## Compact-Safe Summary[\s\S]*- Compaction action: clear/);
+  assert.match(updated, /## Compact-Safe Summary[\s\S]*- Brain session-action verdict: allow-clear/);
+  assert.match(updated, /## Compact-Safe Summary[\s\S]*- Suggested session action: `\/clear` only after this summary is recorded and the next phase is confirmed independent\./);
+  assert.match(updated, /## Wave Handoff[\s\S]*- Phase relation: independent-next-phase/);
+  assert.match(updated, /## Wave Handoff[\s\S]*- Brain session-action verdict: allow-clear/);
+  assert.match(updated, /## Wave Handoff[\s\S]*- Suggested session action: `\/clear` only after this summary is recorded and the next phase is confirmed independent\./);
+});
+
+test("close-wave --phase-done closes the feature when the roadmap has no later phases", () => {
+  const project = makeProject(finalRoadmapRun);
+  const result = runCliWithEnv(project.dir, {
+    QUICK_CODEX_SESSION_ACTION_BRAIN_FIXTURE: JSON.stringify({
+      verdict: "allow-clear",
+      confidence: "high",
+      rationale: "The roadmap is complete, so the session can clear after the feature close is recorded."
+    })
+  }, "close-wave", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir, "--phase", "P1", "--wave", "W1", "--phase-done");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const updated = fs.readFileSync(project.runPath, "utf8");
+  assert.match(updated, /Current gate:\n- done/);
+  assert.match(updated, /\| P1 \| done \| complete the only planned phase \| R1 \| none \| feature close is recorded \| focused checks \|/);
+  assert.match(updated, /## Latest Phase Close[\s\S]*Decision:\n- feature-complete/);
+  assert.match(updated, /## Latest Feature Close/);
+  assert.match(updated, /Roadmap status:\n- done/);
+  assert.match(updated, /## Compact-Safe Summary[\s\S]*- Current gate: done/);
+  assert.match(updated, /## Compact-Safe Summary[\s\S]*- Phase relation: independent-next-phase/);
+  assert.match(updated, /## Compact-Safe Summary[\s\S]*- Compaction action: clear/);
+  assert.match(updated, /## Wave Handoff[\s\S]*- Trigger: feature close/);
+  assert.match(updated, /## Wave Handoff[\s\S]*- Next target: review completed feature close for P1/);
+  assert.match(updated, /- Recommended next command: Use \$qc-flow and resume from \.quick-codex-flow\/sample\.md to review the completed feature close and either archive the run or start a new feature\./);
+  const doctorResult = runCli(project.dir, "doctor-run", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
+  assert.equal(doctorResult.status, 0, doctorResult.stderr || doctorResult.stdout);
 });
 
 test("init scaffolds a sample flow artifact that passes doctor-run", () => {

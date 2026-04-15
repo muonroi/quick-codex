@@ -1,6 +1,6 @@
 {
   "name": "quick-codex",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "A lightweight workflow layer for Codex CLI with persistent run artifacts, resume-safe skills, and local recovery commands.",
   "author": "Muonroi",
   "keywords": [
@@ -38,7 +38,12 @@
     "BENCHMARK-PROOF-THRASH.md",
     "BENCHMARK-PROOF-FAILURE.md",
     "BENCHMARK-PROOF-POSITIONING.md",
+    "BENCHMARK-PROOF-WORKFLOW-HARDENING.md",
+    "BENCHMARK-PROOF-CARRY-FORWARD.md",
+    "BENCHMARK-PROOF-BRAIN-SESSION-ACTION.md",
+    "BENCHMARK-PROOF-COMPACTION-MODES.md",
     "QUICKSTART.md",
+    "CHANGELOG.md",
     "CONTRIBUTING.md",
     "EXAMPLES.md",
     "TASK-SELECTION.md",

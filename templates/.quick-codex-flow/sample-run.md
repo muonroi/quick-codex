@@ -145,6 +145,7 @@ Why:
 
 ## Verified Plan
 Goal: demonstrate one phase and one wave.
+Feature / issue this roadmap closes: sample-medium-task
 Plan inputs / evidence:
 - run-file template
 - CLI `status`, `resume`, and `doctor-run` fields
@@ -157,6 +158,9 @@ Affected area coverage:
 Not started.
 
 ## Latest Phase Close
+Not started.
+
+## Latest Feature Close
 Not started.
 
 ## Current Status

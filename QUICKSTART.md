@@ -109,6 +109,12 @@ If the task tends to drift or reopen scope:
 - phase / wave decomposition
 - sequential execution
 
+If your Codex build exposes a native planner:
+- keep a short 3 to 7 step mirror there
+- use it to show the current gate and active phase or wave
+- when the active route is a phase checkpoint, show whether the next action is `compact`, `clear`, or `relock`
+- keep the run artifact as the source of truth
+
 ## 3. Use the narrow executor when you want step-by-step verification
 
 If you want one-step execution with tight verification:
@@ -136,6 +142,8 @@ node bin/quick-codex.js resume --dir /path/to/project
 Expected behavior:
 - `status` tells you the active continuity artifact, gate, risks, and next verify
 - `resume` prints the exact next prompt to paste plus the active carry-forward cues and any experience constraints to keep in view
+- when native planner support exists in the current Codex build, `qc-flow` should keep that planner synced as a short progress mirror rather than a second source of continuity truth
+- at phase checkpoints, that planner mirror should also surface the action family the operator should expect next: `compact`, `clear`, or `relock`
 - `checkpoint-digest` prints a resume card plus deliberate-compaction cues before a pause or a broad verify, including `Baseline action`, optional `Brain verdict`, `Explicit suggested action`, and any same-phase `Next Wave Pack`
 - `repair-run` rewrites stale flow-run resumability sections, including `Wave Handoff`, preserves compact lock artifacts, and realigns `STATE.md`
 - `doctor-run` tells you if the flow run or lock artifact is stale, incomplete, or missing required continuity fields, including a scored handoff-sufficiency check for flow runs
@@ -143,7 +151,7 @@ Expected behavior:
 - `verify-wave` runs the active wave's `Verify:` bullets and appends one-line evidence to `Verification Ledger`
 - `regression-check` reruns the active regression/protected-boundary checks, preferring the current wave, then `Latest Phase Close -> Verification completed`, and only then `Next verify`
 - if either verification command reports a blocked unsafe command, inspect the artifact and rerun with `--allow-shell-verify` only when the shell syntax is intentional
-- `close-wave` marks the active verified wave done, can auto-route to the next same-phase wave defined in `Verified Plan -> Waves`, and can write `Latest Phase Close` with `Phase Relation` plus keep/drop carry-forward fields when the phase is complete
+- `close-wave` marks the active verified wave done, can auto-route to the next same-phase wave defined in `Verified Plan -> Waves`, can write `Latest Phase Close` with `Phase Relation` plus keep/drop carry-forward fields when the phase is complete, and when the roadmap is complete it writes `Latest Feature Close` and moves the run to `done`
 - when the next route stays in the same phase, `close-wave` also writes a narrow `Next Wave Pack` so the next wave can resume without rereading the whole execution-wave narrative
 - `CONTINUITY-CONTRACT.md` defines which surface owns run, lock, pointer, and guidance continuity state
 

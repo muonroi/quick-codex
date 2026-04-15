@@ -197,6 +197,70 @@ Auto-mode guardrails:
 - in `auto`, prefer short checkpoint transitions over broad recap prose
 - if the next safe move is not explicit, stop and emit a concrete blocker or next command
 
+## Native planner integration
+
+When Codex exposes a native planner or progress-list tool, use it as an operator-visible mirror of the current workflow.
+
+The native planner is useful because:
+- it gives the user an immediate step list in the Codex UI
+- it makes gate transitions visible without rereading the whole artifact
+- it reduces hidden drift during long runs
+
+The native planner is not the source of truth.
+The run artifact still owns continuity, resume, risk, experience, and proof state.
+
+Rules:
+- prefer the native planner when it is available; do not ask the user whether to use it
+- keep the planner short, usually 3 to 7 high-level steps
+- keep exactly one step `in_progress` at a time
+- treat the verified plan as the roadmap for one feature or issue, and let the planner mirror that roadmap instead of inventing parallel phases
+- mirror workflow gates rather than copying every artifact heading verbatim
+- update the planner when moving between `clarify`, `research`, `plan`, `plan-check`, `execute`, `phase-close`, and `done`
+- when execution is active, mirror the active phase or wave, not the full historical phase table
+- when a same-phase route is already explicit, make the next planner step match the `Next Wave Pack`
+- at any deliberate compaction checkpoint, mirror the current `Phase Relation` and compaction action family in the planner: `compact`, `clear`, or `relock`
+- when the roadmap has no later pending or in-progress phase, make the planner reflect feature close rather than pretending another phase still exists
+- when the checkpoint is `same-phase`, show that the planner is carrying forward into the next wave rather than ending the run
+- when the checkpoint is `independent-next-phase`, show that the next safe operator action is `clear`, not `compact`
+- when the checkpoint is `relock-before-next-phase`, show that the next safe operator action is `relock`, and keep the planner on the checkpoint until relock is done
+- when a relock or plan revision happens, rewrite the planner so it matches the current verified route instead of incrementally patching stale steps
+- if the native planner is unavailable in the current Codex build, continue normally with artifact-only continuity
+
+Recommended planner shape:
+- `Clarify goal and constraints`
+- `Map affected area and protected boundaries`
+- `Research missing repo facts`
+- `Verify plan and lock active wave`
+- `Execute Pn / Wn`
+- `Phase close or final verification`
+
+Mirror rules by gate:
+- in `clarify` or `research`, keep planning steps broad and front-half only
+- in `plan` or `plan-check`, show the transition into verified execution readiness
+- in `execute`, keep the current step focused on the active wave or locked handoff
+- in `phase-close`, switch the last active step to phase-close or relock instead of pretending execution is still linear
+- in `done`, close the planner around feature completion, not just “task finished”
+- in `phase-close`, label the checkpoint action explicitly:
+  - `Phase checkpoint -> compact into Pn / Wn`
+  - `Phase checkpoint -> clear before next independent phase`
+  - `Phase checkpoint -> relock before next phase`
+- when the roadmap is complete, label the checkpoint explicitly:
+  - `Feature checkpoint -> clear and archive`
+  - `Feature checkpoint -> review feature close`
+
+Checkpoint mirror rules:
+- do not hide compaction action inside a note if the checkpoint is the active decision
+- if `Wave Handoff` or `Compact-Safe Summary` changes the operator-facing action, resync the planner immediately
+- if `Brain session-action verdict` is stricter than the baseline, let the planner reflect the stricter action family while keeping the artifact as authority
+- if a same-phase checkpoint emitted `Next Wave Pack`, make the planner's next step target that same pack explicitly
+
+Do not:
+- treat the native planner as durable memory
+- leave the native planner stale after a relock, blocker, or wave completion
+- copy long rationale, risk logs, or proof text into the planner
+- let the native planner disagree with `Recommended next command`, `Current gate`, or `Next verify`
+- let the planner imply `/compact` when the checkpoint resolved to `clear` or `relock`
+
 ## Required workflow
 
 Follow this sequence:
@@ -221,6 +285,7 @@ This run file is the source of truth across turns.
 
 The run file must preserve:
 - original goal
+- the feature or issue the roadmap is intended to close
 - planning inputs or source artifacts
 - required outcomes
 - constraints
@@ -723,6 +788,7 @@ Compressed execution handoff:
 Mode-aware execution:
 - in `auto`, if the current wave verifies cleanly and the next wave or phase is already defined, continue without waiting for another user message
 - in `manual`, stop at the current safe wave or phase checkpoint even if the next step is obvious
+- when the native planner is available, update it at each safe checkpoint before the broader execution narrative grows stale
 
 ## Anti-thrash rules
 
@@ -888,13 +954,15 @@ Use this response shape:
 3. `Research artifact` status when Gate 4 is active
 4. `Verified Plan` summary once planning is complete:
    - what the plan is for
+   - which feature or issue the roadmap closes
    - what evidence it rests on
    - what outcome the plan now enables
 5. `Phase / Wave` table when execution is ready
 6. `Current execution wave` artifact during implementation
 7. `Phase close` status when a phase is finishing
-8. `Verification result` after each wave or phase
-9. `Recommended next command` when:
+8. `Feature close` status when the roadmap is complete
+9. `Verification result` after each wave or phase
+10. `Recommended next command` when:
    - a planning-only run ends
    - execution is deferred
    - a phase closes and the next step is clear
@@ -935,6 +1003,7 @@ In `lean` mode:
 - prefer compressed handoff fields over broad summaries
 - prefer bounded verify evidence over pasted logs
 - prefer the `Compact-Safe Summary` over any broader recap when the next step is already explicit
+- prefer an even shorter native planner mirror over re-explaining the whole gate sequence when the planner already shows it clearly
 
 ## Artifact formatting rules
 

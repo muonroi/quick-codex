@@ -52,6 +52,7 @@ Open risks:
 
 Decision:
 - `next-phase-ready`
+- `feature-complete`
 - `needs-fix`
 - `relock-required`
 
@@ -61,6 +62,7 @@ Why:
 
 Rules:
 - create or update this artifact at the end of every completed phase
+- if the roadmap is complete, mark the decision `feature-complete`, emit `Latest Feature Close`, and move the run to `done`
 - if the decision is `needs-fix` or `relock-required`, do not start the next phase
 - keep carry-forward notes short and actionable
 - make `Phase Relation` explicit before deciding whether the next checkpoint should clear, compact, or relock

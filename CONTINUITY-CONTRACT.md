@@ -117,9 +117,19 @@ It must capture:
 |---|---|
 | `.quick-codex-flow/<run>.md` | Canonical continuity surface for planning, resume, risk, experience, and proof |
 | `.quick-codex-lock/<task>.md` | Canonical continuity surface for locked execution detail inside the current phase |
+| Native Codex planner | Ephemeral operator-visible mirror of current progress; never canonical over the run artifact |
 | `.quick-codex-flow/STATE.md` | Active-run pointer only; not a substitute for the run artifact |
 | CLI recovery (`status`, `resume`, `checkpoint-digest`, `repair-run`, `doctor-run`) | Read, print, repair, and validate the shared continuity subset by artifact type |
 | Scaffolded `AGENTS.md` | Entry guidance only; teaches where continuity state lives without duplicating the full contract |
+
+Native planner rules:
+- use it to mirror the current gate, active phase or wave, and the next safe checkpoint when the Codex build exposes it
+- keep it shorter than the run artifact and treat it as disposable UI state
+- resync it after relock, wave close, phase close, or any blocker that changes the active route
+- if it disagrees with the run artifact, the run artifact wins
+- when the active route is a deliberate compaction checkpoint, the planner should also mirror the action family: `compact`, `clear`, or `relock`
+- the planner should make phase-checkpoint intent visible enough that the operator does not need to open the artifact just to learn whether the next action is `/compact`, `/clear`, or relock
+- the planner should mirror the verified roadmap for one feature or issue; when no later phase remains, it should surface feature close rather than inventing more roadmap steps
 
 ## Canonical Ownership Matrix
 

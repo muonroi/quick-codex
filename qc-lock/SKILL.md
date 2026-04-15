@@ -16,6 +16,28 @@ Philosophy:
 - Single is good: the workflow must work without any external service.
 - Best together: when Experience Engine hooks surface a relevant warning, use it to strengthen the current step's implementation or verification instead of treating it as noise.
 
+## Native planner integration
+
+When Codex exposes a native planner or progress-list tool, use it as a compact mirror of the locked loop.
+
+The native planner should mirror:
+- preflight when required
+- the current phase
+- the locked step list
+- which step is currently `in_progress`
+- whether the loop is back in verify, fix, or relock
+
+Rules:
+- keep the planner short and execution-shaped
+- use one planner step per locked step when the phase is small enough, otherwise summarize at the phase level
+- rewrite the planner after any relock so the visible steps match the new lock exactly
+- mark a step `done` only after its declared verification passes
+- if verification fails and the step stays active, keep the same planner step `in_progress`
+- if the native planner is unavailable, continue with the lock artifact only
+
+The lock artifact remains authoritative.
+Do not let the native planner override locked scope, verify requirements, or blocker state.
+
 ## When to use
 
 Use this skill for:
@@ -76,6 +98,7 @@ Never advance past a failing step.
 Never expand scope without relocking.
 Never lock from a fuzzy affected area.
 Never lock while a gray-area trigger is still active.
+- Never leave the native planner showing a later step while the current locked step is still failing or blocked.
 
 ## Persistent state
 

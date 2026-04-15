@@ -42,6 +42,7 @@ Design rule:
 
 In practice, that means:
 - resume from files instead of guessing from stale chat state
+- use Codex's native planner as a short-lived progress mirror when it is available, without depending on it for continuity
 - compact at safe checkpoints instead of waiting for context loss to happen at random
 - carry forward only the next phase or wave actually needs instead of dragging the whole transcript forward
 - surface blast radius before implementation pretends to be obvious
@@ -214,6 +215,11 @@ YOU start with a task
 
 The common idea is that workflow state should live in files, not just in chat.
 
+When the Codex build exposes a native planner or progress-list UI, Quick Codex should use it as a visible mirror of the current gate, active phase or wave, and the current checkpoint action family.
+At a phase checkpoint, that means the planner should make `compact`, `clear`, or `relock` visible instead of leaving it buried only in the artifact.
+That planner is intentionally ephemeral.
+The run artifact remains the source of truth for resume, risk, experience, proof, and handoff.
+
 Quick Codex is not trying to be a project operating system. It is trying to solve a smaller Codex CLI problem set well:
 - task durability when work spans multiple turns
 - reliable resume after interruption or stale session state
@@ -340,7 +346,7 @@ Recommended usage:
 - `verify-wave` runs the active wave verify commands from the artifact and appends bounded evidence into `Verification Ledger`
 - `regression-check` reruns the active protected-boundary verification commands, preferring the current wave, then `Latest Phase Close -> Verification completed`, and only falling back to `Next verify` when no broader command source exists
 - verification commands run without a shell by default; shell syntax such as redirection, pipelines, leading env assignment, or subshells requires `--allow-shell-verify` or `QUICK_CODEX_ALLOW_SHELL_VERIFY=1`
-- `close-wave` marks the active verified wave done, refreshes the summaries, auto-routes to the next same-phase wave when `Verified Plan -> Waves` already defines it, and can write `Latest Phase Close` when `--phase-done` is passed
+- `close-wave` marks the active verified wave done, refreshes the summaries, auto-routes to the next same-phase wave when `Verified Plan -> Waves` already defines it, can write `Latest Phase Close` when `--phase-done` is passed, and closes the feature into `Latest Feature Close` plus `Current gate: done` when the roadmap has no later planned phase
 - `upgrade` reruns install behavior and removes legacy skill names if present
 - `uninstall` removes installed skills from the target path and can also remove project scaffolds when `--dir` is provided explicitly
 - the CLI prints a short update notice when npm has a newer published version

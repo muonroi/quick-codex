@@ -262,6 +262,38 @@ Goal:
 
 ## Current Execution Wave`);
 
+export const independentPhaseRun = verifiedWaveRun.replace("## Current Execution Wave", `## Verified Plan
+Goal:
+- validate independent next phase routing
+
+| Phase | Status | Purpose | Covers requirements | Depends on | Exit criteria | Verify |
+|---|---|---|---|---|---|---|
+| P1 | in_progress | finish current phase | R1 | none | phase close is recorded | focused checks |
+| P2 | pending | start independent follow-up phase | R1 | none | follow-up phase is ready | reset checks |
+
+## Waves
+| Wave | Phase | Status | Change | Done when | Verify |
+|---|---|---|---|---|---|
+| W1 | P1 | in_progress | finish first phase | first phase closes | \`printf first-check\` |
+| W1 | P2 | pending | start independent second phase | second phase is active | \`printf phase-two\` |
+
+## Current Execution Wave`);
+
+export const finalRoadmapRun = verifiedWaveRun.replace("## Current Execution Wave", `## Verified Plan
+Goal:
+- validate feature roadmap completion
+
+| Phase | Status | Purpose | Covers requirements | Depends on | Exit criteria | Verify |
+|---|---|---|---|---|---|---|
+| P1 | in_progress | complete the only planned phase | R1 | none | feature close is recorded | focused checks |
+
+## Waves
+| Wave | Phase | Status | Change | Done when | Verify |
+|---|---|---|---|---|---|
+| W1 | P1 | in_progress | finish the final roadmap wave | feature close is recorded | \`printf first-check\` |
+
+## Current Execution Wave`);
+
 export const baseLockRun = `# Run: sample-lock
 
 ## Requirement Baseline

@@ -12,6 +12,8 @@ Resume convention:
 - Prefer resuming from `.quick-codex-flow/<run-file>.md` instead of rebuilding context from chat.
 - Treat the run artifact as the source of truth when chat context and artifact state diverge.
 - Treat `.quick-codex-lock/<task>.md` as the source of truth for locked execution details when `qc-lock` is active.
+- When Codex exposes a native planner, use it as a short progress mirror only; do not treat it as the source of truth.
+- At checkpoints, keep the planner explicit about whether the next operator action is `compact`, `clear`, or `relock`.
 - Treat `.quick-codex-flow/STATE.md` as the pointer surface only: `Active run` points to the main continuity artifact and optional `Active lock` points to the currently active lock handoff.
 - Treat `AGENTS.md` as entry guidance, not as the authoritative continuity state.
 

@@ -79,9 +79,9 @@ Execution mode:
 - Resume with: `Use $qc-flow and resume from .quick-codex-flow/<task-slug>.md ...`
 
 ## Wave Handoff
-- Trigger: completed wave | phase close | broad verify | escalation | deliberate pause
+- Trigger: completed wave | phase close | feature close | broad verify | escalation | deliberate pause
 - Source checkpoint: P1 / W1
-- Next target: P1 / W2 | phase-close | done
+- Next target: P1 / W2 | phase-close | review completed feature close | done
 - Phase relation: same-phase | dependent-next-phase | independent-next-phase | relock-before-next-phase
 - Brain session-action verdict: allow-compact | allow-clear | relock-first | block-action | unavailable | not-evaluated
 - Brain verdict confidence: high | medium | low | n/a
@@ -179,6 +179,9 @@ Ignored warnings:
 ## Latest Phase Close
 <paste the most recent phase-close artifact here>
 
+## Latest Feature Close
+<paste the most recent feature-close artifact here>
+
 ## Current Status
 Current phase: P1
 Current wave: W1
@@ -207,9 +210,11 @@ Rules:
 - this file is the source of truth across turns
 - reread it before resuming
 - read `Resume Digest` before deeper sections
+- if a native Codex planner is available, keep a short mirror of the current gate and active phase or wave synced to this file, but do not rely on it for continuity
 - keep `.quick-codex-flow/STATE.md` aligned with the current active run
 - always update `Current gate` when moving between workflow stages
 - keep `Requirement Baseline` stable unless the user changes requirements
+- treat `Verified Plan` as the roadmap for one feature or issue; phases and waves should stay aligned to it until feature close
 - keep `Affected area / blast radius` current when planning or relocking changes what may be touched
 - update `Requirements Still Satisfied` after each completed phase
 - keep `Inputs` current when the plan depends on specific source artifacts or docs
@@ -217,9 +222,11 @@ Rules:
 - when pasting artifacts into a section, do not repeat the section heading inside that section
 - keep `Recommended Next Command` concrete enough that the user can paste it directly
 - do not mark a planning-only run complete until `Recommended Next Command` is filled in
+- do not mark the run `done` until the roadmap is complete and `Latest Feature Close` is recorded
 - refresh `Resume Digest` after planning handoff, wave completion, and phase close
 - refresh `Compact-Safe Summary` after every completed wave and phase
 - refresh `Wave Handoff` after every completed wave and phase
+- refresh `Latest Feature Close` when the final roadmap checkpoint is reached
 - refresh `Next Wave Pack` when same-phase routing is explicit after a completed wave; remove it when the route is no longer explicit
 - refresh `Compact-Safe Summary` before any broad or long-running verify and before stopping for a pause
 - refresh `Wave Handoff` before any broad or long-running verify and before stopping for a pause

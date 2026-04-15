@@ -5,13 +5,13 @@ Use these as starting prompts.
 ## Codex Lost The Thread
 
 ```text
-Use $qc-flow for this task: Codex keeps losing the thread on this medium task. Create a persistent run artifact, surface the full affected area, prove context sufficiency before planning, and make the next command explicit.
+Use $qc-flow for this task: Codex keeps losing the thread on this medium task. Create a persistent run artifact, surface the full affected area, prove context sufficiency before planning, make the next command explicit, and keep the native planner synced if this Codex build exposes it, including compact / clear / relock at checkpoints.
 ```
 
 ## Resume After Interruption
 
 ```text
-Use $qc-flow and resume from .quick-codex-flow/<run-file>.md. Restate the current gate, execution mode, current phase and wave, blockers, burn risk, approval strategy, experience constraints, hook-derived invariants, next verify, and continue from file state instead of chat memory.
+Use $qc-flow and resume from .quick-codex-flow/<run-file>.md. Restate the current gate, execution mode, current phase and wave, blockers, burn risk, approval strategy, experience constraints, hook-derived invariants, next verify, continue from file state instead of chat memory, and resync the native planner if it is available, including the current compact / clear / relock decision when the run is at a checkpoint.
 ```
 
 Useful local commands:

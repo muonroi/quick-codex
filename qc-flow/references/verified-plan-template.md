@@ -5,6 +5,7 @@ Use this once context is sufficient and before execution begins.
 ```markdown
 ## Verified Plan
 Goal: <one sentence>
+Feature / issue this roadmap closes: <one feature, issue, or scoped deliverable>
 Requirements covered: <R1, R2>
 Out of scope: <explicit exclusions>
 Plan inputs / evidence:
@@ -45,6 +46,7 @@ Assumptions:
 
 Verification of plan:
 - Every phase maps to requirements: yes/no
+- The roadmap closes one feature or issue cleanly: yes/no
 - Affected area is explicit: yes/no
 - Evidence basis is sufficient: yes/no
 - Dependencies are clear: yes/no
@@ -59,5 +61,7 @@ Plan status:
 
 Rules:
 - do not start execution until `Plan status` is `verified`
+- treat this table as the roadmap for one feature or issue, not as a loose task list
+- every phase and wave must trace back to this roadmap until feature close is recorded
 - if implementation changes dependencies or required outcomes, return here and relock
 - only one wave should be `in_progress` during execution

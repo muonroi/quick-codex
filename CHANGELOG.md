@@ -2,12 +2,16 @@
 
 ## Unreleased
 
+## 0.4.0
+
 Highlights:
 - added `Experience Snapshot` to the `qc-flow` run-file contract so hook-derived warnings can survive resume and compaction-sensitive handoffs
 - extended `status`, `resume`, `repair-run`, and `doctor-run` to carry and validate experience-aware resumability fields
 - added `capture-hooks` so recent Experience Engine warning text can be synced into `Experience Snapshot` without manual copy-paste per field
 - added `sync-experience` so a concrete tool action can be sent to Experience Engine `/api/intercept` and merged into the active run automatically
 - updated templates and docs so Experience Engine is part of the resume contract, not only a side-channel suggestion
+- added deliberate compaction proofs for carry-forward footprint, brain-advised session action, and `compact` versus `clear` checkpoint modes
+- taught `qc-flow` to treat `Verified Plan` as a feature roadmap, keep native planner mirrors aligned with that roadmap, and close the run with `Latest Feature Close` when the final roadmap phase completes
 
 ## 0.3.0
 

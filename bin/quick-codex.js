@@ -717,6 +717,53 @@ function parseMarkdownTableInSection(text, heading) {
   };
 }
 
+function normalizeDependencyList(value) {
+  return String(value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0 && entry.toLowerCase() !== "none");
+}
+
+function laterPlannedPhases(metadata, phase) {
+  if (metadata.verifiedPlanPhases.length > 0) {
+    return metadata.verifiedPlanPhases.filter((row) => {
+      const rowPhase = (row.Phase ?? "").trim();
+      if (!rowPhase || rowPhase === phase) {
+        return false;
+      }
+      const status = (row.Status ?? "").trim().toLowerCase();
+      return status === "pending" || status === "in_progress" || status.length === 0;
+    });
+  }
+
+  const phaseMap = new Map();
+  for (const row of metadata.verifiedPlanWaves) {
+    const rowPhase = (row.Phase ?? "").trim();
+    if (!rowPhase || rowPhase === phase) {
+      continue;
+    }
+    const status = (row.Status ?? "").trim().toLowerCase();
+    if (!(status === "pending" || status === "in_progress" || status.length === 0)) {
+      continue;
+    }
+    if (!phaseMap.has(rowPhase)) {
+      phaseMap.set(rowPhase, { Phase: rowPhase, Status: row.Status ?? "" });
+    }
+  }
+  return [...phaseMap.values()];
+}
+
+function hasExplicitRoadmap(metadata) {
+  return metadata.verifiedPlanPhases.length > 0 || metadata.verifiedPlanWaves.length > 0;
+}
+
+function featureRoadmapComplete(metadata, phaseDone, phase) {
+  if (!phaseDone || !hasExplicitRoadmap(metadata)) {
+    return false;
+  }
+  return laterPlannedPhases(metadata, phase).length === 0;
+}
+
 function renderMarkdownTable(headers, rows) {
   const headerLine = `| ${headers.join(" | ")} |`;
   const separatorLine = `| ${headers.map(() => "---").join(" | ")} |`;
@@ -2192,6 +2239,26 @@ function updateWaveTableStatuses(text, currentPhase, currentWave) {
   return replaceMarkdownTableInSection(text, "Waves", table);
 }
 
+function updatePhaseTableStatuses(text, currentPhase, phaseDone) {
+  if (!phaseDone) {
+    return text;
+  }
+
+  const table = parseMarkdownTableInSection(text, "Verified Plan");
+  if (!table) {
+    return text;
+  }
+
+  table.rows = table.rows.map((row) => {
+    if (row.Phase === currentPhase) {
+      return { ...row, Status: "done" };
+    }
+    return row;
+  });
+
+  return replaceMarkdownTableInSection(text, "Verified Plan", table);
+}
+
 function verificationLedgerEntries(text) {
   return findSectionBullets(text, "Verification Ledger")
     .map((value) => {
@@ -2239,18 +2306,54 @@ function closeWavePhaseRelation(metadata, phase, phaseDone, nextWaveRoute = null
     return "relock-before-next-phase";
   }
 
-  const hasLaterPhase = metadata.verifiedPlanWaves.some((row) => {
-    if (row.Phase === phase) {
-      return false;
-    }
-    const status = (row.Status ?? "").trim().toLowerCase();
-    return status === "pending" || status === "in_progress" || status.length === 0;
+  const laterPhases = laterPlannedPhases(metadata, phase);
+  const hasLaterPhase = laterPhases.length > 0;
+
+  if (!hasLaterPhase) {
+    return hasExplicitRoadmap(metadata) ? "independent-next-phase" : "relock-before-next-phase";
+  }
+
+  const hasDependentLaterPhase = laterPhases.some((row) => {
+    const dependencies = normalizeDependencyList(row["Depends on"]);
+    return dependencies.includes(phase);
   });
 
-  return hasLaterPhase ? "dependent-next-phase" : "relock-before-next-phase";
+  return hasDependentLaterPhase ? "dependent-next-phase" : "independent-next-phase";
 }
 
-function closeWavePhaseCloseLines(metadata, phase, requirementsCovered, requirementsStillSatisfied, verificationEntries, phaseRelation) {
+function featureCloseLines(metadata, phase, requirementsStillSatisfied, verificationEntries) {
+  const stillSatisfied = requirementsStillSatisfied.length > 0 ? requirementsStillSatisfied : ["not recorded"];
+  const completedPhases = metadata.verifiedPlanPhases.length > 0
+    ? metadata.verifiedPlanPhases.map((row) => `- ${(row.Phase ?? "").trim() || "unknown"}: ${((row.Status ?? "").trim() || "done")}`)
+    : [`- ${phase}: done`];
+  const verificationCompleted = verificationEntries.length > 0
+    ? verificationEntries.map((entry) => `- ${entry.mode} ${entry.phase}/${entry.wave} \`${entry.command}\` -> ${entry.outcome}`)
+    : ["- not recorded"];
+
+  return [
+    `Feature: ${metadata.goal ?? "not recorded"}`,
+    "Roadmap status:",
+    "- done",
+    "Completed through phase:",
+    `- ${phase}`,
+    "Completed phases:",
+    ...completedPhases,
+    "Verification completed:",
+    ...verificationCompleted,
+    "Requirements still satisfied:",
+    ...stillSatisfied.map((value) => `- ${value}`),
+    "Decision:",
+    "- feature-complete",
+    "What is sealed:",
+    "- The planned roadmap is complete and should not be reopened without a new feature or relock.",
+    "Next action:",
+    "- Review the feature close, archive the run, or start a new feature in a fresh roadmap.",
+    "Why:",
+    "- No later pending or in-progress phase remains in the verified roadmap."
+  ];
+}
+
+function closeWavePhaseCloseLines(metadata, phase, requirementsCovered, requirementsStillSatisfied, verificationEntries, phaseRelation, featureComplete = false) {
   const covered = requirementsCovered.length > 0 ? requirementsCovered : ["not recorded"];
   const stillSatisfied = requirementsStillSatisfied.length > 0 ? requirementsStillSatisfied : covered;
   const verificationCompleted = verificationEntries.length > 0
@@ -2261,7 +2364,9 @@ function closeWavePhaseCloseLines(metadata, phase, requirementsCovered, requirem
   return [
     `Phase: ${phase}`,
     "Result:",
-    `- Wave ${phase}/${verificationEntries[0]?.wave ?? "unknown"} verified cleanly and is ready for phase close.`,
+    featureComplete
+      ? `- Wave ${phase}/${verificationEntries[0]?.wave ?? "unknown"} verified cleanly and completes the planned roadmap.`
+      : `- Wave ${phase}/${verificationEntries[0]?.wave ?? "unknown"} verified cleanly and is ready for phase close.`,
     "Requirements covered:",
     ...covered.map((value) => `- ${value}`),
     "Verification completed:",
@@ -2285,9 +2390,11 @@ function closeWavePhaseCloseLines(metadata, phase, requirementsCovered, requirem
     "Open risks:",
     "- none",
     "Decision:",
-    "- next-phase-ready",
+    featureComplete ? "- feature-complete" : "- next-phase-ready",
     "Why:",
-    "- The verification ledger contains passing entries for the active wave and no failing entries for that same phase/wave."
+    featureComplete
+      ? "- The verification ledger contains passing entries for the active wave and no later pending or in-progress phase remains in the verified roadmap."
+      : "- The verification ledger contains passing entries for the active wave and no failing entries for that same phase/wave."
   ];
 }
 
@@ -2315,17 +2422,23 @@ async function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
     ...requirementsCovered
   ]);
   const nextWaveRoute = plannedNextWaveRoute(metadata, phaseWave.phase, phaseWave.wave, phaseDone);
+  const featureComplete = featureRoadmapComplete(metadata, phaseDone, phaseWave.phase);
   const phaseRelation = closeWavePhaseRelation(metadata, phaseWave.phase, phaseDone, nextWaveRoute);
   const compactionAction = compactionActionForRelation(phaseRelation);
-  const nextGate = phaseDone ? "phase-close" : "execute";
+  const nextGate = featureComplete ? "done" : (phaseDone ? "phase-close" : "execute");
   const nextBlockers = phaseDone || nextWaveRoute ? "none" : `next wave not yet locked after ${phaseWave.phase} / ${phaseWave.wave}`;
-  const nextVerify = phaseDone
-    ? `review the phase close for ${phaseWave.phase} and decide the next phase or mark the run done`
-    : (nextWaveRoute?.verify ?? `lock the next wave after ${phaseWave.phase} / ${phaseWave.wave}`);
-  const nextCommand = closeWaveRecommendedCommand(relativeRunPath, phaseWave.phase, phaseWave.wave, phaseDone, nextWaveRoute);
+  const nextVerify = featureComplete
+    ? `review the completed feature close and decide whether to archive the run or start a new feature`
+    : (phaseDone
+      ? `review the phase close for ${phaseWave.phase} and decide the next phase or mark the run done`
+      : (nextWaveRoute?.verify ?? `lock the next wave after ${phaseWave.phase} / ${phaseWave.wave}`));
+  const nextCommand = featureComplete
+    ? `Use $qc-flow and resume from ${relativeRunPath} to review the completed feature close and either archive the run or start a new feature.`
+    : closeWaveRecommendedCommand(relativeRunPath, phaseWave.phase, phaseWave.wave, phaseDone, nextWaveRoute);
   let nextText = metadata.text;
   nextText = replaceFirstLabelValue(nextText, "Current gate", nextGate);
   nextText = updateWaveTableStatuses(nextText, phaseWave.phase, phaseWave.wave);
+  nextText = updatePhaseTableStatuses(nextText, phaseWave.phase, phaseDone);
   nextText = replaceOrInsertSection(
     nextText,
     "Current Status",
@@ -2352,8 +2465,16 @@ async function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
     nextText = replaceOrInsertSection(
       nextText,
       "Latest Phase Close",
-      closeWavePhaseCloseLines(metadata, phaseWave.phase, requirementsCovered, nextRequirementsStillSatisfied, passingEntries, phaseRelation),
+      closeWavePhaseCloseLines(metadata, phaseWave.phase, requirementsCovered, nextRequirementsStillSatisfied, passingEntries, phaseRelation, featureComplete),
       "Current Execution Wave"
+    );
+  }
+  if (featureComplete) {
+    nextText = replaceOrInsertSection(
+      nextText,
+      "Latest Feature Close",
+      featureCloseLines(metadata, phaseWave.phase, nextRequirementsStillSatisfied, passingEntries),
+      "Current Status"
     );
   }
 
@@ -2411,26 +2532,34 @@ async function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
     summaryWhatMustRemainLoaded: nextWaveRoute
       ? `current phase / wave ${nextWaveRoute.phase} / ${nextWaveRoute.wave}, next verify, and recommended next command`
       : `phase relation ${phaseRelation}, requirements still satisfied, and the next recommended command`,
-    waveHandoffTrigger: phaseDone ? "phase close" : "completed wave",
+    waveHandoffTrigger: featureComplete ? "feature close" : (phaseDone ? "phase close" : "completed wave"),
     waveHandoffSourceCheckpoint: `${phaseWave.phase} / ${phaseWave.wave}`,
-    waveHandoffNextTarget: nextWaveRoute ? `${nextWaveRoute.phase} / ${nextWaveRoute.wave}` : `review phase close for ${phaseWave.phase}`,
+    waveHandoffNextTarget: featureComplete
+      ? `review completed feature close for ${phaseWave.phase}`
+      : (nextWaveRoute ? `${nextWaveRoute.phase} / ${nextWaveRoute.wave}` : `review phase close for ${phaseWave.phase}`),
     waveHandoffPhaseRelation: phaseRelation,
     waveHandoffBrainSessionActionVerdict: finalBrainVerdict.verdict,
     waveHandoffBrainVerdictConfidence: finalBrainVerdict.confidence,
     waveHandoffBrainVerdictRationale: finalBrainVerdict.rationale,
     waveHandoffBrainVerdictSource: finalBrainVerdict.source,
     waveHandoffSuggestedSessionAction: explicitSuggestedAction,
-    waveHandoffSealedDecisions: phaseDone
+    waveHandoffSealedDecisions: featureComplete
+      ? `The verified roadmap is complete through ${phaseWave.phase}, and this feature should be treated as closed unless a new roadmap is opened.`
+      : (phaseDone
       ? `Verification for ${phaseWave.phase} is complete and the current phase output should not be rediscovered.`
-      : `Wave ${phaseWave.phase} / ${phaseWave.wave} is complete and the next same-phase wave may start without rebuilding earlier proof.`,
+      : `Wave ${phaseWave.phase} / ${phaseWave.wave} is complete and the next same-phase wave may start without rebuilding earlier proof.`),
     waveHandoffCarryForwardInvariants: nextRequirementsStillSatisfied.join("; "),
-    waveHandoffExpiredContext: phaseDone
+    waveHandoffExpiredContext: featureComplete
+      ? "phase-local execution narration may be dropped once the feature close is reviewed"
+      : (phaseDone
       ? "wave-local execution notes from the completed phase no longer need to stay loaded once the proof is captured"
-      : "the completed wave's temporary implementation narration no longer needs to stay loaded once the route is updated",
+      : "the completed wave's temporary implementation narration no longer needs to stay loaded once the route is updated"),
     waveHandoffWhatToForget: "broad chat recap and temporary wave-local narration that do not change the next safe route",
     waveHandoffWhatMustRemainLoaded: nextWaveRoute
       ? `current phase / wave ${nextWaveRoute.phase} / ${nextWaveRoute.wave}, next verify, and recommended next command`
-      : `phase relation ${phaseRelation}, requirements still satisfied, and the next recommended command`,
+      : (featureComplete
+      ? `completed feature close summary, requirements still satisfied, and the next recommended command`
+      : `phase relation ${phaseRelation}, requirements still satisfied, and the next recommended command`),
     nextWavePackTarget: nextWaveRoute ? `${nextWaveRoute.phase} / ${nextWaveRoute.wave}` : null,
     nextWavePackDerivedFrom: `${phaseWave.phase} / ${phaseWave.wave}`,
     nextWavePackPhaseRelation: nextWaveRoute ? phaseRelation : null,
@@ -3081,6 +3210,7 @@ function runMetadataStruct(runPath, text) {
     currentExecutionWaveRequirements: findSectionLabelBullets(text, "Current Execution Wave", "Covers requirements"),
     currentExecutionWaveInvariantRequirements: findSectionLabelBullets(text, "Current Execution Wave", "Invariant requirements"),
     latestPhaseCloseVerificationCompleted: findSectionLabelBullets(text, "Latest Phase Close", "Verification completed"),
+    verifiedPlanPhases: parseMarkdownTableInSection(text, "Verified Plan")?.rows ?? [],
     verifiedPlanWaves: parseMarkdownTableInSection(text, "Waves")?.rows ?? [],
     lockCurrentVerify,
     hasExperienceSnapshot: text.includes("## Experience Snapshot"),
