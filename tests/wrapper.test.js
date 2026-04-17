@@ -1587,6 +1587,19 @@ test("interactive wrapper shell exits cleanly after processing a piped message",
   assert.match(result.stdout, /fake codex assistant reply/);
 });
 
+test("interactive wrapper shell prints lifecycle progress before the final response", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-progress-"));
+  const fakeCodex = makeFakeCodex(projectDir, []);
+  const result = runWrapCliWithInputAndEnv(projectDir, {
+    ...fakeCodex.env
+  }, "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug\n/exit\n", "chat", "--dir", projectDir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] analyzing task=/);
+  assert.match(result.stdout, /\[wrapper\] route=qc-lock \| source=heuristic-fallback|\[wrapper\] route=qc-lock \| source=task-router/);
+  assert.match(result.stdout, /\[wrapper\] launching adapter=exec/);
+  assert.match(result.stdout, /fake codex assistant reply/);
+});
+
 test("interactive wrapper shell applies /perm and /approval before launching the next task", () => {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-perm-"));
   const fakeCodex = makeFakeCodex(projectDir, []);

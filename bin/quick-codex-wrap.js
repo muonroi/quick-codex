@@ -252,6 +252,29 @@ function ensureOutputPath(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
+function shellProgressLogger(enabled = true) {
+  if (!enabled) {
+    return () => {};
+  }
+  return (message) => {
+    console.log(`[wrapper] ${message}`);
+  };
+}
+
+function summarizeRouteSelection(decision) {
+  const parts = [
+    `route=${decision.route ?? "artifact"}`,
+    `source=${decision.routeSource ?? decision.promptSource ?? "unknown"}`
+  ];
+  if (decision.taskRouting?.confidence != null) {
+    parts.push(`confidence=${decision.taskRouting.confidence}`);
+  }
+  if (decision.taskRouting?.source && decision.taskRouting.source !== decision.routeSource) {
+    parts.push(`brain=${decision.taskRouting.source}`);
+  }
+  return parts.join(" | ");
+}
+
 function saveWrapperStateIfPossible({ dir, state, artifact, decision, execution }) {
   if (!artifact) {
     return null;
@@ -354,7 +377,8 @@ async function executeRoutedDecision({
   dryRun = false,
   outputLastMessage = null,
   preferredMode = null,
-  appServerSession = null
+  appServerSession = null,
+  onProgress = null
 }) {
   const modelRoute = await resolveExperienceModelRoute({
     dir,
@@ -369,9 +393,11 @@ async function executeRoutedDecision({
     reasoningEffort: modelRoute.applied ? (modelRoute.reasoningEffort ?? decision.reasoningEffort ?? null) : (decision.reasoningEffort ?? null),
     modelRoute
   };
+  onProgress?.(`model=${routedDecision.model ?? "default"} | reasoning=${routedDecision.reasoningEffort ?? "default"} | modelRoute=${modelRoute.applied ? (modelRoute.source ?? "brain") : "fallback-default"}`);
   const startedAt = Date.now();
 
   try {
+    onProgress?.(`launching adapter=${routedDecision.nativeThreadAction ? "app-server" : "exec"} | handoff=${routedDecision.handoffAction ?? "launch-task"} | session=${routedDecision.sessionStrategy ?? routedDecision.mode}`);
     const execution = await runCodexCommand({
       dir,
       decision: routedDecision,
@@ -413,7 +439,7 @@ async function executeRoutedDecision({
   }
 }
 
-async function executePreparedTaskDecision(args, baseDecision, runtime = null) {
+async function executePreparedTaskDecision(args, baseDecision, runtime = null, onProgress = null) {
   if (baseDecision.needsDisambiguation) {
     return {
       decision: baseDecision,
@@ -435,6 +461,9 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null) {
     route: baseDecision.route,
     dryRun: args.dryRun
   });
+  onProgress?.(summarizeRouteSelection(baseDecision));
+  onProgress?.(`reason=${baseDecision.reason}`);
+  onProgress?.(`bootstrap=${bootstrapState.summary}`);
   const prompt = baseDecision.promptSource === "active-run"
     ? baseDecision.prompt
     : compileTaskPrompt({
@@ -463,7 +492,8 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null) {
     policy,
     dryRun: args.dryRun,
     outputLastMessage: args.outputLastMessage,
-    appServerSession: runtime?.appServerSession ?? null
+    appServerSession: runtime?.appServerSession ?? null,
+    onProgress
   });
   const execution = routed.execution;
   const artifact = postTaskArtifact(args.dir, decision.activeRun ?? null);
@@ -497,7 +527,7 @@ async function runAutoTask(args, runtime = null) {
   return maybeFollowAuto(args, await executeTaskAuto(args, runtime), runtime);
 }
 
-async function executeArtifactAuto(args, artifactOverride = null, runtime = null) {
+async function executeArtifactAuto(args, artifactOverride = null, runtime = null, onProgress = null) {
   const artifact = artifactOverride ?? readRunArtifact({ dir: args.dir, run: args.run });
   const state = loadWrapperState(args.dir);
   const wrapperConfig = loadWrapperConfig(args.dir);
@@ -507,6 +537,7 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
     wrapperConfig
   });
   const decision = decideWrapperAction({ artifact, state, sameSession: true, preferBoundaryAction: true });
+  onProgress?.(`continuation run=${artifact.relativeRunPath} | gate=${artifact.currentGate ?? "unknown"} | phase=${artifact.currentPhaseWave ?? "unknown"} | handoff=${decision.handoffAction ?? "launch-task"}`);
   ensureOutputPath(args.outputLastMessage);
   const routed = await executeRoutedDecision({
     dir: args.dir,
@@ -515,7 +546,8 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
     policy,
     dryRun: args.dryRun,
     outputLastMessage: args.outputLastMessage,
-    appServerSession: runtime?.appServerSession ?? null
+    appServerSession: runtime?.appServerSession ?? null,
+    onProgress
   });
   const execution = routed.execution;
   const nextState = saveWrapperState(args.dir, state, {
@@ -536,7 +568,7 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
   };
 }
 
-async function maybeFollowAuto(args, seed, runtime = null) {
+async function maybeFollowAuto(args, seed, runtime = null, onProgress = null) {
   if (seed.response?.needsDisambiguation) {
     return seed.response;
   }
@@ -593,6 +625,7 @@ async function maybeFollowAuto(args, seed, runtime = null) {
     });
 
     if (stop.shouldStop) {
+      onProgress?.(`follow-stop=${stop.stopReason}`);
       return {
         ...lastResponse,
         followRequested: true,
@@ -602,10 +635,11 @@ async function maybeFollowAuto(args, seed, runtime = null) {
       };
     }
 
+    onProgress?.(`follow-turn=${turn}/${args.maxTurns} | nextRun=${continuation.artifact.relativeRunPath} | checkpoint-advanced=true`);
     const continued = await executeArtifactAuto({
       ...args,
       run: continuation.artifact.relativeRunPath
-    }, continuation.artifact, runtime);
+    }, continuation.artifact, runtime, onProgress);
     previousArtifact = continuation.artifact;
     lastResponse = continued.response;
     turns.push({
@@ -954,6 +988,7 @@ async function runChatShell(args) {
     completer: shellCompleter,
     terminal: process.stdin.isTTY ?? true
   });
+  const progress = shellProgressLogger(!args.json);
   let turnCount = 0;
   let pendingDisambiguation = null;
 
@@ -1030,8 +1065,9 @@ async function runChatShell(args) {
           };
           const response = await maybeFollowAuto(
             turnArgs,
-            await executePreparedTaskDecision(turnArgs, forcedDecision, runtime),
-            runtime
+            await executePreparedTaskDecision(turnArgs, forcedDecision, runtime, progress),
+            runtime,
+            progress
           );
           renderShellResponse(response, args.json);
           if (rl.terminal) {
@@ -1076,6 +1112,7 @@ async function runChatShell(args) {
       }
 
       const taskText = shellCommand.task ?? trimmed;
+      progress(`analyzing task="${taskText.slice(0, 120)}${taskText.length > 120 ? "..." : ""}"`);
       const decisionProbe = await taskDecisionFromArgs({
         ...args,
         task: taskText,
@@ -1107,8 +1144,9 @@ async function runChatShell(args) {
       };
       const response = await maybeFollowAuto(
         turnArgs,
-        await executePreparedTaskDecision(turnArgs, decisionProbe, runtime),
-        runtime
+        await executePreparedTaskDecision(turnArgs, decisionProbe, runtime, progress),
+        runtime,
+        progress
       );
       renderShellResponse(response, args.json);
       if (rl.terminal) {
