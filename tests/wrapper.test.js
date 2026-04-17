@@ -593,6 +593,26 @@ test("wrap prompt consumes Experience Engine route-task verdict when available",
   }
 });
 
+test("wrap prompt enables Experience routing from ~/.experience config without requiring routing=true", () => {
+  const projectDir = process.cwd();
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-exp-config-"));
+  const homeDir = path.join(configDir, "home");
+  fs.mkdirSync(path.join(homeDir, ".experience"), { recursive: true });
+  fs.writeFileSync(path.join(homeDir, ".experience", "config.json"), JSON.stringify({
+    serverBaseUrl: "http://127.0.0.1:9",
+    serverAuthToken: "token-without-routing-flag"
+  }, null, 2), "utf8");
+  const result = runWrapCliWithEnv(projectDir, {
+    HOME: homeDir,
+    QUICK_CODEX_WRAP_TASK_ROUTER_TIMEOUT_MS: "50"
+  }, "prompt", "--task", "build a thin wrapper before Codex CLI that auto-routes tasks, planning flow, and manual continuation steps", "--json");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.routeSource, "heuristic-fallback");
+  assert.equal(payload.taskRouting.enabled, true);
+  assert.equal(payload.taskRouting.applied, false);
+});
+
 test("wrap prompt falls back to heuristic routing when Experience Engine route-task is unavailable", () => {
   const projectDir = process.cwd();
   const result = runWrapCliWithEnv(projectDir, {
@@ -1790,6 +1810,20 @@ test("wrap prompt prefers a suitable active run over a generic raw-task qc-flow 
   assert.equal(payload.promptSource, "active-run");
   assert.equal(payload.activeRun, ".quick-codex-flow/wrapper-state-aware.md");
   assert.match(payload.prompt, /resume from \.quick-codex-flow\/wrapper-state-aware\.md/i);
+});
+
+test("wrap prompt does not let an unrelated workspace active run hijack an explicitly named sibling repo task", () => {
+  const activeRun = routedWaveRun
+    .replace("# Run: sample", "# Run: codex cli wrapper orchestrator")
+    .replace("Original goal:\n- validate quick-codex command surface", "Original goal:\n- continue codex cli wrapper orchestrator work")
+    .replaceAll(".quick-codex-flow/sample.md", ".quick-codex-flow/codex-cli-wrapper-orchestrator.md");
+  const project = makeProject(activeRun, "codex-cli-wrapper-orchestrator.md");
+  fs.mkdirSync(path.join(project.dir, "storyflow"), { recursive: true });
+  const result = runWrapCli(project.dir, "prompt", "--dir", project.dir, "--task", "I have a repository called Storyflow. Please explore it and review its anti-bot feature.", "--json");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.notEqual(payload.promptSource, "active-run");
+  assert.notEqual(payload.routeSource, "active-run");
 });
 
 test("wrap prompt does not prefer the bootstrap sample run", () => {

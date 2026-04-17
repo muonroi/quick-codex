@@ -12,6 +12,33 @@ export const cliPath = path.join(repoRoot, "bin", "quick-codex.js");
 export const wrapCliPath = path.join(repoRoot, "bin", "quick-codex-wrap.js");
 export const codexShimPath = path.join(repoRoot, "bin", "codex-qc-shim.js");
 
+function mergedTestEnv(envExtra = {}) {
+  const env = {
+    ...process.env,
+    QUICK_CODEX_NO_UPDATE_CHECK: "1",
+    ...envExtra
+  };
+  let hasConfiguredEngine = false;
+  if (Object.prototype.hasOwnProperty.call(envExtra, "HOME")) {
+    const experienceConfigPath = path.join(envExtra.HOME, ".experience", "config.json");
+    try {
+      const config = JSON.parse(fs.readFileSync(experienceConfigPath, "utf8"));
+      hasConfiguredEngine = Boolean(config.serverBaseUrl && (config.serverAuthToken ?? config.server?.authToken));
+    } catch {
+      hasConfiguredEngine = false;
+    }
+  }
+  const taskRouterExplicit = env.QUICK_CODEX_WRAP_ENABLE_TASK_ROUTER === "1" || Boolean(env.QUICK_CODEX_EXPERIENCE_URL);
+  const modelRouterExplicit = env.QUICK_CODEX_WRAP_ENABLE_MODEL_ROUTER === "1" || Boolean(env.QUICK_CODEX_EXPERIENCE_URL);
+  if (!taskRouterExplicit && !hasConfiguredEngine && env.QUICK_CODEX_WRAP_DISABLE_TASK_ROUTER == null) {
+    env.QUICK_CODEX_WRAP_DISABLE_TASK_ROUTER = "1";
+  }
+  if (!modelRouterExplicit && !hasConfiguredEngine && env.QUICK_CODEX_WRAP_DISABLE_MODEL_ROUTER == null) {
+    env.QUICK_CODEX_WRAP_DISABLE_MODEL_ROUTER = "1";
+  }
+  return env;
+}
+
 export function makeProject(runText, runName = "sample.md") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-cli-"));
   const flowDir = path.join(dir, ".quick-codex-flow");
@@ -76,7 +103,7 @@ export function writeStateFile(dir, body) {
 export function runCli(projectDir, ...args) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1" },
+    env: mergedTestEnv(),
     encoding: "utf8"
   });
 }
@@ -84,7 +111,7 @@ export function runCli(projectDir, ...args) {
 export function runCliWithEnv(projectDir, envExtra, ...args) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
+    env: mergedTestEnv(envExtra),
     encoding: "utf8"
   });
 }
@@ -92,7 +119,7 @@ export function runCliWithEnv(projectDir, envExtra, ...args) {
 export function runWrapCli(projectDir, ...args) {
   return spawnSync(process.execPath, [wrapCliPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1" },
+    env: mergedTestEnv(),
     encoding: "utf8"
   });
 }
@@ -100,7 +127,7 @@ export function runWrapCli(projectDir, ...args) {
 export function runWrapCliWithInput(projectDir, input, ...args) {
   return spawnSync(process.execPath, [wrapCliPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1" },
+    env: mergedTestEnv(),
     encoding: "utf8",
     input
   });
@@ -109,7 +136,7 @@ export function runWrapCliWithInput(projectDir, input, ...args) {
 export function runWrapCliWithInputAndEnv(projectDir, envExtra, input, ...args) {
   return spawnSync(process.execPath, [wrapCliPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
+    env: mergedTestEnv(envExtra),
     encoding: "utf8",
     input
   });
@@ -118,7 +145,7 @@ export function runWrapCliWithInputAndEnv(projectDir, envExtra, input, ...args) 
 export function runWrapCliWithEnv(projectDir, envExtra, ...args) {
   return spawnSync(process.execPath, [wrapCliPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
+    env: mergedTestEnv(envExtra),
     encoding: "utf8"
   });
 }
@@ -126,7 +153,7 @@ export function runWrapCliWithEnv(projectDir, envExtra, ...args) {
 export function runCodexShim(projectDir, ...args) {
   return spawnSync(process.execPath, [codexShimPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1" },
+    env: mergedTestEnv(),
     encoding: "utf8"
   });
 }
@@ -134,7 +161,7 @@ export function runCodexShim(projectDir, ...args) {
 export function runCodexShimWithEnv(projectDir, envExtra, ...args) {
   return spawnSync(process.execPath, [codexShimPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
+    env: mergedTestEnv(envExtra),
     encoding: "utf8"
   });
 }
@@ -142,7 +169,7 @@ export function runCodexShimWithEnv(projectDir, envExtra, ...args) {
 export function runCodexShimWithInputAndEnv(projectDir, envExtra, input, ...args) {
   return spawnSync(process.execPath, [codexShimPath, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
+    env: mergedTestEnv(envExtra),
     encoding: "utf8",
     input
   });
