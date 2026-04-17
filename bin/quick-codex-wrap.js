@@ -1112,6 +1112,7 @@ async function runChatShell(args) {
       }
 
       const taskText = shellCommand.task ?? trimmed;
+      progress(`turn=${turnCount + 1} | profile=${shellState.executionProfile} | follow=${shellState.follow ? "on" : "off"} | maxTurns=${shellState.maxTurns}`);
       progress(`analyzing task="${taskText.slice(0, 120)}${taskText.length > 120 ? "..." : ""}"`);
       const decisionProbe = await taskDecisionFromArgs({
         ...args,
