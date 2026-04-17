@@ -23,10 +23,12 @@
   },
   "type": "module",
   "bin": {
-    "quick-codex": "bin/quick-codex.js"
+    "quick-codex": "bin/quick-codex.js",
+    "quick-codex-wrap": "bin/quick-codex-wrap.js"
   },
   "files": [
     "bin",
+    "lib",
     "qc-flow",
     "qc-lock",
     "scripts",
@@ -44,6 +46,7 @@
     "BENCHMARK-PROOF-COMPACTION-MODES.md",
     "QUICKSTART.md",
     "CHANGELOG.md",
+    "WRAPPER.md",
     "CONTRIBUTING.md",
     "EXAMPLES.md",
     "TASK-SELECTION.md",

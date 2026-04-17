@@ -1,5 +1,20 @@
 # Quick Start
 
+Recommended current surface: install the shim and use Quick Codex as a thin wrapper in front of `codex`.
+
+```bash
+npx quick-codex install
+npx quick-codex install-codex-shim --force
+codex
+```
+
+After the shim is installed:
+- bare `codex` opens the interactive wrapper shell
+- `codex "some task"` becomes a one-shot wrapper launch
+- `codex --qc-bypass` is the escape hatch for raw Codex behavior
+
+The rest of this file covers the lower-level install and workflow details.
+
 ## 1. Install the skills
 
 Fastest install from npm:
@@ -186,7 +201,62 @@ node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --to
 `single is good, better together`:
 - without Experience Engine, Quick Codex still produces the protocol baseline and a safe suggested action
 - with Experience Engine, the same checkpoint can also carry a guarded brain verdict that confirms or vetoes the baseline action
-- model choice and cost routing stay upstream in Experience Engine; Quick Codex only consumes the returned verdict
+- model choice and cost routing stay upstream in Experience Engine; `quick-codex-wrap` now consumes the returned `route-model` verdict, passes `-m <model>` to Codex, and posts `route-feedback` after executed turns
+- if Experience Engine also returns `reasoningEffort`, the wrapper passes it through as `-c model_reasoning_effort="..."` so the Codex reasoning menu does not need to be picked manually for routed launches
+- raw-task routing now handles Vietnamese prompts better in both the local fallback router and the shell-first wrapper path
+
+Wrapper-first local UX:
+
+```bash
+node bin/quick-codex.js install-codex-shim --force
+codex
+```
+
+- bare `codex` now opens the interactive wrapper shell
+- each entered line is routed through the thin wrapper before Codex sees it
+- `codex "fix the wrapper follow loop"` stays as the one-shot wrapper shortcut
+- qc-only overlays also default into the wrapper, so `codex --qc-full --qc-task "..."` now routes to wrapper auto mode without needing `--qc-auto`
+- if Experience Engine returns `needs_disambiguation`, the shell shows numbered route options plus a free-text path instead of guessing
+- `codex --qc-bypass` is the escape hatch for the raw Codex TUI
+- shell commands:
+  - `/task <text>`
+  - `/perm <safe|full|yolo|readonly>`
+  - `/route <auto|flow|lock|direct>`
+  - `/approval <manual|autonomous|untrusted>`
+  - `/mode <fast|safe|follow-safe>`
+  - `/follow <on|off>`
+  - `/turns <n>`
+  - `Tab` completes these slash commands and known profile values
+
+Project-local wrapper defaults live in:
+
+```json
+{
+  "version": 1,
+  "defaults": {
+    "permissionProfile": "safe",
+    "approvalMode": null,
+    "executionProfile": "follow-safe",
+    "chat": {
+      "follow": true,
+      "maxTurns": 5
+    }
+  }
+}
+```
+
+Manual route overrides:
+
+```bash
+codex --qc-force-flow --qc-task "research the repo and plan the work" --qc-json
+codex --qc-force-lock --qc-task "fix one narrow bug in README.md" --qc-json
+codex --qc-force-direct --qc-task "explain the wrapper architecture" --qc-json
+```
+
+Routing safety layers:
+- brain route when Experience Engine is alive
+- heuristic fallback when the brain is unavailable
+- explicit manual override when the operator wants to force the route
 
 If you are updating an older lock artifact:
 - add the compact bridge fields instead of copying flow sections

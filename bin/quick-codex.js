@@ -16,6 +16,7 @@ const SKILLS = ["qc-flow", "qc-lock"];
 const LEGACY_SKILLS = ["codex-gsd-flow", "codex-locked-loop"];
 const DEFAULT_TARGET = path.join(os.homedir(), ".agents", "skills");
 const LEGACY_TARGET = path.join(os.homedir(), ".codex", "skills");
+const DEFAULT_SHIM_TARGET = path.join(os.homedir(), ".local", "bin");
 const SUPPORTED_DISCOVERY_TARGETS = [DEFAULT_TARGET, LEGACY_TARGET];
 const FLOW_DIRNAME = ".quick-codex-flow";
 const UPDATE_CACHE_PATH = path.join(os.homedir(), ".quick-codex", "update-check.json");
@@ -25,6 +26,7 @@ const UPDATE_CHECK_TIMEOUT_MS = 1500;
 function usage() {
   console.log(`Usage:
   quick-codex install [--copy] [--target <dir>]
+  quick-codex install-codex-shim [--target <dir>] [--real-codex <path>] [--force]
   quick-codex doctor [--target <dir>]
   quick-codex init [--dir <project-dir>] [--force]
   quick-codex status [--dir <project-dir>] [--run <path>]
@@ -45,6 +47,7 @@ function usage() {
 
 Commands:
   install    Install qc-flow and qc-lock into ~/.agents/skills
+  install-codex-shim  Install a codex-compatible shim so \`codex --qc-*\` routes into quick-codex-wrap
   doctor     Check package shape, skill files, local install, and lint status
   init       Scaffold AGENTS.md guidance, .quick-codex-flow/, and a sample run artifact
   status     Show the current active run, gate, risks, experience constraints, and next command
@@ -83,7 +86,8 @@ function parseArgs(argv) {
     toolInputFile: null,
     engineUrl: null,
     timeoutMs: 3000,
-    allowShellVerify: false
+    allowShellVerify: false,
+    realCodex: null
   };
 
   if (argv.length === 0 || ["-h", "--help", "help"].includes(argv[0])) {
@@ -117,6 +121,14 @@ function parseArgs(argv) {
       }
       result.dir = path.resolve(argv[i]);
       result.dirExplicit = true;
+      continue;
+    }
+    if (arg === "--real-codex") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--real-codex requires a path");
+      }
+      result.realCodex = path.resolve(argv[i]);
       continue;
     }
     if (arg === "--run") {
@@ -275,6 +287,79 @@ function installCommand({ copy, target }) {
     }
   }
   console.log("Restart Codex to reload the skills.");
+}
+
+function executableExists(filePath) {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveRealCodexBinary(explicitPath = null) {
+  if (explicitPath) {
+    if (!fs.existsSync(explicitPath)) {
+      throw new Error(`Real codex binary not found: ${explicitPath}`);
+    }
+    return explicitPath;
+  }
+
+  const currentNode = process.execPath;
+  const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  for (const entry of pathEntries) {
+    const candidate = path.join(entry, "codex");
+    if (!fs.existsSync(candidate) || !executableExists(candidate)) {
+      continue;
+    }
+    try {
+      const candidateText = fs.readFileSync(candidate, "utf8");
+      if (candidateText.includes("codex-qc-shim.js")) {
+        continue;
+      }
+    } catch {
+      // Binary or unreadable launchers are fine; keep scanning by executability.
+    }
+    const resolved = fs.realpathSync(candidate);
+    if (resolved !== currentNode) {
+      return candidate;
+    }
+  }
+  throw new Error("Could not discover the real codex binary from PATH. Pass --real-codex explicitly.");
+}
+
+function codexShimScriptLines(realCodexBin) {
+  const shimEntrypoint = path.join(ROOT_DIR, "bin", "codex-qc-shim.js");
+  return [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    `export QUICK_CODEX_REAL_CODEX_BIN=${JSON.stringify(realCodexBin)}`,
+    `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(shimEntrypoint)} "$@"`
+  ];
+}
+
+function installCodexShimCommand({ target, targetExplicit, force, realCodex }) {
+  const shimTarget = targetExplicit ? target : DEFAULT_SHIM_TARGET;
+  const resolvedRealCodex = resolveRealCodexBinary(realCodex);
+  ensureDir(shimTarget);
+  const shimPath = path.join(shimTarget, "codex");
+  if (fs.existsSync(shimPath) && !force) {
+    throw new Error(`Shim already exists at ${shimPath}. Re-run with --force to replace it.`);
+  }
+  fs.writeFileSync(shimPath, `${codexShimScriptLines(resolvedRealCodex).join("\n")}\n`, "utf8");
+  fs.chmodSync(shimPath, 0o755);
+  console.log(`Installed codex shim to ${shimPath}.`);
+  console.log(`Real codex binary: ${resolvedRealCodex}`);
+  console.log(`Wrapper entrypoint: ${path.join(ROOT_DIR, "bin", "codex-qc-shim.js")}`);
+  console.log("Put the shim directory before the real codex binary in PATH, then use:");
+  console.log("  codex --qc-auto --task \"...\"");
+  console.log("  codex --qc-auto --qc-task \"...\" --qc-json");
+  console.log("  codex --qc-auto --qc-dir /path/to/project --qc-run-file .quick-codex-flow/sample.md --qc-follow --qc-max-turns 3 --qc-json");
+  console.log("  codex --qc-fast --qc-task \"fix a narrow bug\" --qc-json");
+  console.log("  codex --qc-safe --qc-task \"continue the active wrapper work\" --qc-json");
+  console.log("  codex --qc-follow-safe --qc-dir /path/to/project --qc-run-file .quick-codex-flow/sample.md --qc-json");
+  console.log("  codex --qc-help");
 }
 
 function removeProjectScaffold(dir) {
@@ -439,15 +524,18 @@ function initCommand({ dir, force }) {
   const flowReadme = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "README.md");
   const sampleRun = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "sample-run.md");
   const stateTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "STATE.md");
+  const wrapperConfigTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "wrapper-config.json");
 
   const readmeResult = writeFileIfMissing(path.join(flowDir, "README.md"), fs.readFileSync(flowReadme, "utf8"));
   const sampleResult = writeFileIfMissing(path.join(flowDir, "sample-run.md"), fs.readFileSync(sampleRun, "utf8"));
   const stateResult = writeFileIfMissing(path.join(flowDir, "STATE.md"), fs.readFileSync(stateTemplate, "utf8"));
+  const wrapperConfigResult = writeFileIfMissing(path.join(flowDir, "wrapper-config.json"), fs.readFileSync(wrapperConfigTemplate, "utf8"));
 
   console.log(`AGENTS scaffold: ${agentsResult}`);
   console.log(`.quick-codex-flow/README.md: ${readmeResult}`);
   console.log(`.quick-codex-flow/sample-run.md: ${sampleResult}`);
   console.log(`.quick-codex-flow/STATE.md: ${stateResult}`);
+  console.log(`.quick-codex-flow/wrapper-config.json: ${wrapperConfigResult}`);
   console.log("");
   console.log("Recommended prompts:");
   console.log('1. Use $qc-flow for this task: <describe the non-trivial task>.');
@@ -3516,6 +3604,9 @@ async function main() {
         break;
       case "install":
         installCommand(args);
+        break;
+      case "install-codex-shim":
+        installCodexShimCommand(args);
         break;
       case "upgrade":
         installCommand(args);

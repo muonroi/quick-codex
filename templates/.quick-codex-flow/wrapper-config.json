@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "defaults": {
+    "permissionProfile": "safe",
+    "approvalMode": null,
+    "executionProfile": "follow-safe",
+    "chat": {
+      "follow": true,
+      "maxTurns": 5
+    }
+  }
+}

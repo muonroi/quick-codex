@@ -9,6 +9,8 @@ const __dirname = path.dirname(__filename);
 
 export const repoRoot = path.resolve(__dirname, "..");
 export const cliPath = path.join(repoRoot, "bin", "quick-codex.js");
+export const wrapCliPath = path.join(repoRoot, "bin", "quick-codex-wrap.js");
+export const codexShimPath = path.join(repoRoot, "bin", "codex-qc-shim.js");
 
 export function makeProject(runText, runName = "sample.md") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-cli-"));
@@ -84,6 +86,65 @@ export function runCliWithEnv(projectDir, envExtra, ...args) {
     cwd: repoRoot,
     env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
     encoding: "utf8"
+  });
+}
+
+export function runWrapCli(projectDir, ...args) {
+  return spawnSync(process.execPath, [wrapCliPath, ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1" },
+    encoding: "utf8"
+  });
+}
+
+export function runWrapCliWithInput(projectDir, input, ...args) {
+  return spawnSync(process.execPath, [wrapCliPath, ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1" },
+    encoding: "utf8",
+    input
+  });
+}
+
+export function runWrapCliWithInputAndEnv(projectDir, envExtra, input, ...args) {
+  return spawnSync(process.execPath, [wrapCliPath, ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
+    encoding: "utf8",
+    input
+  });
+}
+
+export function runWrapCliWithEnv(projectDir, envExtra, ...args) {
+  return spawnSync(process.execPath, [wrapCliPath, ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
+    encoding: "utf8"
+  });
+}
+
+export function runCodexShim(projectDir, ...args) {
+  return spawnSync(process.execPath, [codexShimPath, ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1" },
+    encoding: "utf8"
+  });
+}
+
+export function runCodexShimWithEnv(projectDir, envExtra, ...args) {
+  return spawnSync(process.execPath, [codexShimPath, ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
+    encoding: "utf8"
+  });
+}
+
+export function runCodexShimWithInputAndEnv(projectDir, envExtra, input, ...args) {
+  return spawnSync(process.execPath, [codexShimPath, ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, QUICK_CODEX_NO_UPDATE_CHECK: "1", ...envExtra },
+    encoding: "utf8",
+    input
   });
 }
 
@@ -260,7 +321,25 @@ Goal:
 | W1 | P1 | in_progress | finish first wave | first wave closes | \`printf first-check\` |
 | W2 | P1 | pending | start second wave | second wave is active | \`printf second-wave\` |
 
-## Current Execution Wave`);
+## Current Execution Wave`).replace("## Session Risk", `## Next Wave Pack
+- Target: P1 / W2
+- Derived from: P1 / W1
+- Phase relation: same-phase
+- Compaction action: compact
+- Brain session-action verdict: not-evaluated
+- Brain verdict confidence: n/a
+- Brain verdict rationale: Experience Engine verdict is not recorded yet; fall back to the protocol baseline.
+- Brain verdict source: not-recorded
+- Suggested session action: \`/compact\` after reviewing this summary and keeping the next-wave pack for P1 / W2.
+- Wave goal: start the second wave cleanly
+- Done when: W2 becomes the active execution wave
+- Next verify: \`printf second-wave\`
+- Carry-forward invariants: preserve the current affected area and verify path
+- What to forget: W1 implementation chatter that is already in the artifact
+- What must remain loaded: P1 / W2 goal, verify command, and recommended next command
+- Resume payload: \`Use $qc-flow and resume from .quick-codex-flow/sample.md to review and execute P1 / W2.\`
+
+## Session Risk`);
 
 export const independentPhaseRun = verifiedWaveRun.replace("## Current Execution Wave", `## Verified Plan
 Goal:
