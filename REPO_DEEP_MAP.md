@@ -25,9 +25,9 @@
 | `CONTINUITY-CONTRACT.md` | Canonical continuity model for flow/lock artifacts |
 | `package.json` | Package metadata, published files, CLI scripts |
 | `bin/quick-codex.js` | CLI entry point for install/status/resume/doctor/verify flows |
-| `bin/quick-codex-wrap.js` | Wrapper frontdoor entry point for raw-task routing, interactive wrapper-shell chat, and artifact-driven Codex session orchestration |
+| `bin/quick-codex-wrap.js` | Wrapper frontdoor entry point for raw-task routing, interactive wrapper-shell chat, rich/plain renderer selection, and artifact-driven Codex session orchestration |
 | `bin/codex-qc-shim.js` | Codex-compatible shim that routes `codex --qc-*`, bare `codex`, and plain prompt launches into wrapper surfaces while keeping `--qc-bypass` for the real Codex CLI |
-| `lib/wrapper/` | Wrapper parser, route classifier, active-run preference helper, orchestration helper, follow-loop helper, bootstrap helper, prompt compiler, decision engine, permission/config resolution, Experience Engine route-task + route-model clients, exec/app-server Codex adapters, and wrapper-local state helpers |
+| `lib/wrapper/` | Wrapper parser, route classifier, active-run preference helper, orchestration helper, follow-loop helper, bootstrap helper, prompt compiler, decision engine, permission/config resolution, Experience Engine route-task + route-model clients, exec/app-server Codex adapters, rich TUI renderer, and wrapper-local state helpers |
 | `WRAPPER.md` | Wrapper-specific frontdoor scope, commands, and limitations |
 
 ---

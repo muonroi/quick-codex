@@ -1580,6 +1580,7 @@ test("codex shim prints qc help locally", () => {
   assert.match(result.stdout, /--qc-force-flow/);
   assert.match(result.stdout, /--qc-force-direct/);
   assert.match(result.stdout, /--qc-task <text>/);
+  assert.match(result.stdout, /--qc-ui <auto\|plain\|rich>/);
 });
 
 test("codex shim forwards manual route overrides to the wrapper", () => {
@@ -1707,6 +1708,7 @@ test("quick-codex init seeds wrapper-config.json into the project scaffold", () 
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   assert.equal(config.defaults.permissionProfile, "safe");
   assert.equal(config.defaults.executionProfile, "follow-safe");
+  assert.equal(config.defaults.chat.uiRenderer, "auto");
 });
 
 test("bare codex now opens the interactive wrapper shell by default", () => {

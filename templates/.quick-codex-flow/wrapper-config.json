@@ -6,7 +6,8 @@
     "executionProfile": "follow-safe",
     "chat": {
       "follow": true,
-      "maxTurns": 5
+      "maxTurns": 5,
+      "uiRenderer": "auto"
     }
   }
 }

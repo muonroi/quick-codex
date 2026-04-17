@@ -16,6 +16,9 @@ Important:
 After the shim is installed:
 - bare `codex` opens the interactive wrapper shell
 - `codex "some task"` becomes a one-shot wrapper launch
+- real TTY terminals default to the richer Ink-based TUI
+- non-TTY, CI, and `--json` sessions automatically fall back to the plain shell
+- `codex --qc-ui plain` forces the plain shell when you do not want the richer TUI
 - `codex --qc-bypass` is the escape hatch for raw Codex behavior
 
 Minimal rollout check:
@@ -23,6 +26,7 @@ Minimal rollout check:
 ```bash
 codex --qc-help
 codex
+codex --qc-ui plain
 ```
 
 The rest of this file covers the lower-level install and workflow details.

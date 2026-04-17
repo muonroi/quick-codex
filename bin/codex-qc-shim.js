@@ -26,6 +26,7 @@ const QC_OPTION_ALIASES = new Map([
   ["--qc-output-last-message", { target: "--output-last-message", takesValue: true }],
   ["--qc-max-turns", { target: "--max-turns", takesValue: true }],
   ["--qc-approval", { target: "--approval-mode", takesValue: true }],
+  ["--qc-ui", { target: "--ui", takesValue: true }],
   ["--qc-follow", { target: "--follow", takesValue: false }],
   ["--qc-json", { target: "--json", takesValue: false }],
   ["--qc-dry-run", { target: "--dry-run", takesValue: false }],
@@ -163,6 +164,9 @@ Alias options:
 
   --qc-approval <mode>
   Maps to: --approval-mode
+
+  --qc-ui <auto|plain|rich>
+  Maps to: --ui
 
   --qc-max-turns <n>
   Maps to: --max-turns

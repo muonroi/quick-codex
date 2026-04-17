@@ -63,6 +63,7 @@ Quick Codex is now best treated as a thin wrapper in front of Codex CLI:
 - `codex "some task"` becomes a one-shot wrapper launch
 - wrapper task routing can choose `qc-flow`, `qc-lock`, or `direct`
 - wrapper continuity can auto-drive `compact`, `clear`, `resume`, and follow-loop behavior
+- on real TTY terminals, the wrapper now prefers a richer Ink-based TUI with activity, session, and result panes; plain shell remains available as a fallback
 - Experience Engine stays optional; wrapper falls back cleanly when the brain is unavailable
 
 ### 1. Install the package and wrapper surface
@@ -118,13 +119,37 @@ Other important command paths:
 
 ```bash
 codex "fix the wrapper follow loop"
+codex --qc-ui plain
 codex --qc-help
 codex --qc-bypass
 ```
 
 - `codex "..."` runs the default wrapper one-shot path
+- `codex --qc-ui plain` forces the old plain shell when you do not want the richer TUI
 - `codex --qc-help` prints the wrapper shim surface
 - `codex --qc-bypass` skips the thin wrapper and launches raw Codex behavior
+
+### 2.1 UI modes
+
+The wrapper now has two terminal renderers:
+- `rich`: an Ink-based TUI for real interactive terminals, with an activity timeline, a live session panel, a dedicated result pane, and clearer next-action affordances
+- `plain`: the original line-oriented shell used automatically for non-TTY, CI, tests, JSON mode, or as an explicit escape hatch
+
+Wrapper-first UX now follows the strongest patterns from modern agent CLIs:
+- Claude Code: stable slash-command surface and visible status context
+- Gemini CLI: checkpoint/resume as first-class continuity
+- OpenCode: configurable TUI behavior, themeable terminal rendering, and separation between runtime config and TUI config
+- Codex CLI itself: explicit model/reasoning choices and visible phase transitions
+
+Use these switches when needed:
+
+```bash
+codex
+codex --qc-ui rich
+codex --qc-ui plain
+quick-codex-wrap chat --ui rich
+quick-codex-wrap chat --ui plain
+```
 
 ### 3. What the wrapper is doing for you
 
@@ -445,7 +470,8 @@ Repo-level wrapper defaults live in `.quick-codex-flow/wrapper-config.json`:
     "executionProfile": "follow-safe",
     "chat": {
       "follow": true,
-      "maxTurns": 5
+      "maxTurns": 5,
+      "uiRenderer": "auto"
     }
   }
 }

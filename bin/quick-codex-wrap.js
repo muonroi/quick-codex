@@ -36,7 +36,7 @@ function usage() {
   console.log(`Usage:
   quick-codex-wrap prompt --task <text> [--route-override <auto|qc-flow|qc-lock|direct>] [--json]
   quick-codex-wrap run --task <text> [--dir <project-dir>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--output-last-message <file>]
-  quick-codex-wrap chat [--dir <project-dir>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--follow] [--max-turns <n>] [--json]
+  quick-codex-wrap chat [--dir <project-dir>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--ui <auto|plain|rich>] [--follow] [--max-turns <n>] [--json]
   quick-codex-wrap auto [--dir <project-dir>] [--run <path>] [--task <text>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--follow] [--max-turns <n>] [--output-last-message <file>]
   quick-codex-wrap decide [--dir <project-dir>] [--run <path>] [--json]
   quick-codex-wrap checkpoint [--dir <project-dir>] [--run <path>] [--json]
@@ -74,7 +74,8 @@ function shellHelpText() {
     "",
     "Any other line is treated as a user task and routed through the thin wrapper.",
     "Default shell policy comes from .quick-codex-flow/wrapper-config.json when present.",
-    "Press Tab to complete slash commands and known profile names."
+    "Press Tab to complete slash commands and known profile names.",
+    "Use --ui plain to disable the rich TUI and fall back to the plain shell."
   ].join("\n");
 }
 
@@ -98,6 +99,20 @@ function normalizeRouteOverride(value) {
   throw new Error("--route-override must be one of: auto, qc-flow, qc-lock, direct");
 }
 
+function normalizeUiRenderer(value) {
+  if (value == null) {
+    return null;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized || normalized === "auto") {
+    return "auto";
+  }
+  if (normalized === "plain" || normalized === "rich") {
+    return normalized;
+  }
+  throw new Error("--ui must be one of: auto, plain, rich");
+}
+
 function parseArgs(argv) {
   const result = {
     command: null,
@@ -113,6 +128,7 @@ function parseArgs(argv) {
     outputLastMessage: null,
     task: null,
     routeOverride: null,
+    ui: null,
     permissionProfile: null,
     approvalMode: null
   };
@@ -202,6 +218,14 @@ function parseArgs(argv) {
       result.permissionProfile = argv[i];
       continue;
     }
+    if (arg === "--ui") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--ui requires a value");
+      }
+      result.ui = normalizeUiRenderer(argv[i]);
+      continue;
+    }
     if (arg === "--approval-mode") {
       i += 1;
       if (i >= argv.length) {
@@ -236,6 +260,7 @@ function shellStatus({ args, runtime, turnCount, shellState, wrapperConfig }) {
     executionProfile: shellState.executionProfile,
     follow: shellState.follow,
     maxTurns: shellState.maxTurns,
+    uiRenderer: shellState.uiRenderer,
     routeOverride: shellState.routeOverride ?? null,
     permissionProfile: shellState.permissionProfile,
     approvalMode: shellState.approvalMode,
@@ -252,12 +277,29 @@ function ensureOutputPath(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
-function shellProgressLogger(enabled = true) {
-  if (!enabled) {
-    return () => {};
+function formatShellStatus(status, asJson) {
+  if (asJson) {
+    return JSON.stringify(status, null, 2);
   }
+  return [
+    `dir=${status.dir}`,
+    `configPath=${status.configPath}`,
+    `executionProfile=${status.executionProfile}`,
+    `follow=${status.follow}`,
+    `maxTurns=${status.maxTurns}`,
+    `uiRenderer=${status.uiRenderer}`,
+    `routeOverride=${status.routeOverride ?? "auto"}`,
+    `permissionProfile=${status.permissionProfile}`,
+    `approvalMode=${status.approvalMode}`,
+    `turnsSubmitted=${status.turnsSubmitted}`,
+    `activeThreadId=${status.activeThreadId ?? "none"}`,
+    `activeModel=${status.activeModel ?? "default"}`
+  ].join("\n");
+}
+
+function shellProgressLogger(onEntry) {
   return (message) => {
-    console.log(`[wrapper] ${message}`);
+    onEntry({ type: "progress", text: message });
   };
 }
 
@@ -665,8 +707,7 @@ async function maybeFollowAuto(args, seed, runtime = null, onProgress = null) {
 
 function renderShellResponse(response, asJson) {
   if (asJson) {
-    console.log(JSON.stringify(response, null, 2));
-    return;
+    return JSON.stringify(response, null, 2);
   }
 
   const metadata = [
@@ -683,16 +724,17 @@ function renderShellResponse(response, asJson) {
   if (response.threadId) {
     metadata.push(`thread=${response.threadId}`);
   }
-  console.log(`[wrapper] ${metadata.join(" | ")}`);
+  const lines = [`[wrapper] ${metadata.join(" | ")}`];
   if (response.lastMessage) {
-    console.log(response.lastMessage);
-    return;
+    lines.push(response.lastMessage);
+    return lines.join("\n");
   }
   if (response.summary) {
-    console.log(response.summary);
-    return;
+    lines.push(response.summary);
+    return lines.join("\n");
   }
-  console.log("(No final assistant message was captured.)");
+  lines.push("(No final assistant message was captured.)");
+  return lines.join("\n");
 }
 
 function shellCompleter(line) {
@@ -740,10 +782,19 @@ function resolveShellState({ args, wrapperConfig }) {
     executionProfile,
     follow: args.followExplicit ? args.follow : wrapperConfig.defaults.chat.follow,
     maxTurns: args.maxTurnsExplicit ? args.maxTurns : wrapperConfig.defaults.chat.maxTurns,
+    uiRenderer: args.ui ?? wrapperConfig.defaults.chat.uiRenderer,
     routeOverride: args.routeOverride,
     permissionProfile: policy.permissionProfile,
     approvalMode: policy.approvalPolicy
   };
+}
+
+function resolveChatUiRenderer({ args, shellState }) {
+  const requested = args.ui ?? process.env.QUICK_CODEX_WRAP_UI ?? shellState.uiRenderer ?? "auto";
+  if (requested === "plain" || requested === "rich") {
+    return requested;
+  }
+  return (process.stdin.isTTY && process.stdout.isTTY && !args.json) ? "rich" : "plain";
 }
 
 function applyShellCommand({ line, shellState }) {
@@ -975,52 +1026,41 @@ function buildDisambiguationChoiceDecision({
   });
 }
 
-async function runChatShell(args) {
+function createChatSession(args) {
   const wrapperConfig = loadWrapperConfig(args.dir);
   const shellState = resolveShellState({ args, wrapperConfig });
   const runtime = {
     appServerSession: new CodexAppServerSession({ dir: args.dir })
   };
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-"));
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    completer: shellCompleter,
-    terminal: process.stdin.isTTY ?? true
-  });
-  const progress = shellProgressLogger(!args.json);
   let turnCount = 0;
   let pendingDisambiguation = null;
 
-  console.log(`Quick Codex interactive shell`);
-  console.log(`Dir: ${args.dir}`);
-  console.log(`Mode: ${shellState.executionProfile} | Follow: ${shellState.follow ? "on" : "off"} | Max turns: ${shellState.maxTurns}`);
-  console.log(`Route override: ${shellState.routeOverride ?? "auto"}`);
-  console.log(`Permission: ${shellState.permissionProfile} | Approval: ${shellState.approvalMode}`);
-  console.log(`Type /help for shell commands, /exit to quit.`);
-
-  try {
-    if (rl.terminal) {
-      process.stdout.write("codex> ");
-    }
-    for await (const line of rl) {
+  return {
+    bannerLines: [
+      `Dir: ${args.dir}`,
+      `Mode: ${shellState.executionProfile} | Follow: ${shellState.follow ? "on" : "off"} | Max turns: ${shellState.maxTurns}`,
+      `UI: ${resolveChatUiRenderer({ args, shellState })} | Route override: ${shellState.routeOverride ?? "auto"}`,
+      `Permission: ${shellState.permissionProfile} | Approval: ${shellState.approvalMode}`,
+      "Type /help for shell commands, /exit to quit."
+    ],
+    getStatus() {
+      return shellStatus({ args, runtime, turnCount, shellState, wrapperConfig });
+    },
+    async submit(line, onEntry = () => {}) {
+      const emit = (entry) => onEntry(entry);
       const trimmed = line.trim();
       if (!trimmed) {
-        if (rl.terminal) {
-          process.stdout.write("codex> ");
-        }
-        continue;
+        return { exit: false };
       }
       if (trimmed === "/exit" || trimmed === "/quit") {
-        break;
+        return { exit: true };
       }
       if (trimmed === "/help") {
-        console.log(shellHelpText());
-        if (rl.terminal) {
-          process.stdout.write("codex> ");
-        }
-        continue;
+        emit({ type: "text", text: shellHelpText() });
+        return { exit: false };
       }
+
       if (pendingDisambiguation) {
         if (pendingDisambiguation.awaitingFreeText) {
           pendingDisambiguation.awaitingFreeText = false;
@@ -1029,19 +1069,13 @@ async function runChatShell(args) {
           const index = Number(trimmed) - 1;
           const option = pendingDisambiguation.options[index];
           if (!option) {
-            console.log(`Choose 1-${pendingDisambiguation.options.length}, or type a clearer task instead.`);
-            if (rl.terminal) {
-              process.stdout.write("codex> ");
-            }
-            continue;
+            emit({ type: "text", text: `Choose 1-${pendingDisambiguation.options.length}, or type a clearer task instead.` });
+            return { exit: false };
           }
           if (option.route === "free-text") {
             pendingDisambiguation.awaitingFreeText = true;
-            console.log("Type a clearer task on the next line.");
-            if (rl.terminal) {
-              process.stdout.write("codex> ");
-            }
-            continue;
+            emit({ type: "text", text: "Type a clearer task on the next line." });
+            return { exit: false };
           }
           const pending = pendingDisambiguation;
           const forcedDecision = buildDisambiguationChoiceDecision({
@@ -1065,53 +1099,29 @@ async function runChatShell(args) {
           };
           const response = await maybeFollowAuto(
             turnArgs,
-            await executePreparedTaskDecision(turnArgs, forcedDecision, runtime, progress),
+            await executePreparedTaskDecision(turnArgs, forcedDecision, runtime, shellProgressLogger(emit)),
             runtime,
-            progress
+            shellProgressLogger(emit)
           );
-          renderShellResponse(response, args.json);
-          if (rl.terminal) {
-            process.stdout.write("codex> ");
-          }
-          continue;
-        } else {
-          pendingDisambiguation = null;
+          emit({ type: "response", response });
+          return { exit: false };
         }
+        pendingDisambiguation = null;
       }
+
       const shellCommand = applyShellCommand({ line: trimmed, shellState });
       if (shellCommand.handled) {
-        console.log(shellCommand.message);
-        if (rl.terminal) {
-          process.stdout.write("codex> ");
-        }
-        continue;
+        emit({ type: "text", text: shellCommand.message });
+        return { exit: false };
       }
       if (trimmed === "/status") {
         const status = shellStatus({ args, runtime, turnCount, shellState, wrapperConfig });
-        if (args.json) {
-          console.log(JSON.stringify(status, null, 2));
-        } else {
-          console.log([
-            `dir=${status.dir}`,
-            `configPath=${status.configPath}`,
-            `executionProfile=${status.executionProfile}`,
-            `follow=${status.follow}`,
-            `maxTurns=${status.maxTurns}`,
-            `routeOverride=${status.routeOverride ?? "auto"}`,
-            `permissionProfile=${status.permissionProfile}`,
-            `approvalMode=${status.approvalMode}`,
-            `turnsSubmitted=${status.turnsSubmitted}`,
-            `activeThreadId=${status.activeThreadId ?? "none"}`,
-            `activeModel=${status.activeModel ?? "default"}`
-          ].join("\n"));
-        }
-        if (rl.terminal) {
-          process.stdout.write("codex> ");
-        }
-        continue;
+        emit({ type: "status", text: formatShellStatus(status, args.json), data: status });
+        return { exit: false };
       }
 
       const taskText = shellCommand.task ?? trimmed;
+      const progress = shellProgressLogger(emit);
       progress(`turn=${turnCount + 1} | profile=${shellState.executionProfile} | follow=${shellState.follow ? "on" : "off"} | maxTurns=${shellState.maxTurns}`);
       progress(`analyzing task="${taskText.slice(0, 120)}${taskText.length > 120 ? "..." : ""}"`);
       const decisionProbe = await taskDecisionFromArgs({
@@ -1124,12 +1134,12 @@ async function runChatShell(args) {
           ...decisionProbe,
           awaitingFreeText: false
         };
-        console.log(decisionProbe.summary);
-        console.log("Choose an option number, or type a clearer task directly.");
-        if (rl.terminal) {
-          process.stdout.write("codex> ");
-        }
-        continue;
+        emit({
+          type: "disambiguation",
+          text: `${decisionProbe.summary}\nChoose an option number, or type a clearer task directly.`,
+          decision: pendingDisambiguation
+        });
+        return { exit: false };
       }
 
       turnCount += 1;
@@ -1149,16 +1159,85 @@ async function runChatShell(args) {
         runtime,
         progress
       );
-      renderShellResponse(response, args.json);
+      emit({ type: "response", response });
+      return { exit: false };
+    },
+    async close() {
+      await runtime.appServerSession.close();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  };
+}
+
+function renderPlainShellEntry(entry, asJson) {
+  if (entry.type === "progress") {
+    console.log(`[wrapper] ${entry.text}`);
+    return;
+  }
+  if (entry.type === "response") {
+    console.log(renderShellResponse(entry.response, asJson));
+    return;
+  }
+  console.log(entry.text);
+}
+
+async function runPlainChatShell(args, session) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    completer: shellCompleter,
+    terminal: process.stdin.isTTY ?? true
+  });
+
+  console.log("Quick Codex interactive shell");
+  session.bannerLines.forEach((line) => console.log(line));
+
+  try {
+    if (rl.terminal) {
+      process.stdout.write("codex> ");
+    }
+    for await (const line of rl) {
+      try {
+        const result = await session.submit(line, (entry) => renderPlainShellEntry(entry, args.json));
+        if (result.exit) {
+          break;
+        }
+      } catch (error) {
+        console.error(error.message);
+      }
       if (rl.terminal) {
         process.stdout.write("codex> ");
       }
     }
   } finally {
     rl.close();
-    await runtime.appServerSession.close();
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await session.close();
   }
+}
+
+async function runChatShell(args) {
+  const session = createChatSession(args);
+  const renderer = resolveChatUiRenderer({
+    args,
+    shellState: {
+      uiRenderer: session.getStatus().uiRenderer
+    }
+  });
+
+  if (renderer === "rich") {
+    try {
+      const { runRichChatRenderer } = await import("../lib/wrapper/rich-chat.js");
+      await runRichChatRenderer({
+        session,
+        bannerLines: session.bannerLines
+      });
+      return;
+    } catch (error) {
+      console.warn(`[wrapper] rich-ui fallback: ${error.message}`);
+    }
+  }
+
+  await runPlainChatShell(args, session);
 }
 
 async function taskDecisionFromArgs(args) {
