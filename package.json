@@ -1,6 +1,6 @@
 {
   "name": "quick-codex",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "A lightweight workflow layer for Codex CLI with persistent run artifacts, resume-safe skills, and local recovery commands.",
   "author": "Muonroi",
   "keywords": [
