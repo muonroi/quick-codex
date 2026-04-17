@@ -67,6 +67,11 @@ Quick Codex is now best treated as a thin wrapper in front of Codex CLI:
 
 ### 1. Install the package and wrapper surface
 
+Important:
+- installing the npm package alone does not hijack `codex`
+- `codex` only becomes wrapper-first after you install the shim with `quick-codex install-codex-shim --force`
+- the shim must live on a directory that appears before the real `codex` binary in `PATH`
+
 Global npm install:
 
 ```bash
@@ -165,6 +170,22 @@ If you want the raw skill-first flow instead of the wrapper-first surface, the c
 Use $qc-flow for this task: ...
 Use $qc-lock for this task: ...
 ```
+
+### 5. Rollout checklist for a new machine
+
+```bash
+npm install -g quick-codex
+quick-codex install
+quick-codex install-codex-shim --force
+codex --qc-help
+codex
+```
+
+Expected result:
+- `codex --qc-help` prints the shim help instead of raw Codex help
+- bare `codex` opens the interactive wrapper shell
+- `codex "some task"` goes through wrapper routing
+- `codex --qc-bypass` still opens raw Codex behavior when needed
 
 ## Why Quick Codex
 

@@ -8,10 +8,22 @@ npx quick-codex install-codex-shim --force
 codex
 ```
 
+Important:
+- installing `quick-codex` alone does not change the behavior of `codex`
+- `codex` only becomes wrapper-first after `install-codex-shim --force`
+- if `codex --qc-help` does not show the shim help text, your `PATH` is still resolving the real Codex binary first
+
 After the shim is installed:
 - bare `codex` opens the interactive wrapper shell
 - `codex "some task"` becomes a one-shot wrapper launch
 - `codex --qc-bypass` is the escape hatch for raw Codex behavior
+
+Minimal rollout check:
+
+```bash
+codex --qc-help
+codex
+```
 
 The rest of this file covers the lower-level install and workflow details.
 
