@@ -265,8 +265,18 @@ function print(value, asJson) {
 }
 
 function shellStatus({ args, runtime, turnCount, shellState, wrapperConfig }) {
-  const activeRun = readActiveRunArtifact(args.dir);
-  const artifact = activeRun?.artifact ?? null;
+  const flowState = readFlowState(args.dir);
+  const activeRun = flowState?.activeRun && flowState.activeRun !== "none"
+    ? flowState.activeRun
+    : null;
+  let artifact = null;
+  if (activeRun) {
+    try {
+      artifact = readRunArtifact({ dir: args.dir, run: activeRun });
+    } catch {
+      artifact = null;
+    }
+  }
   return {
     dir: args.dir,
     configPath: wrapperConfig.path,
@@ -280,9 +290,10 @@ function shellStatus({ args, runtime, turnCount, shellState, wrapperConfig }) {
     turnsSubmitted: turnCount,
     activeThreadId: runtime.appServerSession?.activeThreadId ?? null,
     activeModel: runtime.appServerSession?.currentModel ?? null,
-    activeRun: artifact?.relativeRunPath ?? null,
-    activeGate: artifact?.currentGate ?? null,
-    activePhaseWave: artifact?.currentPhaseWave ?? null,
+    flowStatus: flowState?.status ?? null,
+    activeRun,
+    activeGate: artifact?.currentGate ?? flowState?.currentGate ?? null,
+    activePhaseWave: artifact?.currentPhaseWave ?? flowState?.currentPhaseWave ?? null,
     recommendedNextCommand: artifact?.recommendedNextCommand ?? null
   };
 }
@@ -312,6 +323,7 @@ function formatShellStatus(status, asJson) {
     `activeThreadId=${status.activeThreadId ?? "none"}`,
     `activeModel=${status.activeModel ?? "default"}`,
     `activeRun=${status.activeRun ?? "none"}`,
+    `flowStatus=${status.flowStatus ?? "unknown"}`,
     `activeGate=${status.activeGate ?? "unknown"}`,
     `activePhaseWave=${status.activePhaseWave ?? "unknown"}`,
     `recommendedNextCommand=${status.recommendedNextCommand ?? "none"}`
@@ -1163,15 +1175,29 @@ function createChatSession(args) {
         return { exit: false };
       }
       if (trimmed === "/continue") {
-        const activeRun = readActiveRunArtifact(args.dir);
-        if (!activeRun?.artifact) {
+        const flowState = readFlowState(args.dir);
+        const activeRun = flowState?.activeRun && flowState.activeRun !== "none"
+          ? flowState.activeRun
+          : null;
+        if (!activeRun) {
           emit({ type: "text", text: "No active run artifact found. Start a task first or point to a run-file with --run." });
+          return { exit: false };
+        }
+        let artifact;
+        try {
+          artifact = readRunArtifact({ dir: args.dir, run: activeRun });
+        } catch (error) {
+          emit({ type: "text", text: `Active run artifact is unreadable: ${error.message}` });
+          return { exit: false };
+        }
+        if (flowState?.status === "done" || artifact.currentGate === "done") {
+          emit({ type: "text", text: `Active run is already done (${activeRun}). Start a new task to create the next run.` });
           return { exit: false };
         }
         turnCount += 1;
         const progress = shellProgressLogger(emit);
         progress(`turn=${turnCount} | profile=${shellState.executionProfile} | follow=${shellState.follow ? "on" : "off"} | maxTurns=${shellState.maxTurns}`);
-        progress(`continuing activeRun=${activeRun.artifact.relativeRunPath} | gate=${activeRun.artifact.currentGate ?? "unknown"} | phase=${activeRun.artifact.currentPhaseWave ?? "unknown"}`);
+        progress(`continuing activeRun=${artifact.relativeRunPath} | gate=${artifact.currentGate ?? "unknown"} | phase=${artifact.currentPhaseWave ?? "unknown"}`);
         const turnArgs = {
           ...args,
           follow: shellState.follow,
@@ -1184,7 +1210,7 @@ function createChatSession(args) {
         };
         const response = await maybeFollowAuto(
           turnArgs,
-          await executeArtifactAuto(turnArgs, activeRun.artifact, runtime, progress),
+          await executeArtifactAuto(turnArgs, artifact, runtime, progress),
           runtime,
           progress
         );
