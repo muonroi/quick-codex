@@ -8,3 +8,4 @@ node_modules/
 /.quick-codex-lock/
 npm-debug.log*
 bin/
+fake-experience-router-*
