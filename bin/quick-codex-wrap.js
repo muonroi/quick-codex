@@ -383,6 +383,7 @@ function buildTaskAutoResponse({ decision, bootstrapState, execution, wrapperSta
     bypassApprovalsAndSandbox: decision.policy?.bypassApprovalsAndSandbox ?? execution.bypassApprovalsAndSandbox ?? false,
     activeRun: decision.activeRun ?? null,
     wrapperStatePath,
+    outputLastMessagePath: execution.outputLastMessagePath ?? null,
     bootstrap: {
       required: bootstrapState.bootstrapRequired,
       planned: bootstrapState.bootstrapPlanned,
@@ -425,6 +426,7 @@ function buildArtifactAutoResponse({ artifact, decision, execution, wrapperState
     bypassApprovalsAndSandbox: decision.policy?.bypassApprovalsAndSandbox ?? execution.bypassApprovalsAndSandbox ?? false,
     decision: decision.mode,
     wrapperStatePath,
+    outputLastMessagePath: execution.outputLastMessagePath ?? null,
     sessionStrategy: decision.sessionStrategy,
     handoffAction: decision.handoffAction,
     nativeThreadAction: decision.nativeThreadAction,
@@ -570,7 +572,10 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     appServerSession: runtime?.appServerSession ?? null,
     onProgress
   });
-  const execution = routed.execution;
+  const execution = {
+    ...routed.execution,
+    outputLastMessagePath: args.outputLastMessage ?? null
+  };
   const artifact = postTaskArtifact(args.dir, decision.activeRun ?? null);
   const persisted = saveWrapperStateIfPossible({
     dir: args.dir,
@@ -624,7 +629,10 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
     appServerSession: runtime?.appServerSession ?? null,
     onProgress
   });
-  const execution = routed.execution;
+  const execution = {
+    ...routed.execution,
+    outputLastMessagePath: args.outputLastMessage ?? null
+  };
   const nextState = saveWrapperState(args.dir, state, {
     artifact,
     decision: routed.decision,
