@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.4.7
+
+Highlights:
+- stabilized the rich Ink TUI layout so panes no longer overflow and "push" the header off-screen on smaller terminals
+- improved the Result pane readability with a longer preview window, consistent scroll hinting, and stable panel height
+
 ## 0.4.0
 
 Highlights:

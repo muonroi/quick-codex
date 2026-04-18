@@ -77,6 +77,7 @@ Current orchestration model:
 - the interactive shell now has renderer modes:
   - `rich`: Ink-based TUI for real terminals with activity, session, and result panes
   - `plain`: line-oriented fallback for non-TTY, CI, tests, or explicit `--ui plain`
+  - the rich TUI includes a dedicated Result pane with scroll support (PgUp/PgDn or Ctrl+Up/Ctrl+Down). Use `/result full` to show the full assistant output instead of the preview.
 - `--qc-ui <auto|plain|rich|native>` maps through the shim to `--ui <auto|plain|rich|native>`
 - wrapper permission policy now resolves from explicit flags first, then shell-local overrides, then `.quick-codex-flow/wrapper-config.json`, then built-in defaults
 - wrapper continuity maps artifact handoff data into machine-usable fields such as `sessionStrategy`, `handoffAction`, `nativeThreadAction`, `chatActionEquivalent`, and `wrapperCommandEquivalent`

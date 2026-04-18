@@ -17,6 +17,7 @@ After the shim is installed:
 - bare `codex` opens the interactive wrapper shell
 - `codex "some task"` becomes a one-shot wrapper launch
 - real TTY terminals default to the richer Ink-based TUI
+- in the rich TUI, the Result pane supports scrolling (PgUp/PgDn or Ctrl+Up/Ctrl+Down); use `/result full` to show the full assistant output instead of the preview
 - non-TTY, CI, and `--json` sessions automatically fall back to the plain shell
 - `codex --qc-ui plain` forces the plain shell when you do not want the richer TUI
 - `codex --qc-ui native` launches the experimental stock-Codex bridge instead of the wrapper-owned shell

@@ -137,7 +137,7 @@ codex --qc-bypass
 ### 2.1 UI modes
 
 The wrapper now has three interactive UI modes:
-- `rich`: an Ink-based TUI for real interactive terminals, with an activity timeline, a live session panel, a dedicated result pane, and clearer next-action affordances
+- `rich`: an Ink-based TUI for real interactive terminals, with an activity timeline, a live session panel, a dedicated result pane, and clearer next-action affordances. The Result pane supports scrolling (PgUp/PgDn or Ctrl+Up/Ctrl+Down); use `/result full` to show the full assistant output instead of the preview.
 - `plain`: the original line-oriented shell used automatically for non-TTY, CI, tests, JSON mode, or as an explicit escape hatch
 - `native`: an experimental bridge that boots the stock Codex TUI through `codex --remote`, so native slash commands and autocomplete stay intact while the wrapper owns the transport boundary
 - the native bridge now also has explicit observer/controller primitives for prompt-ready and turn-settled signals
