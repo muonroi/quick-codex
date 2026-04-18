@@ -9,6 +9,7 @@ import path from "node:path";
 import { routedWaveRun, runWrapCli, runWrapCliWithEnv, runWrapCliWithInputAndEnv, runCodexShimWithEnv, runCodexShimWithInputAndEnv, runCli, writeStateFile, makeProject, baseRun } from "./test-helpers.js";
 import { ensureProjectBootstrap, inspectProjectBootstrap } from "../lib/wrapper/bootstrap.js";
 import { classifyAutoFollowStop } from "../lib/wrapper/follow-loop.js";
+import { launchNativeCodexSession, NativeSessionController, NativeSessionObserver, sendNativeTaskWithRetry } from "../lib/wrapper/native-session.js";
 
 function flowArtifact({ phaseWave, nextPrompt, blockers = ["none"], gate = "execute", executionState = "in_progress" }) {
   const [phase, wave] = phaseWave.split(" / ");
@@ -321,6 +322,593 @@ rl.on("line", (line) => {
   };
 }
 
+function makeFakeNativeBridge(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-native-app-server.mjs");
+  const appServerArgvPath = path.join(projectDir, "fake-native-app-server-argv.json");
+  const codexScript = path.join(projectDir, "fake-native-codex.mjs");
+  const codexArgvPath = path.join(projectDir, "fake-native-codex-argv.json");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const argvPath = process.env.FAKE_NATIVE_APP_SERVER_ARGV;
+fs.writeFileSync(argvPath, JSON.stringify(process.argv.slice(2), null, 2), "utf8");
+console.log("codex app-server (WebSockets)");
+console.log("  listening on: ws://127.0.0.1:4999");
+console.log("  readyz: http://127.0.0.1:4999/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const argvPath = process.env.FAKE_NATIVE_CODEX_ARGV;
+fs.writeFileSync(argvPath, JSON.stringify(process.argv.slice(2), null, 2), "utf8");
+console.log("FAKE_NATIVE_CODEX_OK");
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_NATIVE_APP_SERVER_ARGV: appServerArgvPath,
+      FAKE_NATIVE_CODEX_ARGV: codexArgvPath
+    },
+    appServerArgvPath,
+    codexArgvPath
+  };
+}
+
+function makeFakeObservedNativeBridge(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-observed-app-server.mjs");
+  const codexScript = path.join(projectDir, "fake-observed-codex.mjs");
+  const stdinPath = path.join(projectDir, "fake-observed-codex-stdin.txt");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+console.log("codex app-server (WebSockets)");
+console.log("  listening on: ws://127.0.0.1:4888");
+console.log("  readyz: http://127.0.0.1:4888/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_OBSERVED_NATIVE_STDIN;
+const chunks = [];
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+});
+console.log("\\u001b[2mWorking\\u001b[22m (1s)");
+console.log("› waiting for next input");
+setTimeout(() => {
+  fs.writeFileSync(stdinPath, chunks.join(""), "utf8");
+  console.log("To continue this session, run codex resume 019d9b43-1163-77f1-92f8-f51d1d19daf9");
+  process.exit(0);
+}, 40);
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_OBSERVED_NATIVE_STDIN: stdinPath
+    },
+    stdinPath
+  };
+}
+
+function makeFakeObservedNativeBridgeStderr(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-observed-app-server-stderr.mjs");
+  const codexScript = path.join(projectDir, "fake-observed-codex-stderr.mjs");
+  const stdinPath = path.join(projectDir, "fake-observed-codex-stderr-stdin.txt");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+console.error("codex app-server (WebSockets)");
+console.error("  listening on: ws://127.0.0.1:4887");
+console.error("  readyz: http://127.0.0.1:4887/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_OBSERVED_NATIVE_STDERR_STDIN;
+const chunks = [];
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+});
+console.log("\\u001b[2mWorking\\u001b[22m (1s)");
+console.log("› waiting for next input");
+setTimeout(() => {
+  fs.writeFileSync(stdinPath, chunks.join(""), "utf8");
+  console.log("To continue this session, run codex resume 019d9b43-1163-77f1-92f8-f51d1d19daf9");
+  process.exit(0);
+}, 40);
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_OBSERVED_NATIVE_STDERR_STDIN: stdinPath
+    },
+    stdinPath
+  };
+}
+
+function makeFakeGuardedSlashNativeBridge(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-guarded-app-server.mjs");
+  const codexScript = path.join(projectDir, "fake-guarded-codex.mjs");
+  const stdinPath = path.join(projectDir, "fake-guarded-codex-stdin.txt");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+console.log("codex app-server (WebSockets)");
+console.log("  listening on: ws://127.0.0.1:4777");
+console.log("  readyz: http://127.0.0.1:4777/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_GUARDED_NATIVE_STDIN;
+const chunks = [];
+let handled = false;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+  if (handled) {
+    return;
+  }
+  if (chunks.join("").includes("/status\\n")) {
+    handled = true;
+    console.log("Status panel open");
+    console.log("› prompt restored after status");
+    setTimeout(() => {
+      fs.writeFileSync(stdinPath, chunks.join(""), "utf8");
+      process.exit(0);
+    }, 40);
+  }
+});
+console.log("› prompt ready for guarded slash");
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_GUARDED_NATIVE_STDIN: stdinPath
+    },
+    stdinPath
+  };
+}
+
+function makeFakeGuardedCompactNativeBridge(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-guarded-compact-app-server.mjs");
+  const codexScript = path.join(projectDir, "fake-guarded-compact-codex.mjs");
+  const stdinPath = path.join(projectDir, "fake-guarded-compact-codex-stdin.txt");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+console.log("codex app-server (WebSockets)");
+console.log("  listening on: ws://127.0.0.1:4666");
+console.log("  readyz: http://127.0.0.1:4666/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_GUARDED_COMPACT_NATIVE_STDIN;
+const chunks = [];
+let handled = false;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+  if (handled) {
+    return;
+  }
+  if (chunks.join("").includes("/compact\\n")) {
+    handled = true;
+    console.log("Compacting conversation...");
+    setTimeout(() => {
+      console.log("› prompt restored after compact");
+      fs.writeFileSync(stdinPath, chunks.join(""), "utf8");
+      process.exit(0);
+    }, 40);
+  }
+});
+console.log("› prompt ready for guarded compact");
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_GUARDED_COMPACT_NATIVE_STDIN: stdinPath
+    },
+    stdinPath
+  };
+}
+
+function makeFakeGuardedClearNativeBridge(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-guarded-clear-app-server.mjs");
+  const codexScript = path.join(projectDir, "fake-guarded-clear-codex.mjs");
+  const stdinPath = path.join(projectDir, "fake-guarded-clear-codex-stdin.txt");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+console.log("codex app-server (WebSockets)");
+console.log("  listening on: ws://127.0.0.1:4555");
+console.log("  readyz: http://127.0.0.1:4555/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_GUARDED_CLEAR_NATIVE_STDIN;
+const chunks = [];
+let handled = false;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+  if (handled) {
+    return;
+  }
+  if (chunks.join("").includes("/clear\\n")) {
+    handled = true;
+    console.log("Clearing conversation...");
+    setTimeout(() => {
+      console.log("› prompt restored after clear");
+      fs.writeFileSync(stdinPath, chunks.join(""), "utf8");
+      process.exit(0);
+    }, 40);
+  }
+});
+console.log("› prompt ready for guarded clear");
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_GUARDED_CLEAR_NATIVE_STDIN: stdinPath
+    },
+    stdinPath
+  };
+}
+
+function makeFakeGuardedClearNativeBridgeWithRateLimitModal(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-guarded-clear-modal-app-server.mjs");
+  const codexScript = path.join(projectDir, "fake-guarded-clear-modal-codex.mjs");
+  const stdinPath = path.join(projectDir, "fake-guarded-clear-modal-codex-stdin.txt");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+console.log("codex app-server (WebSockets)");
+console.log("  listening on: ws://127.0.0.1:4544");
+console.log("  readyz: http://127.0.0.1:4544/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_GUARDED_CLEAR_MODAL_NATIVE_STDIN;
+const chunks = [];
+let stage = "modal";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+  const joined = chunks.join("");
+  if (stage === "modal" && joined.includes("2")) {
+    stage = "ready";
+    console.log("› prompt restored after rate limit modal");
+    return;
+  }
+  if (stage === "ready" && joined.includes("/clear\\n")) {
+    stage = "done";
+    console.log("Clearing conversation...");
+    setTimeout(() => {
+      console.log("› prompt restored after clear");
+      fs.writeFileSync(stdinPath, joined, "utf8");
+      process.exit(0);
+    }, 40);
+  }
+});
+console.log("Approaching rate limits");
+console.log("Keep current model");
+console.log("Press enter to confirm or esc to go back");
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_GUARDED_CLEAR_MODAL_NATIVE_STDIN: stdinPath
+    },
+    stdinPath
+  };
+}
+
+function makeFakeGuardedClearRetryNativeBridge(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-guarded-clear-retry-app-server.mjs");
+  const codexScript = path.join(projectDir, "fake-guarded-clear-retry-codex.mjs");
+  const stdinPath = path.join(projectDir, "fake-guarded-clear-retry-codex-stdin.txt");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+console.log("codex app-server (WebSockets)");
+console.log("  listening on: ws://127.0.0.1:4533");
+console.log("  readyz: http://127.0.0.1:4533/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_GUARDED_CLEAR_RETRY_NATIVE_STDIN;
+const chunks = [];
+let stage = "waiting-command";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+  const joined = chunks.join("");
+  if (stage === "waiting-command" && joined.includes("/clear\\n")) {
+    stage = "waiting-submit-retry";
+    console.log("› /clear");
+    return;
+  }
+  if (stage === "waiting-submit-retry" && joined.endsWith("/clear\\n\\n")) {
+    stage = "done";
+    console.log("Clearing conversation...");
+    setTimeout(() => {
+      console.log("› prompt restored after clear retry");
+      fs.writeFileSync(stdinPath, joined, "utf8");
+      process.exit(0);
+    }, 40);
+  }
+});
+console.log("› prompt ready for guarded clear retry");
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_GUARDED_CLEAR_RETRY_NATIVE_STDIN: stdinPath
+    },
+    stdinPath
+  };
+}
+
+function makeFakeGuardedResumeNativeBridge(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-guarded-resume-app-server.mjs");
+  const codexScript = path.join(projectDir, "fake-guarded-resume-codex.mjs");
+  const stdinPath = path.join(projectDir, "fake-guarded-resume-codex-stdin.txt");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+console.log("codex app-server (WebSockets)");
+console.log("  listening on: ws://127.0.0.1:4522");
+console.log("  readyz: http://127.0.0.1:4522/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_GUARDED_RESUME_NATIVE_STDIN;
+const chunks = [];
+let handled = false;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+  if (handled) {
+    return;
+  }
+  const transcript = chunks.join("");
+  const match = transcript.match(/\\/resume\\s+([^\\n]+)\\n/);
+  if (match) {
+    handled = true;
+    console.log(\`Resumed session \${match[1]}\`);
+    setTimeout(() => {
+      console.log("› prompt restored after resume");
+      fs.writeFileSync(stdinPath, transcript, "utf8");
+      process.exit(0);
+    }, 40);
+  }
+});
+console.log("› prompt ready for guarded resume");
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_GUARDED_RESUME_NATIVE_STDIN: stdinPath
+    },
+    stdinPath
+  };
+}
+
+function makeFakeGuardedResumeTurnSettledNativeBridge(projectDir) {
+  const appServerScript = path.join(projectDir, "fake-guarded-resume-turn-settled-app-server.mjs");
+  const codexScript = path.join(projectDir, "fake-guarded-resume-turn-settled-codex.mjs");
+  const stdinPath = path.join(projectDir, "fake-guarded-resume-turn-settled-codex-stdin.txt");
+
+  fs.writeFileSync(appServerScript, `#!/usr/bin/env node
+console.log("codex app-server (WebSockets)");
+console.log("  listening on: ws://127.0.0.1:4523");
+console.log("  readyz: http://127.0.0.1:4523/readyz");
+const timer = setInterval(() => {}, 1000);
+process.on("SIGTERM", () => {
+  clearInterval(timer);
+  process.exit(0);
+});
+`, "utf8");
+  fs.chmodSync(appServerScript, 0o755);
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_GUARDED_RESUME_TURN_SETTLED_NATIVE_STDIN;
+const chunks = [];
+let stage = "waiting-command";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+  const transcript = chunks.join("");
+  if (stage === "waiting-command" && transcript.includes("/resume --last\\n")) {
+    stage = "waiting-submit-retry";
+    console.log("To continue this session, run codex resume 019d9c48-014c-7a70-b2cb-0ca76f652bbd");
+    console.log("›sume--lasttab to queue message100% context left");
+    return;
+  }
+  if (stage === "waiting-submit-retry" && transcript.endsWith("/resume --last\\n\\n")) {
+    stage = "done";
+    console.log("› prompt restored after resume retry");
+    fs.writeFileSync(stdinPath, transcript, "utf8");
+    process.exit(0);
+  }
+});
+console.log("› prompt ready for guarded resume retry");
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_WRAP_APP_SERVER_BIN: appServerScript,
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\n",
+      FAKE_GUARDED_RESUME_TURN_SETTLED_NATIVE_STDIN: stdinPath
+    },
+    stdinPath
+  };
+}
+
+function makeFakeNativeTaskMultiRetryCodex(projectDir, taskText) {
+  const codexScript = path.join(projectDir, "fake-native-task-multi-retry-codex.mjs");
+  const stdinPath = path.join(projectDir, "fake-native-task-multi-retry-stdin.txt");
+
+  fs.writeFileSync(codexScript, `#!/usr/bin/env node
+import fs from "node:fs";
+
+const stdinPath = process.env.FAKE_NATIVE_TASK_MULTI_RETRY_STDIN;
+const chunks = [];
+let submitCount = 0;
+let taskSeen = false;
+
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  chunks.push(chunk);
+  const transcript = chunks.join("");
+  fs.writeFileSync(stdinPath, transcript, "utf8");
+
+  if (!taskSeen && transcript.includes(${JSON.stringify(taskText)})) {
+    taskSeen = true;
+  }
+  if (!taskSeen) {
+    return;
+  }
+
+  const tail = transcript.slice(-3);
+  submitCount = (transcript.match(/\\n/g) || []).length;
+
+  // 1st submit: echo prompt with the task still in composer.
+  if (submitCount === 1) {
+    console.log("› " + ${JSON.stringify(taskText)});
+    return;
+  }
+  // 2nd submit: still stuck, echo again.
+  if (submitCount === 2) {
+    console.log("› " + ${JSON.stringify(taskText)});
+    return;
+  }
+  // 3rd submit: task starts (busy boundary), then exit.
+  if (submitCount >= 3) {
+    console.log("•Working(0s • esc to interrupt)");
+    setTimeout(() => process.exit(0), 30);
+  }
+});
+
+console.log("› prompt ready for native task");
+`, "utf8");
+  fs.chmodSync(codexScript, 0o755);
+
+  return {
+    env: {
+      QUICK_CODEX_REAL_CODEX_BIN: codexScript,
+      QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: "\\n",
+      FAKE_NATIVE_TASK_MULTI_RETRY_STDIN: stdinPath
+    },
+    codexScript,
+    stdinPath
+  };
+}
+
 async function withFakeExperienceRouter(options, fn) {
   const requests = [];
   let routeCallCount = 0;
@@ -504,8 +1092,8 @@ process.on("SIGTERM", () => {
 }
 
 test("wrap prompt routes broad implementation work to qc-flow", () => {
-  const projectDir = process.cwd();
-  const result = runWrapCli(projectDir, "prompt", "--task", "build a thin wrapper before Codex CLI that auto-routes tasks, planning flow, and manual continuation steps", "--json");
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-flow-"));
+  const result = runWrapCli(projectDir, "prompt", "--dir", projectDir, "--task", "build a thin wrapper before Codex CLI that auto-routes tasks, planning flow, and manual continuation steps", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.route, "qc-flow");
@@ -515,8 +1103,8 @@ test("wrap prompt routes broad implementation work to qc-flow", () => {
 });
 
 test("wrap prompt routes narrow execution work to qc-lock", () => {
-  const projectDir = process.cwd();
-  const result = runWrapCli(projectDir, "prompt", "--task", "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug", "--json");
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-lock-"));
+  const result = runWrapCli(projectDir, "prompt", "--dir", projectDir, "--task", "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.route, "qc-lock");
@@ -524,8 +1112,8 @@ test("wrap prompt routes narrow execution work to qc-lock", () => {
 });
 
 test("wrap prompt routes Vietnamese narrow execution work to qc-lock", () => {
-  const projectDir = process.cwd();
-  const result = runWrapCli(projectDir, "prompt", "--task", "sửa lỗi chính tả trong README.md", "--json");
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-lock-vi-"));
+  const result = runWrapCli(projectDir, "prompt", "--dir", projectDir, "--task", "sửa lỗi chính tả trong README.md", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.route, "qc-lock");
@@ -533,8 +1121,8 @@ test("wrap prompt routes Vietnamese narrow execution work to qc-lock", () => {
 });
 
 test("wrap prompt honors manual route override before brain or heuristic routing", () => {
-  const projectDir = process.cwd();
-  const result = runWrapCli(projectDir, "prompt", "--task", "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug", "--route-override", "qc-flow", "--json");
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-override-"));
+  const result = runWrapCli(projectDir, "prompt", "--dir", projectDir, "--task", "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug", "--route-override", "qc-flow", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.route, "qc-flow");
@@ -545,8 +1133,8 @@ test("wrap prompt honors manual route override before brain or heuristic routing
 });
 
 test("wrap prompt keeps read-only questions on the direct route", () => {
-  const projectDir = process.cwd();
-  const result = runWrapCli(projectDir, "prompt", "--task", "explain how the wrapper state file works", "--json");
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-direct-"));
+  const result = runWrapCli(projectDir, "prompt", "--dir", projectDir, "--task", "explain how the wrapper state file works", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.route, "direct");
@@ -555,8 +1143,8 @@ test("wrap prompt keeps read-only questions on the direct route", () => {
 });
 
 test("wrap prompt keeps Vietnamese read-only questions on the direct route", () => {
-  const projectDir = process.cwd();
-  const result = runWrapCli(projectDir, "prompt", "--task", "giải thích kiến trúc hiện tại của wrapper", "--json");
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-direct-vi-"));
+  const result = runWrapCli(projectDir, "prompt", "--dir", projectDir, "--task", "giải thích kiến trúc hiện tại của wrapper", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.route, "direct");
@@ -575,11 +1163,11 @@ test("wrap prompt consumes Experience Engine route-task verdict when available",
     routeModelResponses: []
   });
   try {
-    const projectDir = process.cwd();
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-brain-"));
     const result = runWrapCliWithEnv(projectDir, {
       QUICK_CODEX_EXPERIENCE_URL: router.baseUrl,
       QUICK_CODEX_WRAP_ENABLE_TASK_ROUTER: "1"
-    }, "prompt", "--task", "build a thin wrapper before Codex CLI that auto-routes tasks, planning flow, and manual continuation steps", "--json");
+    }, "prompt", "--dir", projectDir, "--task", "build a thin wrapper before Codex CLI that auto-routes tasks, planning flow, and manual continuation steps", "--json");
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.route, "qc-lock");
@@ -594,7 +1182,7 @@ test("wrap prompt consumes Experience Engine route-task verdict when available",
 });
 
 test("wrap prompt enables Experience routing from ~/.experience config without requiring routing=true", () => {
-  const projectDir = process.cwd();
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-config-"));
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-exp-config-"));
   const homeDir = path.join(configDir, "home");
   fs.mkdirSync(path.join(homeDir, ".experience"), { recursive: true });
@@ -605,7 +1193,7 @@ test("wrap prompt enables Experience routing from ~/.experience config without r
   const result = runWrapCliWithEnv(projectDir, {
     HOME: homeDir,
     QUICK_CODEX_WRAP_TASK_ROUTER_TIMEOUT_MS: "50"
-  }, "prompt", "--task", "build a thin wrapper before Codex CLI that auto-routes tasks, planning flow, and manual continuation steps", "--json");
+  }, "prompt", "--dir", projectDir, "--task", "build a thin wrapper before Codex CLI that auto-routes tasks, planning flow, and manual continuation steps", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.routeSource, "heuristic-fallback");
@@ -614,12 +1202,12 @@ test("wrap prompt enables Experience routing from ~/.experience config without r
 });
 
 test("wrap prompt falls back to heuristic routing when Experience Engine route-task is unavailable", () => {
-  const projectDir = process.cwd();
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-fallback-"));
   const result = runWrapCliWithEnv(projectDir, {
     QUICK_CODEX_EXPERIENCE_URL: "http://127.0.0.1:9",
     QUICK_CODEX_WRAP_ENABLE_TASK_ROUTER: "1",
     QUICK_CODEX_WRAP_TASK_ROUTER_TIMEOUT_MS: "50"
-  }, "prompt", "--task", "build a thin wrapper before Codex CLI that auto-routes tasks, planning flow, and manual continuation steps", "--json");
+  }, "prompt", "--dir", projectDir, "--task", "build a thin wrapper before Codex CLI that auto-routes tasks, planning flow, and manual continuation steps", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.route, "qc-flow");
@@ -908,7 +1496,7 @@ test("wrap start uses the native app-server compact path for same-phase runs whe
 });
 
 test("wrap run dry-run launches the task-router prompt through codex exec", () => {
-  const projectDir = process.cwd();
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-wrap-run-dry-"));
   const result = runWrapCli(projectDir, "run", "--dir", projectDir, "--task", "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug", "--dry-run", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
@@ -1042,7 +1630,7 @@ test("wrap start posts route-feedback after a routed exec turn", async () => {
 });
 
 test("wrap auto dry-run launches a raw task through the same routed path", () => {
-  const projectDir = process.cwd();
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-auto-dry-"));
   const result = runWrapCli(projectDir, "auto", "--dir", projectDir, "--task", "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug", "--dry-run", "--json");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
@@ -1383,7 +1971,7 @@ test("codex shim routes a plain prompt into the default follow-safe wrapper prof
   const result = runCodexShimWithEnv(projectDir, {
     QUICK_CODEX_WRAP_BIN: path.join(process.cwd(), "bin", "quick-codex-wrap.js"),
     QUICK_CODEX_REAL_CODEX_BIN: process.execPath
-  }, "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug", "--qc-json", "--qc-dry-run");
+  }, "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug", "--qc-dir", projectDir, "--qc-json", "--qc-dry-run");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.route, "qc-lock");
@@ -1580,7 +2168,60 @@ test("codex shim prints qc help locally", () => {
   assert.match(result.stdout, /--qc-force-flow/);
   assert.match(result.stdout, /--qc-force-direct/);
   assert.match(result.stdout, /--qc-task <text>/);
-  assert.match(result.stdout, /--qc-ui <auto\|plain\|rich>/);
+  assert.match(result.stdout, /--qc-ui <auto\|plain\|rich\|native>/);
+  assert.match(result.stdout, /--qc-native-guarded-slash <\/status\|\/compact\|\/clear\|\/resume <session-id-or-name\|--last>>/);
+});
+
+test("codex shim forwards guarded native slash aliases to the wrapper", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shim-native-guarded-"));
+  const fakeNative = makeFakeGuardedSlashNativeBridge(projectDir);
+  const result = runCodexShimWithEnv(projectDir, {
+    QUICK_CODEX_WRAP_BIN: path.join(process.cwd(), "bin", "quick-codex-wrap.js"),
+    QUICK_CODEX_REAL_CODEX_BIN: process.execPath,
+    ...fakeNative.env
+  }, "--qc-chat", "--qc-dir", projectDir, "--qc-ui", "native", "--qc-native-guarded-slash", "/status");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] native-slash=settled \| command=\/status \| kind=proof \| via=prompt-ready/);
+  assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/status\n");
+});
+
+test("codex shim forwards guarded native /compact aliases to the wrapper", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shim-native-compact-"));
+  const fakeNative = makeFakeGuardedCompactNativeBridge(projectDir);
+  const result = runCodexShimWithEnv(projectDir, {
+    QUICK_CODEX_WRAP_BIN: path.join(process.cwd(), "bin", "quick-codex-wrap.js"),
+    QUICK_CODEX_REAL_CODEX_BIN: process.execPath,
+    ...fakeNative.env
+  }, "--qc-chat", "--qc-dir", projectDir, "--qc-ui", "native", "--qc-native-guarded-slash", "/compact");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] native-slash=settled \| command=\/compact \| kind=continuity \| via=prompt-ready/);
+  assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/compact\n");
+});
+
+test("codex shim forwards guarded native /clear aliases to the wrapper", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shim-native-clear-"));
+  const fakeNative = makeFakeGuardedClearNativeBridge(projectDir);
+  const result = runCodexShimWithEnv(projectDir, {
+    QUICK_CODEX_WRAP_BIN: path.join(process.cwd(), "bin", "quick-codex-wrap.js"),
+    QUICK_CODEX_REAL_CODEX_BIN: process.execPath,
+    ...fakeNative.env
+  }, "--qc-chat", "--qc-dir", projectDir, "--qc-ui", "native", "--qc-native-guarded-slash", "/clear");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] native-slash=settled \| command=\/clear \| kind=continuity \| via=prompt-ready/);
+  assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/clear\n");
+});
+
+test("codex shim forwards guarded native /resume aliases to the wrapper", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shim-native-guarded-resume-"));
+  const fakeNative = makeFakeGuardedResumeNativeBridge(projectDir);
+  const result = runCodexShimWithEnv(projectDir, {
+    QUICK_CODEX_WRAP_BIN: path.join(process.cwd(), "bin", "quick-codex-wrap.js"),
+    QUICK_CODEX_REAL_CODEX_BIN: process.execPath,
+    ...fakeNative.env
+  }, "--qc-chat", "--qc-dir", projectDir, "--qc-ui", "native", "--qc-native-guarded-slash", "/resume my-saved-thread");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] native-slash=settled \| command=\/resume my-saved-thread \| kind=continuity \| via=prompt-ready/);
+  assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/resume my-saved-thread\n");
 });
 
 test("codex shim forwards manual route overrides to the wrapper", () => {
@@ -1606,6 +2247,653 @@ test("interactive wrapper shell exits cleanly after processing a piped message",
   assert.match(result.stdout, /Quick Codex interactive shell/);
   assert.match(result.stdout, /\[wrapper\] route=qc-lock/);
   assert.match(result.stdout, /fake codex assistant reply/);
+});
+
+test("interactive wrapper shell supports experimental native ui bridge", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-native-"));
+  const fakeNative = makeFakeNativeBridge(projectDir);
+  const startupTask = "Say exactly NATIVE_STARTUP_PROMPT_OK";
+  const result = runWrapCliWithEnv(projectDir, {
+    ...fakeNative.env
+  }, "chat", "--dir", projectDir, "--ui", "native", "--task", startupTask);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] launching experimental native Codex bridge/);
+  assert.match(result.stdout, /\[wrapper\] native-bridge=ready/);
+  assert.match(result.stdout, /FAKE_NATIVE_CODEX_OK/);
+
+  const appServerArgv = JSON.parse(fs.readFileSync(fakeNative.appServerArgvPath, "utf8"));
+  const codexArgv = JSON.parse(fs.readFileSync(fakeNative.codexArgvPath, "utf8"));
+  assert.match(appServerArgv.join(" "), /--listen ws:\/\/127\.0\.0\.1:/);
+  assert.match(codexArgv.join(" "), /--remote ws:\/\/127\.0\.0\.1:/);
+  assert.match(codexArgv.join(" "), /--no-alt-screen/);
+  assert.match(codexArgv.join(" "), /Say exactly NATIVE_STARTUP_PROMPT_OK/);
+});
+
+test("native session observer detects busy, prompt-ready, and turn-settled signals", () => {
+  const observer = new NativeSessionObserver();
+  observer.ingestChunk("stdout", "\u001b[2mWorking\u001b[22m (1s)\n");
+  observer.ingestChunk("stdout", "› waiting for next input\n");
+  observer.ingestChunk("stdout", "To continue this session, run codex resume 019d9b43-1163-77f1-92f8-f51d1d19daf9\n");
+
+  assert.equal(observer.snapshot.busy, false);
+  assert.equal(observer.snapshot.promptReady, true);
+  assert.equal(observer.snapshot.turnSettled, true);
+  assert.equal(observer.snapshot.sessionId, "019d9b43-1163-77f1-92f8-f51d1d19daf9");
+  assert.equal(observer.events.some((entry) => entry.type === "native-busy"), true);
+  assert.equal(observer.events.some((entry) => entry.type === "prompt-ready"), true);
+  assert.equal(observer.events.some((entry) => entry.type === "turn-settled"), true);
+});
+
+test("native session observer does not mark prompt-ready when startup busy output contains the prompt glyph", () => {
+  const observer = new NativeSessionObserver();
+  observer.ingestChunk(
+    "stdout",
+    "• Booting MCP server: context7 (0s • esc to interrupt)\n› Summarize recent commits\n"
+  );
+
+  assert.equal(observer.snapshot.busy, true);
+  assert.equal(observer.snapshot.promptReady, false);
+  assert.equal(observer.events.some((entry) => entry.type === "native-busy"), true);
+  assert.equal(observer.events.some((entry) => entry.type === "prompt-ready"), false);
+});
+
+test("native session controller only sends input when stdin is controllable", async () => {
+  const chunks = [];
+  const controller = new NativeSessionController({
+    stdin: {
+      destroyed: false,
+      write(value) {
+        chunks.push(value);
+      }
+    },
+    mode: "pipe"
+  });
+  controller.sendText("hello");
+  controller.sendSlashCommand("/compact");
+  assert.equal(chunks.join(""), "hello\n/compact\n");
+
+  const blocked = new NativeSessionController({ stdin: null, mode: "inherit" });
+  assert.equal(blocked.isControllable(), false);
+  assert.throws(() => blocked.sendText("nope"), /not controllable/i);
+
+  const ptyChunks = [];
+  const ptyController = new NativeSessionController({
+    writer(value) {
+      ptyChunks.push(value);
+    },
+    mode: "pty"
+  });
+  const previousDelay = process.env.QUICK_CODEX_WRAP_NATIVE_PTY_SUBMIT_DELAY_MS;
+  try {
+    process.env.QUICK_CODEX_WRAP_NATIVE_PTY_SUBMIT_DELAY_MS = "5";
+    ptyController.sendText("hello");
+    assert.equal(ptyChunks.join(""), "hello");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    ptyController.sendSlashCommand("/clear");
+    assert.equal(ptyChunks.join(""), "hello\u001b[13u/clear\u001b[13u");
+  } finally {
+    if (previousDelay == null) {
+      delete process.env.QUICK_CODEX_WRAP_NATIVE_PTY_SUBMIT_DELAY_MS;
+    } else {
+      process.env.QUICK_CODEX_WRAP_NATIVE_PTY_SUBMIT_DELAY_MS = previousDelay;
+    }
+  }
+});
+
+test("launchNativeCodexSession exposes observer state and controller availability in pipe mode", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-observer-"));
+  const fakeNative = makeFakeObservedNativeBridge(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_OBSERVED_NATIVE_STDIN: process.env.FAKE_OBSERVED_NATIVE_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.controllerAvailable, true);
+    assert.equal(result.observer.snapshot.bridgeState, "stopped");
+    assert.equal(result.observer.snapshot.promptReady, true);
+    assert.equal(result.observer.snapshot.turnSettled, true);
+    assert.equal(result.observer.snapshot.sessionId, "019d9b43-1163-77f1-92f8-f51d1d19daf9");
+    assert.equal(result.observer.events.some((entry) => entry.type === "bridge-ready"), true);
+    assert.equal(result.observer.events.some((entry) => entry.type === "prompt-ready"), true);
+    assert.equal(result.observer.events.some((entry) => entry.type === "turn-settled"), true);
+    assert.equal(fs.existsSync(fakeNative.stdinPath), true);
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("launchNativeCodexSession detects bridge readiness when codex app-server writes to stderr", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-observer-stderr-"));
+  const fakeNative = makeFakeObservedNativeBridgeStderr(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_OBSERVED_NATIVE_STDERR_STDIN: process.env.FAKE_OBSERVED_NATIVE_STDERR_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.observer.events.some((entry) => entry.type === "bridge-ready"), true);
+    assert.equal(result.observer.events.some((entry) => entry.source === "bridge-stderr"), true);
+    assert.equal(fs.existsSync(fakeNative.stdinPath), true);
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("launchNativeCodexSession can inject a guarded /status slash command", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-guarded-"));
+  const fakeNative = makeFakeGuardedSlashNativeBridge(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_GUARDED_NATIVE_STDIN: process.env.FAKE_GUARDED_NATIVE_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      guardedSlashCommand: "/status",
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.guardedSlash.command, "/status");
+    assert.equal(result.guardedSlash.kind, "proof");
+    assert.equal(result.guardedSlash.settledBy, "prompt-ready");
+    assert.match(result.guardedSlash.settledText, /prompt restored after status/);
+    assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/status\n");
+    assert.equal(result.observer.events.some((entry) => entry.type === "slash-injected"), true);
+    assert.equal(result.observer.events.some((entry) => entry.type === "slash-settled"), true);
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("interactive native bridge exposes guarded slash injection through CLI", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-native-guarded-"));
+  const fakeNative = makeFakeGuardedSlashNativeBridge(projectDir);
+  const result = runWrapCliWithEnv(projectDir, {
+    ...fakeNative.env
+  }, "chat", "--dir", projectDir, "--ui", "native", "--native-guarded-slash", "/status");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] native-slash=await-ready \| command=\/status \| kind=proof/);
+  assert.match(result.stdout, /\[wrapper\] native-slash=settled \| command=\/status \| kind=proof \| via=prompt-ready/);
+  assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/status\n");
+});
+
+test("launchNativeCodexSession can inject a guarded /compact continuity slash command", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-guarded-compact-"));
+  const fakeNative = makeFakeGuardedCompactNativeBridge(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_GUARDED_COMPACT_NATIVE_STDIN: process.env.FAKE_GUARDED_COMPACT_NATIVE_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      guardedSlashCommand: "/compact",
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.guardedSlash.command, "/compact");
+    assert.equal(result.guardedSlash.kind, "continuity");
+    assert.equal(result.guardedSlash.settledBy, "prompt-ready");
+    assert.match(result.guardedSlash.settledText, /prompt restored after compact/);
+    assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/compact\n");
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("interactive native bridge exposes guarded /compact injection through CLI", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-native-guarded-compact-"));
+  const fakeNative = makeFakeGuardedCompactNativeBridge(projectDir);
+  const result = runWrapCliWithEnv(projectDir, {
+    ...fakeNative.env
+  }, "chat", "--dir", projectDir, "--ui", "native", "--native-guarded-slash", "/compact");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] native-slash=await-ready \| command=\/compact \| kind=continuity/);
+  assert.match(result.stdout, /\[wrapper\] native-slash=settled \| command=\/compact \| kind=continuity \| via=prompt-ready/);
+  assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/compact\n");
+});
+
+test("launchNativeCodexSession can inject a guarded /clear continuity slash command", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-guarded-clear-"));
+  const fakeNative = makeFakeGuardedClearNativeBridge(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_GUARDED_CLEAR_NATIVE_STDIN: process.env.FAKE_GUARDED_CLEAR_NATIVE_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      guardedSlashCommand: "/clear",
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.guardedSlash.command, "/clear");
+    assert.equal(result.guardedSlash.kind, "continuity");
+    assert.equal(result.guardedSlash.settledBy, "prompt-ready");
+    assert.match(result.guardedSlash.settledText, /prompt restored after clear/);
+    assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/clear\n");
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("launchNativeCodexSession auto-dismisses the rate-limit modal before injecting guarded /clear", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-guarded-clear-modal-"));
+  const fakeNative = makeFakeGuardedClearNativeBridgeWithRateLimitModal(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_GUARDED_CLEAR_MODAL_NATIVE_STDIN: process.env.FAKE_GUARDED_CLEAR_MODAL_NATIVE_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      guardedSlashCommand: "/clear",
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.guardedSlash.command, "/clear");
+    assert.equal(result.observer.events.some((entry) => entry.type === "automation-choice-required"), true);
+    assert.equal(result.observer.events.some((entry) => entry.type === "automation-choice-sent"), true);
+    assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "2/clear\n");
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("NativeSessionObserver does not re-trigger the rate-limit modal from stale buffered text", () => {
+  const observer = new NativeSessionObserver();
+
+  observer.ingestChunk("pty-output", "Approaching rate limits");
+  observer.ingestChunk("pty-output", "Keep current model");
+  observer.ingestChunk("pty-output", "Press enter to confirm or esc to go back");
+
+  const firstCount = observer.events.filter((entry) => entry.type === "automation-choice-required").length;
+  assert.equal(firstCount, 1);
+
+  observer.ingestChunk("pty-output", "› prompt restored after resume");
+  observer.ingestChunk("pty-output", "Messages to be submitted after next tool call");
+  observer.ingestChunk("pty-output", "›Improve documentation in @filename");
+
+  const secondCount = observer.events.filter((entry) => entry.type === "automation-choice-required").length;
+  assert.equal(secondCount, 1);
+});
+
+test("sendNativeTaskWithRetry can cross the busy boundary after multiple submit retries", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-task-multi-retry-"));
+  const taskText = "Long task that needs multiple submit retries to start";
+  const fakeCodex = makeFakeNativeTaskMultiRetryCodex(projectDir, taskText);
+  const previousEnv = {
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ: process.env.QUICK_CODEX_WRAP_NATIVE_SUBMIT_SEQ,
+    FAKE_NATIVE_TASK_MULTI_RETRY_STDIN: process.env.FAKE_NATIVE_TASK_MULTI_RETRY_STDIN
+  };
+  Object.assign(process.env, fakeCodex.env);
+
+  try {
+    const observer = new NativeSessionObserver();
+    const child = spawn(process.env.QUICK_CODEX_REAL_CODEX_BIN, [], {
+      cwd: projectDir,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => observer.ingestChunk("codex-stdout", chunk));
+    child.stderr.on("data", (chunk) => observer.ingestChunk("codex-stderr", chunk));
+
+    const controller = new NativeSessionController({
+      stdin: child.stdin,
+      mode: "pipe",
+      submitSequence: "\n"
+    });
+
+    const result = await sendNativeTaskWithRetry({
+      controller,
+      observer,
+      task: taskText,
+      timeoutMs: 4000,
+      maxSubmitRetries: 3,
+      onProgress: () => {}
+    });
+
+    assert.equal(result.startedBy, "native-busy");
+    assert.equal(result.retries, 2);
+
+    const exit = await new Promise((resolve) => child.once("close", (code) => resolve(code)));
+    assert.equal(exit, 0);
+    assert.equal(fs.readFileSync(fakeCodex.stdinPath, "utf8"), `${taskText}\n\n\n`);
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("launchNativeCodexSession retries submit when guarded /clear remains in the composer", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-guarded-clear-retry-"));
+  const fakeNative = makeFakeGuardedClearRetryNativeBridge(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_GUARDED_CLEAR_RETRY_NATIVE_STDIN: process.env.FAKE_GUARDED_CLEAR_RETRY_NATIVE_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      guardedSlashCommand: "/clear",
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.guardedSlash.command, "/clear");
+    assert.equal(result.guardedSlash.submitRetries, 1);
+    assert.equal(result.observer.events.some((entry) => entry.type === "slash-submit-retry"), true);
+    assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/clear\n\n");
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("launchNativeCodexSession waits for a follow-up prompt when guarded /resume settles early via turn-settled residue", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-guarded-resume-turn-settled-"));
+  const fakeNative = makeFakeGuardedResumeTurnSettledNativeBridge(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_GUARDED_RESUME_TURN_SETTLED_NATIVE_STDIN: process.env.FAKE_GUARDED_RESUME_TURN_SETTLED_NATIVE_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      guardedSlashCommand: "/resume --last",
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.guardedSlash.command, "/resume --last");
+    assert.equal(result.guardedSlash.settledBy, "prompt-ready");
+    assert.equal(result.guardedSlash.submitRetries, 1);
+    assert.equal(result.observer.events.some((entry) => entry.type === "slash-await-followup-prompt"), true);
+    assert.equal(result.observer.events.some((entry) => entry.type === "slash-submit-retry"), true);
+    assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/resume --last\n\n");
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("launchNativeCodexSession can inject a guarded /resume continuity slash command with an explicit target", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-guarded-resume-"));
+  const fakeNative = makeFakeGuardedResumeNativeBridge(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_GUARDED_RESUME_NATIVE_STDIN: process.env.FAKE_GUARDED_RESUME_NATIVE_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      guardedSlashCommand: "/resume my-saved-thread",
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.guardedSlash.command, "/resume my-saved-thread");
+    assert.equal(result.guardedSlash.kind, "continuity");
+    assert.equal(result.guardedSlash.settledBy, "prompt-ready");
+    assert.equal(result.guardedSlash.submitRetries, 0);
+    assert.match(result.guardedSlash.settledText, /prompt restored after resume/);
+    assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/resume my-saved-thread\n");
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("launchNativeCodexSession can inject a guarded /resume --last continuity slash command", async () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-native-guarded-resume-last-"));
+  const fakeNative = makeFakeGuardedResumeNativeBridge(projectDir);
+  const previousEnv = {
+    QUICK_CODEX_WRAP_APP_SERVER_BIN: process.env.QUICK_CODEX_WRAP_APP_SERVER_BIN,
+    QUICK_CODEX_REAL_CODEX_BIN: process.env.QUICK_CODEX_REAL_CODEX_BIN,
+    FAKE_GUARDED_RESUME_NATIVE_STDIN: process.env.FAKE_GUARDED_RESUME_NATIVE_STDIN
+  };
+  Object.assign(process.env, fakeNative.env);
+  try {
+    const result = await launchNativeCodexSession({
+      dir: projectDir,
+      stdioMode: "pipe",
+      forwardOutput: false,
+      guardedSlashCommand: "/resume --last",
+      observer: new NativeSessionObserver(),
+      onProgress: () => {},
+      policy: {
+        permissionProfile: "safe",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+        bypassApprovalsAndSandbox: false
+      }
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.guardedSlash.command, "/resume --last");
+    assert.equal(result.guardedSlash.kind, "continuity");
+    assert.equal(result.guardedSlash.settledBy, "prompt-ready");
+    assert.equal(result.guardedSlash.submitRetries, 0);
+    assert.match(result.guardedSlash.settledText, /prompt restored after resume/);
+    assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/resume --last\n");
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+});
+
+test("interactive native bridge exposes guarded /clear injection through CLI", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-native-guarded-clear-"));
+  const fakeNative = makeFakeGuardedClearNativeBridge(projectDir);
+  const result = runWrapCliWithEnv(projectDir, {
+    ...fakeNative.env
+  }, "chat", "--dir", projectDir, "--ui", "native", "--native-guarded-slash", "/clear");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] native-slash=await-ready \| command=\/clear \| kind=continuity/);
+  assert.match(result.stdout, /\[wrapper\] native-slash=settled \| command=\/clear \| kind=continuity \| via=prompt-ready/);
+  assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/clear\n");
+});
+
+test("interactive native bridge exposes guarded /resume injection through CLI", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-native-guarded-resume-"));
+  const fakeNative = makeFakeGuardedResumeNativeBridge(projectDir);
+  const result = runWrapCliWithEnv(projectDir, {
+    ...fakeNative.env
+  }, "chat", "--dir", projectDir, "--ui", "native", "--native-guarded-slash", "/resume my-saved-thread");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] native-slash=await-ready \| command=\/resume my-saved-thread \| kind=continuity/);
+  assert.match(result.stdout, /\[wrapper\] native-slash=settled \| command=\/resume my-saved-thread \| kind=continuity \| via=prompt-ready/);
+  assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/resume my-saved-thread\n");
+});
+
+test("interactive native bridge exposes guarded /resume --last injection through CLI", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-native-guarded-resume-last-"));
+  const fakeNative = makeFakeGuardedResumeNativeBridge(projectDir);
+  const result = runWrapCliWithEnv(projectDir, {
+    ...fakeNative.env
+  }, "chat", "--dir", projectDir, "--ui", "native", "--native-guarded-slash", "/resume --last");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[wrapper\] native-slash=await-ready \| command=\/resume --last \| kind=continuity/);
+  assert.match(result.stdout, /\[wrapper\] native-slash=settled \| command=\/resume --last \| kind=continuity \| via=prompt-ready/);
+  assert.equal(fs.readFileSync(fakeNative.stdinPath, "utf8"), "/resume --last\n");
 });
 
 test("interactive wrapper shell prints lifecycle progress before the final response", () => {
@@ -1718,7 +3006,7 @@ test("bare codex now opens the interactive wrapper shell by default", () => {
     QUICK_CODEX_WRAP_BIN: path.join(process.cwd(), "bin", "quick-codex-wrap.js"),
     QUICK_CODEX_REAL_CODEX_BIN: process.execPath,
     ...fakeCodex.env
-  }, "fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug\n/exit\n");
+  }, "/status\n/task fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug\n/exit\n", "--qc-dir", projectDir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /Quick Codex interactive shell/);
   assert.match(result.stdout, /\[wrapper\] route=qc-lock/);

@@ -24,6 +24,7 @@ const QC_OPTION_ALIASES = new Map([
   ["--qc-dir", { target: "--dir", takesValue: true }],
   ["--qc-run-file", { target: "--run", takesValue: true }],
   ["--qc-output-last-message", { target: "--output-last-message", takesValue: true }],
+  ["--qc-native-guarded-slash", { target: "--native-guarded-slash", takesValue: true }],
   ["--qc-max-turns", { target: "--max-turns", takesValue: true }],
   ["--qc-approval", { target: "--approval-mode", takesValue: true }],
   ["--qc-ui", { target: "--ui", takesValue: true }],
@@ -165,7 +166,7 @@ Alias options:
   --qc-approval <mode>
   Maps to: --approval-mode
 
-  --qc-ui <auto|plain|rich>
+  --qc-ui <auto|plain|rich|native>
   Maps to: --ui
 
   --qc-max-turns <n>
@@ -183,6 +184,9 @@ Alias options:
   --qc-output-last-message <path>
   Maps to: --output-last-message
 
+  --qc-native-guarded-slash </status|/compact|/clear|/resume <session-id-or-name|--last>>
+  Maps to: --native-guarded-slash
+
 Examples:
   codex --qc-help
   codex
@@ -194,6 +198,11 @@ Examples:
   codex --qc-readonly --qc-manual --qc-task "inspect and explain this repo" --qc-json
   codex --qc-auto --qc-task "continue the active wrapper work" --qc-json
   codex --qc-follow-safe --qc-dir /path/to/project --qc-run-file .quick-codex-flow/sample.md --qc-json
+  codex --qc-ui native
+  codex --qc-ui native --qc-native-guarded-slash /status
+  codex --qc-ui native --qc-native-guarded-slash /compact
+  codex --qc-ui native --qc-native-guarded-slash /clear
+  codex --qc-ui native --qc-native-guarded-slash "/resume --last"
   codex --qc-force-flow --qc-task "research the repo and plan the work" --qc-json
   codex --qc-force-direct --qc-task "explain the wrapper architecture" --qc-json
   codex --qc-auto --qc-dir /path/to/project --qc-run-file .quick-codex-flow/sample.md --qc-follow --qc-max-turns 3 --qc-json

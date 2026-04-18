@@ -28,6 +28,7 @@ import {
   rawTaskOrchestration,
   readRunArtifact,
   routeTask,
+  launchNativeCodexSession,
   runCodexCommand,
   saveWrapperState
 } from "../lib/wrapper/index.js";
@@ -36,7 +37,7 @@ function usage() {
   console.log(`Usage:
   quick-codex-wrap prompt --task <text> [--route-override <auto|qc-flow|qc-lock|direct>] [--json]
   quick-codex-wrap run --task <text> [--dir <project-dir>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--output-last-message <file>]
-  quick-codex-wrap chat [--dir <project-dir>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--ui <auto|plain|rich>] [--follow] [--max-turns <n>] [--json]
+  quick-codex-wrap chat [--dir <project-dir>] [--task <text>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--ui <auto|plain|rich|native>] [--native-guarded-slash </status|/compact|/clear|/resume <session-id-or-name|--last>>] [--follow] [--max-turns <n>] [--json]
   quick-codex-wrap auto [--dir <project-dir>] [--run <path>] [--task <text>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--follow] [--max-turns <n>] [--output-last-message <file>]
   quick-codex-wrap decide [--dir <project-dir>] [--run <path>] [--json]
   quick-codex-wrap checkpoint [--dir <project-dir>] [--run <path>] [--json]
@@ -75,7 +76,7 @@ function shellHelpText() {
     "Any other line is treated as a user task and routed through the thin wrapper.",
     "Default shell policy comes from .quick-codex-flow/wrapper-config.json when present.",
     "Press Tab to complete slash commands and known profile names.",
-    "Use --ui plain to disable the rich TUI and fall back to the plain shell."
+    "Use --ui native for the experimental stock-Codex bridge, or --ui plain to disable the rich TUI."
   ].join("\n");
 }
 
@@ -107,10 +108,10 @@ function normalizeUiRenderer(value) {
   if (!normalized || normalized === "auto") {
     return "auto";
   }
-  if (normalized === "plain" || normalized === "rich") {
+  if (normalized === "plain" || normalized === "rich" || normalized === "native") {
     return normalized;
   }
-  throw new Error("--ui must be one of: auto, plain, rich");
+  throw new Error("--ui must be one of: auto, plain, rich, native");
 }
 
 function parseArgs(argv) {
@@ -129,6 +130,7 @@ function parseArgs(argv) {
     task: null,
     routeOverride: null,
     ui: null,
+    nativeGuardedSlash: null,
     permissionProfile: null,
     approvalMode: null
   };
@@ -232,6 +234,14 @@ function parseArgs(argv) {
         throw new Error("--approval-mode requires a value");
       }
       result.approvalMode = argv[i];
+      continue;
+    }
+    if (arg === "--native-guarded-slash") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--native-guarded-slash requires a slash command");
+      }
+      result.nativeGuardedSlash = argv[i];
       continue;
     }
     throw new Error(`Unknown option: ${arg}`);
@@ -791,10 +801,32 @@ function resolveShellState({ args, wrapperConfig }) {
 
 function resolveChatUiRenderer({ args, shellState }) {
   const requested = args.ui ?? process.env.QUICK_CODEX_WRAP_UI ?? shellState.uiRenderer ?? "auto";
-  if (requested === "plain" || requested === "rich") {
+  if (requested === "plain" || requested === "rich" || requested === "native") {
     return requested;
   }
   return (process.stdin.isTTY && process.stdout.isTTY && !args.json) ? "rich" : "plain";
+}
+
+async function runNativeChatShell(args) {
+  const wrapperConfig = loadWrapperConfig(args.dir);
+  const policy = resolvePermissionPolicy({
+    explicitPermissionProfile: args.permissionProfile,
+    explicitApprovalMode: args.approvalMode,
+    wrapperConfig
+  });
+  console.log("[wrapper] launching experimental native Codex bridge");
+  console.log("[wrapper] note: this keeps the stock Codex TUI and slash commands, but per-message wrapper mediation is not enabled in this first slice.");
+  const result = await launchNativeCodexSession({
+    dir: args.dir,
+    policy,
+    prompt: args.task ?? null,
+    stdioMode: args.nativeGuardedSlash ? "pty" : "inherit",
+    guardedSlashCommand: args.nativeGuardedSlash,
+    onProgress: (entry) => console.log(`[wrapper] ${entry}`)
+  });
+  if (result.status !== 0) {
+    throw new Error(`Native Codex bridge exited with status ${result.status}.`);
+  }
 }
 
 function applyShellCommand({ line, shellState }) {
@@ -1216,14 +1248,19 @@ async function runPlainChatShell(args, session) {
 }
 
 async function runChatShell(args) {
-  const session = createChatSession(args);
   const renderer = resolveChatUiRenderer({
     args,
     shellState: {
-      uiRenderer: session.getStatus().uiRenderer
+      uiRenderer: args.ui ?? loadWrapperConfig(args.dir).defaults.chat.uiRenderer
     }
   });
 
+  if (renderer === "native") {
+    await runNativeChatShell(args);
+    return;
+  }
+
+  const session = createChatSession(args);
   if (renderer === "rich") {
     try {
       const { runRichChatRenderer } = await import("../lib/wrapper/rich-chat.js");

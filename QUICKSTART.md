@@ -19,6 +19,11 @@ After the shim is installed:
 - real TTY terminals default to the richer Ink-based TUI
 - non-TTY, CI, and `--json` sessions automatically fall back to the plain shell
 - `codex --qc-ui plain` forces the plain shell when you do not want the richer TUI
+- `codex --qc-ui native` launches the experimental stock-Codex bridge instead of the wrapper-owned shell
+- `quick-codex-wrap chat --ui native --native-guarded-slash /status` is the first guarded native proof-path smoke
+- `quick-codex-wrap chat --ui native --native-guarded-slash /compact` is the first guarded continuity-command smoke
+- `quick-codex-wrap chat --ui native --native-guarded-slash /clear` is the next guarded continuity-command smoke
+- the native bridge keeps the stock Codex TUI and now exposes internal observer/controller primitives for future automation work, but it does not yet auto-inject slash commands
 - `codex --qc-bypass` is the escape hatch for raw Codex behavior
 
 Minimal rollout check:
@@ -27,6 +32,13 @@ Minimal rollout check:
 codex --qc-help
 codex
 codex --qc-ui plain
+codex --qc-ui native
+codex --qc-ui native --qc-native-guarded-slash /status
+codex --qc-ui native --qc-native-guarded-slash /compact
+codex --qc-ui native --qc-native-guarded-slash /clear
+quick-codex-wrap chat --ui native --native-guarded-slash /status
+quick-codex-wrap chat --ui native --native-guarded-slash /compact
+quick-codex-wrap chat --ui native --native-guarded-slash /clear
 ```
 
 The rest of this file covers the lower-level install and workflow details.
