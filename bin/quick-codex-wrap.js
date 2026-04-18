@@ -853,6 +853,7 @@ async function runNativeChatShell(args) {
     policy,
     prompt: args.task ?? null,
     stdioMode: args.nativeGuardedSlash ? "pty" : "inherit",
+    forwardOutput: args.nativeGuardedSlash ? true : null,
     guardedSlashCommand: args.nativeGuardedSlash,
     onProgress: (entry) => console.log(`[wrapper] ${entry}`)
   });
