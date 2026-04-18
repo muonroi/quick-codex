@@ -369,7 +369,78 @@ function postTaskArtifact(dir, explicitRun = null) {
   return readActiveRunArtifact(dir)?.artifact ?? null;
 }
 
-function buildTaskAutoResponse({ decision, bootstrapState, execution, wrapperStatePath = null }) {
+function readTextFileIfPresent(filePath) {
+  if (!filePath) {
+    return null;
+  }
+  try {
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, "utf8");
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function buildFinalPayload(execution) {
+  const explicit = execution?.lastMessage ? String(execution.lastMessage) : null;
+  const outputPath = execution?.outputLastMessagePath ?? null;
+  const fromFile = !explicit ? readTextFileIfPresent(outputPath) : null;
+  const text = (explicit ?? fromFile ?? "").trimEnd();
+  return {
+    text: text || null,
+    outputPath
+  };
+}
+
+function buildArtifactSnapshot(artifact = null) {
+  if (!artifact) {
+    return null;
+  }
+  return {
+    run: artifact.relativeRunPath ?? null,
+    status: artifact.status ?? null,
+    gate: artifact.currentGate ?? null,
+    phaseWave: artifact.currentPhaseWave ?? null,
+    recommendedNextCommand: artifact.recommendedNextCommand ?? null
+  };
+}
+
+function buildTracePayload({ decision, execution, bootstrapState = null, wrapperStatePath = null, artifactSnapshot = null }) {
+  return {
+    route: decision.route ?? null,
+    routeSource: decision.routeSource ?? decision.promptSource ?? null,
+    reason: decision.reason ?? null,
+    taskRouting: decision.taskRouting ?? null,
+    model: {
+      selected: decision.model ?? null,
+      reasoningEffort: decision.reasoningEffort ?? null,
+      route: decision.modelRoute ?? null
+    },
+    adapter: execution?.adapter ?? null,
+    sessionStrategy: decision.sessionStrategy ?? null,
+    handoffAction: decision.handoffAction ?? null,
+    nativeThreadAction: decision.nativeThreadAction ?? null,
+    policy: {
+      permissionProfile: decision.policy?.permissionProfile ?? execution?.permissionProfile ?? null,
+      approvalPolicy: decision.policy?.approvalPolicy ?? execution?.approvalPolicy ?? null,
+      sandboxMode: decision.policy?.sandboxMode ?? execution?.sandboxMode ?? null,
+      bypassApprovalsAndSandbox: decision.policy?.bypassApprovalsAndSandbox ?? execution?.bypassApprovalsAndSandbox ?? false
+    },
+    bootstrap: bootstrapState ? {
+      required: bootstrapState.bootstrapRequired,
+      planned: bootstrapState.bootstrapPlanned,
+      performed: bootstrapState.bootstrapPerformed,
+      scaffoldPresent: bootstrapState.scaffoldPresent,
+      summary: bootstrapState.summary
+    } : null,
+    wrapperStatePath,
+    artifact: artifactSnapshot
+  };
+}
+
+function buildTaskAutoResponse({ decision, bootstrapState, execution, wrapperStatePath = null, artifactSnapshot = null }) {
   return {
     ...execution,
     route: decision.route,
@@ -400,6 +471,9 @@ function buildTaskAutoResponse({ decision, bootstrapState, execution, wrapperSta
     nativeThreadAction: decision.nativeThreadAction,
     chatActionEquivalent: decision.chatActionEquivalent,
     wrapperCommandEquivalent: decision.wrapperCommandEquivalent,
+    final: buildFinalPayload(execution),
+    artifactSnapshot,
+    trace: buildTracePayload({ decision, execution, bootstrapState, wrapperStatePath, artifactSnapshot }),
     summary: [
       `Route: ${decision.route}`,
       `Model: ${decision.model ?? "default codex profile"}`,
@@ -413,7 +487,7 @@ function buildTaskAutoResponse({ decision, bootstrapState, execution, wrapperSta
   };
 }
 
-function buildArtifactAutoResponse({ artifact, decision, execution, wrapperStatePath = null }) {
+function buildArtifactAutoResponse({ artifact, decision, execution, wrapperStatePath = null, artifactSnapshot = null }) {
   return {
     ...execution,
     run: artifact.relativeRunPath,
@@ -433,6 +507,9 @@ function buildArtifactAutoResponse({ artifact, decision, execution, wrapperState
     nativeThreadAction: decision.nativeThreadAction,
     chatActionEquivalent: decision.chatActionEquivalent,
     wrapperCommandEquivalent: decision.wrapperCommandEquivalent,
+    final: buildFinalPayload(execution),
+    artifactSnapshot,
+    trace: buildTracePayload({ decision, execution, bootstrapState: null, wrapperStatePath, artifactSnapshot }),
     summary: [
       `Run: ${artifact.relativeRunPath}`,
       `Model: ${decision.model ?? "default codex profile"}`,
@@ -578,6 +655,7 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     outputLastMessagePath: args.outputLastMessage ?? null
   };
   const artifact = postTaskArtifact(args.dir, decision.activeRun ?? null);
+  const artifactSnapshot = buildArtifactSnapshot(artifact);
   const persisted = saveWrapperStateIfPossible({
     dir: args.dir,
     state,
@@ -594,7 +672,8 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
       decision: routed.decision,
       bootstrapState,
       execution,
-      wrapperStatePath: persisted?.path ?? null
+      wrapperStatePath: persisted?.path ?? null,
+      artifactSnapshot
     })
   };
 }
@@ -639,6 +718,7 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
     decision: routed.decision,
     execution
   });
+  const artifactSnapshot = buildArtifactSnapshot(artifact);
   return {
     artifact,
     decision: routed.decision,
@@ -647,7 +727,8 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
       artifact,
       decision: routed.decision,
       execution,
-      wrapperStatePath: nextState.path
+      wrapperStatePath: nextState.path,
+      artifactSnapshot
     })
   };
 }

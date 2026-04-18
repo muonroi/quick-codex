@@ -9,3 +9,4 @@ node_modules/
 npm-debug.log*
 bin/
 fake-experience-router-*
+fake-experience-router*

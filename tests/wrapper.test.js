@@ -1977,6 +1977,8 @@ test("codex shim routes a plain prompt into the default follow-safe wrapper prof
   assert.equal(payload.route, "qc-lock");
   assert.equal(payload.followRequested, true);
   assert.equal(payload.stoppedBecause, "dry-run");
+  assert.ok(payload.trace, "expected response.trace contract");
+  assert.ok(payload.final, "expected response.final contract");
 });
 
 test("codex shim bypass flag sends a plain prompt to the real codex binary", () => {
