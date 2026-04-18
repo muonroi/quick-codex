@@ -67,6 +67,7 @@ function shellHelpText() {
     "  /status              Show wrapper shell state",
     "  /continue            Continue from the active run artifact (if present)",
     "  /view <pane>         Switch main pane: output | timeline",
+    "  /output <source>     Switch output source: final | transcript | jsonl",
     "  /task <text>         Submit a task explicitly through the thin wrapper",
     "  /route <mode>        Set routing mode: auto | flow | lock | direct",
     "  /perm <profile>      Set permission profile: safe | full | yolo | readonly",
@@ -384,14 +385,105 @@ function readTextFileIfPresent(filePath) {
   return null;
 }
 
+function extractAssistantTranscriptFromJsonl(jsonlText) {
+  const lines = String(jsonlText ?? "").split(/\r?\n/);
+  const chunks = [];
+
+  const pushText = (value) => {
+    const text = typeof value === "string" ? value : null;
+    if (text && text.trim()) {
+      chunks.push(text.trimEnd());
+    }
+  };
+
+  const tryExtractFromMessage = (message) => {
+    if (!message || typeof message !== "object") {
+      return;
+    }
+    if (message.role === "assistant") {
+      if (typeof message.content === "string") {
+        pushText(message.content);
+        return;
+      }
+      if (Array.isArray(message.content)) {
+        for (const part of message.content) {
+          if (!part || typeof part !== "object") continue;
+          if (part.type === "output_text" && typeof part.text === "string") {
+            pushText(part.text);
+          } else if (typeof part.text === "string") {
+            pushText(part.text);
+          }
+        }
+      }
+    }
+  };
+
+  const tryExtractFromEvent = (event) => {
+    if (!event || typeof event !== "object") {
+      return;
+    }
+    // Common shapes across Codex/Responses JSONL streams.
+    if (event.message) {
+      tryExtractFromMessage(event.message);
+    }
+    if (event.data?.message) {
+      tryExtractFromMessage(event.data.message);
+    }
+    if (event.response?.output_text && typeof event.response.output_text === "string") {
+      pushText(event.response.output_text);
+    }
+    if (event.output_text && typeof event.output_text === "string") {
+      pushText(event.output_text);
+    }
+    if (event.type && typeof event.type === "string" && /assistant/i.test(event.type) && typeof event.text === "string") {
+      pushText(event.text);
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) {
+      continue;
+    }
+    try {
+      tryExtractFromEvent(JSON.parse(trimmed));
+    } catch {
+      // ignore parse failures in mixed output
+    }
+  }
+
+  // De-dupe adjacent repeats (some event streams echo deltas).
+  const deduped = [];
+  for (const chunk of chunks) {
+    if (deduped.length === 0 || deduped[deduped.length - 1] !== chunk) {
+      deduped.push(chunk);
+    }
+  }
+  return deduped.join("\n\n").trimEnd();
+}
+
+function writeTextFileSafe(filePath, content) {
+  if (!filePath) return;
+  ensureOutputPath(filePath);
+  try {
+    fs.writeFileSync(filePath, content ?? "", "utf8");
+  } catch {
+    // ignore
+  }
+}
+
 function buildFinalPayload(execution) {
   const explicit = execution?.lastMessage ? String(execution.lastMessage) : null;
   const outputPath = execution?.outputLastMessagePath ?? null;
   const fromFile = !explicit ? readTextFileIfPresent(outputPath) : null;
   const text = (explicit ?? fromFile ?? "").trimEnd();
+  const jsonlPath = execution?.outputJsonlPath ?? null;
+  const transcriptPath = execution?.outputTranscriptPath ?? null;
   return {
     text: text || null,
-    outputPath
+    outputPath,
+    jsonlPath,
+    transcriptPath
   };
 }
 
@@ -651,9 +743,20 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     appServerSession: runtime?.appServerSession ?? null,
     onProgress
   });
+  const jsonlPath = args.outputLastMessage ? `${args.outputLastMessage}.jsonl` : null;
+  const transcriptPath = args.outputLastMessage ? `${args.outputLastMessage}.transcript.txt` : null;
+  if (!args.dryRun) {
+    writeTextFileSafe(jsonlPath, routed.execution?.stdout ?? "");
+    const transcript = extractAssistantTranscriptFromJsonl(routed.execution?.stdout ?? "");
+    if (transcript) {
+      writeTextFileSafe(transcriptPath, transcript);
+    }
+  }
   const execution = {
     ...routed.execution,
-    outputLastMessagePath: args.outputLastMessage ?? null
+    outputLastMessagePath: args.outputLastMessage ?? null,
+    outputJsonlPath: jsonlPath,
+    outputTranscriptPath: transcriptPath
   };
   const artifact = postTaskArtifact(args.dir, decision.activeRun ?? null);
   const artifactSnapshot = buildArtifactSnapshot(artifact);
@@ -710,9 +813,20 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
     appServerSession: runtime?.appServerSession ?? null,
     onProgress
   });
+  const jsonlPath = args.outputLastMessage ? `${args.outputLastMessage}.jsonl` : null;
+  const transcriptPath = args.outputLastMessage ? `${args.outputLastMessage}.transcript.txt` : null;
+  if (!args.dryRun) {
+    writeTextFileSafe(jsonlPath, routed.execution?.stdout ?? "");
+    const transcript = extractAssistantTranscriptFromJsonl(routed.execution?.stdout ?? "");
+    if (transcript) {
+      writeTextFileSafe(transcriptPath, transcript);
+    }
+  }
   const execution = {
     ...routed.execution,
-    outputLastMessagePath: args.outputLastMessage ?? null
+    outputLastMessagePath: args.outputLastMessage ?? null,
+    outputJsonlPath: jsonlPath,
+    outputTranscriptPath: transcriptPath
   };
   const nextState = saveWrapperState(args.dir, state, {
     artifact,
