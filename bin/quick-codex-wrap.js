@@ -66,6 +66,7 @@ function shellHelpText() {
     "  /help                Show this help",
     "  /status              Show wrapper shell state",
     "  /continue            Continue from the active run artifact (if present)",
+    "  /view <pane>         Switch main pane: output | timeline",
     "  /task <text>         Submit a task explicitly through the thin wrapper",
     "  /route <mode>        Set routing mode: auto | flow | lock | direct",
     "  /perm <profile>      Set permission profile: safe | full | yolo | readonly",
