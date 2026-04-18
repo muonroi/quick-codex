@@ -64,6 +64,7 @@ function shellHelpText() {
     "Commands:",
     "  /help                Show this help",
     "  /status              Show wrapper shell state",
+    "  /continue            Continue from the active run artifact (if present)",
     "  /task <text>         Submit a task explicitly through the thin wrapper",
     "  /route <mode>        Set routing mode: auto | flow | lock | direct",
     "  /perm <profile>      Set permission profile: safe | full | yolo | readonly",
@@ -264,6 +265,8 @@ function print(value, asJson) {
 }
 
 function shellStatus({ args, runtime, turnCount, shellState, wrapperConfig }) {
+  const activeRun = readActiveRunArtifact(args.dir);
+  const artifact = activeRun?.artifact ?? null;
   return {
     dir: args.dir,
     configPath: wrapperConfig.path,
@@ -276,7 +279,11 @@ function shellStatus({ args, runtime, turnCount, shellState, wrapperConfig }) {
     approvalMode: shellState.approvalMode,
     turnsSubmitted: turnCount,
     activeThreadId: runtime.appServerSession?.activeThreadId ?? null,
-    activeModel: runtime.appServerSession?.currentModel ?? null
+    activeModel: runtime.appServerSession?.currentModel ?? null,
+    activeRun: artifact?.relativeRunPath ?? null,
+    activeGate: artifact?.currentGate ?? null,
+    activePhaseWave: artifact?.currentPhaseWave ?? null,
+    recommendedNextCommand: artifact?.recommendedNextCommand ?? null
   };
 }
 
@@ -303,7 +310,11 @@ function formatShellStatus(status, asJson) {
     `approvalMode=${status.approvalMode}`,
     `turnsSubmitted=${status.turnsSubmitted}`,
     `activeThreadId=${status.activeThreadId ?? "none"}`,
-    `activeModel=${status.activeModel ?? "default"}`
+    `activeModel=${status.activeModel ?? "default"}`,
+    `activeRun=${status.activeRun ?? "none"}`,
+    `activeGate=${status.activeGate ?? "unknown"}`,
+    `activePhaseWave=${status.activePhaseWave ?? "unknown"}`,
+    `recommendedNextCommand=${status.recommendedNextCommand ?? "none"}`
   ].join("\n");
 }
 
@@ -752,7 +763,7 @@ function shellCompleter(line) {
   const fragments = trimmed.split(/\s+/);
   const command = fragments[0] ?? "";
   const fragment = fragments[fragments.length - 1] ?? "";
-  const commands = ["/help", "/status", "/task", "/route", "/perm", "/approval", "/mode", "/follow", "/turns", "/exit", "/quit"];
+  const commands = ["/help", "/status", "/continue", "/task", "/route", "/perm", "/approval", "/mode", "/follow", "/turns", "/exit", "/quit"];
 
   if (!trimmed.startsWith("/")) {
     return [[], line];
@@ -1149,6 +1160,35 @@ function createChatSession(args) {
       if (trimmed === "/status") {
         const status = shellStatus({ args, runtime, turnCount, shellState, wrapperConfig });
         emit({ type: "status", text: formatShellStatus(status, args.json), data: status });
+        return { exit: false };
+      }
+      if (trimmed === "/continue") {
+        const activeRun = readActiveRunArtifact(args.dir);
+        if (!activeRun?.artifact) {
+          emit({ type: "text", text: "No active run artifact found. Start a task first or point to a run-file with --run." });
+          return { exit: false };
+        }
+        turnCount += 1;
+        const progress = shellProgressLogger(emit);
+        progress(`turn=${turnCount} | profile=${shellState.executionProfile} | follow=${shellState.follow ? "on" : "off"} | maxTurns=${shellState.maxTurns}`);
+        progress(`continuing activeRun=${activeRun.artifact.relativeRunPath} | gate=${activeRun.artifact.currentGate ?? "unknown"} | phase=${activeRun.artifact.currentPhaseWave ?? "unknown"}`);
+        const turnArgs = {
+          ...args,
+          follow: shellState.follow,
+          maxTurns: shellState.maxTurns,
+          task: "(continue)",
+          routeOverride: shellState.routeOverride,
+          permissionProfile: shellState.permissionProfile,
+          approvalMode: shellState.approvalMode,
+          outputLastMessage: path.join(tempDir, `turn-${turnCount}.txt`)
+        };
+        const response = await maybeFollowAuto(
+          turnArgs,
+          await executeArtifactAuto(turnArgs, activeRun.artifact, runtime, progress),
+          runtime,
+          progress
+        );
+        emit({ type: "response", response });
         return { exit: false };
       }
 
