@@ -25,7 +25,6 @@ Current commands:
 quick-codex-wrap prompt --task "<task>"
 quick-codex-wrap run --task "<task>"
 quick-codex-wrap chat [--dir /path/to/project] [--max-turns 5]
-quick-codex-wrap chat [--dir /path/to/project] [--ui rich]
 quick-codex-wrap chat [--dir /path/to/project] [--ui native] [--native-guarded-slash /status|/compact|/clear]
 quick-codex-wrap auto [--task "<task>"]
 quick-codex-wrap auto [--run .quick-codex-flow/<run>.md] --follow --max-turns 3
@@ -35,6 +34,7 @@ quick-codex-wrap start
 quick-codex-wrap continue
 codex "<task>"
 codex
+codex --qc-ui
 codex --qc-chat --qc-dir /path/to/project
 codex --qc-auto --task "<task>"
 codex --qc-full --qc-autonomous --qc-task "<task>"
@@ -73,11 +73,10 @@ Current orchestration model:
 - manual route overrides are available on top of both layers, so `--qc-force-flow`, `--qc-force-lock`, `--qc-force-direct`, and shell `/route <mode>` bypass brain and heuristic routing completely
 - the local task router now folds Unicode text before keyword checks, so Vietnamese task text still routes sensibly during fallback or shell-first usage
 - persistent app-server follow mode now restarts the underlying app-server process only when the routed model changes, then resumes the saved thread on the fresh process
-- `chat` opens an interactive wrapper shell that treats every entered line as a new wrapper task, so the thin wrapper stays on the path before the model sees each message
+- `chat` opens a legacy interactive wrapper shell that treats every entered line as a new wrapper task; keep it for fallback/debug, not as the recommended frontdoor
 - the interactive shell now has renderer modes:
-  - `rich`: Ink-based TUI for real terminals with activity, session, and result panes
   - `plain`: line-oriented fallback for non-TTY, CI, tests, or explicit `--ui plain`
-  - the rich TUI includes a dedicated Result pane with scroll support (PgUp/PgDn or Ctrl+Up/Ctrl+Down). Use `/result full` to show the full assistant output instead of the preview.
+  - `rich`: deprecated Ink-based TUI kept only as a fallback/debug renderer
 - `--qc-ui <auto|plain|rich|native>` maps through the shim to `--ui <auto|plain|rich|native>`
 - wrapper permission policy now resolves from explicit flags first, then shell-local overrides, then `.quick-codex-flow/wrapper-config.json`, then built-in defaults
 - wrapper continuity maps artifact handoff data into machine-usable fields such as `sessionStrategy`, `handoffAction`, `nativeThreadAction`, `chatActionEquivalent`, and `wrapperCommandEquivalent`
@@ -87,7 +86,8 @@ Current orchestration model:
 - the follow loop stops on `completed`, `blocker`, `relock`, `ask-user`, `no-checkpoint-progress`, or `max-turns-reached`
 - `quick-codex install-codex-shim` can install a `codex`-compatible launcher so `codex --qc-auto`, `codex --qc-run`, `codex --qc-prompt`, and related `--qc-*` flags route into the wrapper
 - the shim now also treats a plain prompt such as `codex "fix the wrapper follow loop"` as the default wrapper entrypoint, mapped to the follow-safe profile
-- bare `codex` now launches the interactive wrapper shell by default, while `codex --qc-bypass` is the explicit escape hatch for the raw Codex TUI
+- bare `codex` now stays on the real native Codex CLI by default
+- bare `codex --qc-ui` opens the Electron host for native Codex sessions and is the recommended Quick Codex frontdoor, while `codex --qc-bypass` remains the explicit escape hatch for raw Codex passthrough
 - `codex --qc-bypass ...` is the explicit passthrough escape hatch when you want raw Codex behavior
 - the shim now also exposes a small qc-profile option surface so wrapper-specific flags do not need to mix with raw wrapper names:
   - `--qc-task -> --task`
@@ -113,7 +113,7 @@ Current orchestration model:
   - `--qc-autonomous`: approval mode = `never`
   - `--qc-untrusted`: approval mode = `untrusted`
 - `codex --qc-help` now prints the entire shim surface locally in the terminal, including commands, profiles, aliases, and copy-paste examples
-- the interactive shell now supports slash-command completion for `/perm`, `/approval`, `/mode`, `/status`, and exit commands
+- the interactive shell now supports slash-command completion for `/perm`, `/approval`, `/status`, and exit commands
 - the interactive shell now supports `/route <auto|flow|lock|direct>` as a persistent routing override for the current shell session
 - the interactive shell now also supports explicit command-style task control:
   - `/task <text>`
@@ -130,7 +130,7 @@ Current limitations:
 - auto-bootstrap only prepares the standard Quick Codex scaffold; Codex still has to create or update the task-specific run artifact during planning
 - the wrapper can shape prompts and session launches, but it does not have direct API control over hidden Codex planning modes
 - the interactive shell is line-oriented and wrapper-driven; it is not a protocol-level clone of the stock Codex TUI
-- the rich TUI improves situational awareness, but it is still a wrapper renderer layered on top of Quick Codex orchestration rather than a stock Codex protocol clone
+- the rich TUI improves situational awareness, but it is deprecated and remains only as a wrapper-owned fallback renderer rather than a stock Codex protocol clone
 - `--ui native` is now available as an experimental guarded path that boots the stock Codex TUI through a wrapper-owned remote app-server bridge; this first slice preserves the native UI and slash commands, but it does not yet reapply per-message wrapper routing once the native session is open
 - the native bridge now exposes `NativeSessionObserver` and `NativeSessionController` primitives plus a pipe-mode observation path in `launchNativeCodexSession`
 - guarded slash injection is now wired for explicit native command paths: `quick-codex-wrap chat --ui native --native-guarded-slash /status`, `... /compact`, and `... /clear`

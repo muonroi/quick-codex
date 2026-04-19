@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { resolveElectronHostBin } from "../lib/electron-host.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +28,6 @@ const QC_OPTION_ALIASES = new Map([
   ["--qc-native-guarded-slash", { target: "--native-guarded-slash", takesValue: true }],
   ["--qc-max-turns", { target: "--max-turns", takesValue: true }],
   ["--qc-approval", { target: "--approval-mode", takesValue: true }],
-  ["--qc-ui", { target: "--ui", takesValue: true }],
   ["--qc-follow", { target: "--follow", takesValue: false }],
   ["--qc-json", { target: "--json", takesValue: false }],
   ["--qc-dry-run", { target: "--dry-run", takesValue: false }],
@@ -131,10 +131,13 @@ Default launch behavior:
   Treats the plain prompt as wrapper input and routes it through the default follow-safe profile
 
   codex
-  Launches the interactive thin-wrapper shell so each submitted message is routed before it reaches Codex
+  Launches the real native Codex CLI
+
+  codex --qc-ui
+  Launches the Electron host, which embeds the native Codex TUI behind the Quick Codex boundary
 
   codex --qc-full --qc-task "<task>"
-  Any qc-only overlay or alias flag without an explicit qc mode now defaults to wrapper auto mode when a task or run-file is present, or wrapper chat when no task is provided
+  Any qc-only overlay or alias flag without an explicit qc mode now defaults to wrapper auto mode when a task or run-file is present, or launches the Electron host when only --qc-ui is provided
 
 Manual route overrides:
   --qc-force-flow
@@ -166,6 +169,9 @@ Alias options:
   --qc-approval <mode>
   Maps to: --approval-mode
 
+  --qc-ui
+  Launches the Electron host
+
   --qc-ui <auto|plain|rich|native>
   Maps to: --ui
 
@@ -190,6 +196,7 @@ Alias options:
 Examples:
   codex --qc-help
   codex
+  codex --qc-ui
   codex "fix the wrapper follow loop"
   codex --qc-chat --qc-dir /path/to/project
   codex --qc-fast --qc-task "fix a narrow bug" --qc-json
@@ -288,6 +295,14 @@ function applyProfilePreset(profile, passthrough) {
   return nextArgs;
 }
 
+function readOptionValue(argv, index) {
+  const candidate = argv[index + 1];
+  if (candidate == null || isOptionToken(candidate)) {
+    return { hasValue: false, value: null, nextIndex: index };
+  }
+  return { hasValue: true, value: candidate, nextIndex: index + 1 };
+}
+
 function splitShimArgs(argv) {
   let command = null;
   let profile = null;
@@ -297,6 +312,7 @@ function splitShimArgs(argv) {
   let help = false;
   let bypass = false;
   let qcSurfaceUsed = false;
+  let launchElectron = false;
   const passthrough = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -354,6 +370,19 @@ function splitShimArgs(argv) {
       continue;
     }
 
+    if (arg === "--qc-ui") {
+      qcSurfaceUsed = true;
+      const option = readOptionValue(argv, index);
+      if (!option.hasValue || option.value === "electron") {
+        launchElectron = true;
+        index = option.nextIndex;
+        continue;
+      }
+      passthrough.push("--ui", option.value);
+      index = option.nextIndex;
+      continue;
+    }
+
     if (QC_OPTION_ALIASES.has(arg)) {
       qcSurfaceUsed = true;
       const alias = QC_OPTION_ALIASES.get(arg);
@@ -395,6 +424,7 @@ function splitShimArgs(argv) {
     command: resolvedCommand,
     bypass,
     help,
+    launchElectron,
     profile,
     routeOverride,
     passthrough: profilePassthrough
@@ -412,9 +442,37 @@ function runProcess(command, args) {
   process.exitCode = result.status ?? 1;
 }
 
+function valueAfterFlag(args, flag) {
+  const index = args.indexOf(flag);
+  if (index === -1 || index + 1 >= args.length) {
+    return null;
+  }
+  return args[index + 1];
+}
+
+function runElectronHost(args) {
+  const env = { ...process.env };
+  const dir = valueAfterFlag(args, "--dir");
+  if (dir) {
+    env.QUICK_CODEX_DIR = dir;
+  }
+  const electronHostBin = resolveElectronHostBin({
+    cwd: dir || process.cwd(),
+    env
+  });
+  const result = spawnSync(process.execPath, [electronHostBin], {
+    stdio: "inherit",
+    env
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  process.exitCode = result.status ?? 1;
+}
+
 function main() {
   const originalArgs = process.argv.slice(2);
-  const { command, bypass, help, passthrough } = splitShimArgs(originalArgs);
+  const { command, bypass, help, launchElectron, passthrough } = splitShimArgs(originalArgs);
 
   if (help) {
     process.stdout.write(qcHelpText());
@@ -426,9 +484,14 @@ function main() {
     return;
   }
 
+  if (launchElectron) {
+    runElectronHost(passthrough);
+    return;
+  }
+
   if (!command) {
     if (originalArgs.length === 0) {
-      runProcess(process.execPath, [wrapBin, "chat"]);
+      runProcess(resolveRealCodexBin(), []);
       return;
     }
     runProcess(resolveRealCodexBin(), passthrough);

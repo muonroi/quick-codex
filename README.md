@@ -59,11 +59,12 @@ In practice, that means:
 If you only read one section, read this one.
 
 Quick Codex is now best treated as a thin wrapper in front of Codex CLI:
-- bare `codex` opens the interactive wrapper shell
+- bare `codex` stays on the real native Codex CLI
+- `codex --qc-ui` opens the Electron host as the main Quick Codex frontdoor
 - `codex "some task"` becomes a one-shot wrapper launch
 - wrapper task routing can choose `qc-flow`, `qc-lock`, or `direct`
 - wrapper continuity can auto-drive `compact`, `clear`, `resume`, and follow-loop behavior
-- on real TTY terminals, the wrapper now prefers a richer Ink-based TUI with activity, session, and result panes; plain shell remains available as a fallback
+- legacy wrapper chat renderers remain available only as deprecated fallback/debug surfaces
 - Experience Engine stays optional; wrapper falls back cleanly when the brain is unavailable
 
 ### 1. Install the package and wrapper surface
@@ -113,65 +114,32 @@ After installing the shim:
 codex
 ```
 
-opens the Quick Codex interactive wrapper shell, so every entered line is routed through the thin wrapper before Codex sees it.
+still opens the real native Codex CLI by default.
 
 Other important command paths:
 
 ```bash
+codex --qc-ui
 codex "fix the wrapper follow loop"
-codex --qc-ui plain
-codex --qc-ui native
 codex --qc-help
 codex --qc-bypass
 ```
 
 - `codex "..."` runs the default wrapper one-shot path
-- `codex --qc-ui plain` forces the old plain shell when you do not want the richer TUI
-- `codex --qc-ui native` launches the experimental stock-Codex bridge, keeping the native TUI and slash commands through a wrapper-owned remote app-server bridge
+- `codex --qc-ui` opens the Electron host, which embeds the native Codex TUI behind the Quick Codex boundary
 - `quick-codex-wrap chat --ui native --native-guarded-slash /status` runs the first guarded proof-path native slash injection on top of observer/controller signals
 - `quick-codex-wrap chat --ui native --native-guarded-slash /compact` now proves the first continuity-driving native slash path on the same controller boundary
 - `quick-codex-wrap chat --ui native --native-guarded-slash /clear` now proves the next continuity-driving native slash path on the same controller boundary
 - `codex --qc-help` prints the wrapper shim surface
 - `codex --qc-bypass` skips the thin wrapper and launches raw Codex behavior
 
-### 2.1 UI modes
+### 2.1 Electron host
 
-The wrapper now has three interactive UI modes:
-- `rich`: an Ink-based TUI for real interactive terminals, with an activity timeline, a live session panel, a dedicated result pane, and clearer next-action affordances. The Result pane supports scrolling (PgUp/PgDn or Ctrl+Up/Ctrl+Down); use `/result full` to show the full assistant output instead of the preview.
-- `plain`: the original line-oriented shell used automatically for non-TTY, CI, tests, JSON mode, or as an explicit escape hatch
-- `native`: an experimental bridge that boots the stock Codex TUI through `codex --remote`, so native slash commands and autocomplete stay intact while the wrapper owns the transport boundary
-- the native bridge now also has explicit observer/controller primitives for prompt-ready and turn-settled signals
-- guarded native slash paths are now available for `/status`, `/compact`, and `/clear`
-- `/resume` is still the next follow-on slice
-
-Wrapper-first UX now follows the strongest patterns from modern agent CLIs:
-- Claude Code: stable slash-command surface and visible status context
-- Gemini CLI: checkpoint/resume as first-class continuity
-- OpenCode: configurable TUI behavior, themeable terminal rendering, and separation between runtime config and TUI config
-- Codex CLI itself: explicit model/reasoning choices and visible phase transitions
-
-Use these switches when needed:
+If you want the Quick Codex frontdoor with native Codex UI preserved, use the external Electron host repo/package `muonroi/quick-codex-electron`, install `@quick-codex/qc-electron`, or point the shim at a host launcher through `QUICK_CODEX_ELECTRON_HOST_BIN`.
 
 ```bash
-codex
-codex --qc-ui rich
-codex --qc-ui plain
-codex --qc-ui native
-codex --qc-ui native --qc-native-guarded-slash /status
-quick-codex-wrap chat --ui rich
-quick-codex-wrap chat --ui plain
-quick-codex-wrap chat --ui native
-quick-codex-wrap chat --ui native --native-guarded-slash /status
-quick-codex-wrap chat --ui native --native-guarded-slash /compact
-quick-codex-wrap chat --ui native --native-guarded-slash /clear
-```
-
-### 2.2 Optional Electron host
-
-If you want a GUI window hosting the Codex native TUI (xterm.js + node-pty) with an explicit input/output interception boundary, there is an experimental Electron app at `apps/qc-electron`.
-
-```bash
-cd quick-codex/apps/qc-electron
+git clone https://github.com/muonroi/quick-codex-electron.git
+cd quick-codex-electron
 npm install
 npm run dev
 ```
@@ -183,19 +151,18 @@ npm run dev:xvfb
 npm run smoke:xvfb
 ```
 
-Modes:
-- `passthrough`: spawn raw `codex` inside the embedded terminal. You type directly into the terminal (native UI, no wrapper mediation).
-- `orchestrated`: keep one native Codex session alive behind the Electron host, route tasks through the session manager, and surface route/model metadata while Codex still renders the native UI.
+Surface:
+- `native codex + qc auto`: the host keeps native Codex visible in the transcript while Quick Codex handles route, protocol, and continuity around it
+- legacy `orchestrated` seams still exist internally for tests and migration safety, but they are not part of the public UI anymore
 
 Electron host control commands (handled locally in the host, not by Codex):
 - `/qc help`
 - `/qc start` / `/qc stop`
-- `/qc mode passthrough|orchestrated`
 - `/qc dir <path>`
 - `/qc turns <n>`
 
 Native parity status:
-- the current parity matrix lives in `apps/qc-electron/NATIVE_PARITY.md`
+- the current parity matrix lives in the external Electron host repo as `NATIVE_PARITY.md`
 - Electron host already proves session reuse, model/reasoning-driven restart, slash forwarding, raw passthrough writes, resize forwarding, and clean xvfb smoke boot
 - Electron host still needs manual/e2e proof for full native autocomplete, menu/modal parity as rendered inside Electron, copy/paste + multiline ergonomics, and scrollback ergonomics
 
@@ -228,7 +195,7 @@ Inside the interactive wrapper shell:
 Interactive session:
 
 ```bash
-codex
+codex --qc-ui
 ```
 
 One-shot task:
@@ -256,7 +223,8 @@ codex
 
 Expected result:
 - `codex --qc-help` prints the shim help instead of raw Codex help
-- bare `codex` opens the interactive wrapper shell
+- bare `codex` stays on native Codex
+- `codex --qc-ui` opens the Electron host
 - `codex "some task"` goes through wrapper routing
 - `codex --qc-bypass` still opens raw Codex behavior when needed
 
@@ -478,7 +446,7 @@ The wrapper:
 - can optionally `auto --follow` so the wrapper rereads the flow artifact after each turn and auto-launches the next turn only when a real checkpoint advances
 - `auto --follow` preserves the artifact's native session boundary when possible, so same-phase checkpoints with a saved thread default to `thread/compact/start` instead of an implicit resume
 - `auto --follow` keeps a persistent `codex app-server` process alive across compact/clear/resume turns, so native thread orchestration can chain multiple checkpoints without respawning the app-server process between turns
-- `chat` opens an interactive wrapper shell, so each entered message is routed through the thin wrapper before it reaches Codex
+- `chat` still exists as a legacy wrapper shell for fallback/debug, but it is no longer the recommended frontdoor
 - wrapper launch policy is now resolved centrally and passed down to both `codex exec` and native `codex app-server`
 - when Experience Engine model routing is enabled, wrapper launch paths also pass through the returned `reasoningEffort` as `-c model_reasoning_effort="..."`, so Codex model selection and reasoning level stay aligned
 - auto-bootstraps the standard Quick Codex scaffold before the first broad `qc-flow` raw-task launch when `.quick-codex-flow/STATE.md` is missing
@@ -489,7 +457,8 @@ The wrapper:
 - can drive `clear-session` with native `codex app-server -> thread/start(clear)`, `resume-session` with native `thread/resume`, and `compact-session` with native `thread/compact/start` when a saved thread id exists
 - can install a `codex`-compatible shim via `quick-codex install-codex-shim`, so `codex --qc-auto`, `codex --qc-run`, `codex --qc-prompt`, and related `--qc-*` flags route into the wrapper
 - the shim can now treat a plain prompt such as `codex "fix the wrapper follow loop"` as the default wrapper entrypoint, using the follow-safe profile automatically
-- bare `codex` now launches the interactive wrapper shell by default, so each submitted line still goes through wrapper routing and orchestration
+- bare `codex` now stays on the real native Codex CLI by default
+- `codex --qc-ui` is the recommended GUI frontdoor for Quick Codex automation on top of native Codex
 - `codex --qc-chat` opens the wrapper shell explicitly when you want to stay on the `--qc-*` surface
 - `codex --qc-bypass ...` is the explicit escape hatch for raw Codex behavior
 - repo-level defaults are supported in `.quick-codex-flow/wrapper-config.json`
@@ -500,7 +469,7 @@ The wrapper:
   - `--qc-manual`, `--qc-autonomous`, `--qc-untrusted`
 - qc-only overlay flags now default into the wrapper too, so `codex --qc-full --qc-task "..."` routes to wrapper auto mode even without spelling `--qc-auto`
 - can print local shim help with `codex --qc-help`, so the full `--qc-*` surface is discoverable from the terminal without opening docs
-- can autocomplete shell slash commands such as `/perm`, `/approval`, and `/mode`
+- can autocomplete shell slash commands such as `/perm` and `/approval`
 - can also drive the interactive shell through explicit slash commands such as `/task`, `/follow`, and `/turns`, so the shell feels closer to a small command console than plain free text
 - when Experience Engine returns `needs_disambiguation`, the interactive shell now shows a numbered choice menu plus a free-text escape path instead of silently guessing
 - translates continuity metadata into machine-usable session fields such as `sessionStrategy`, `handoffAction`, `nativeThreadAction`, and `chatActionEquivalent`
@@ -545,7 +514,7 @@ The current scope is still thin:
 - native `clear-session`, `resume-session`, and `compact-session` now use `codex app-server` when the wrapper has a saved thread id; older wrapper state without a thread id still falls back to legacy behavior
 - artifact-driven continuation remains the authoritative path once a real run exists
 - `auto --follow` currently depends on flow-artifact checkpoint changes; lock-artifact follow automation is still a future slice
-- the interactive wrapper shell is line-oriented and intentionally simpler than the stock Codex TUI; protocol-level proxying can still be layered on later without changing the continuity contract
+- the interactive wrapper shell is line-oriented and intentionally simpler than the stock Codex TUI; it is now a deprecated fallback/debug surface rather than the main operator experience
 - repo-level wrapper config is file-based today; there is not yet a separate editor command for mutating it outside `init` or manual edits
 - scope drift during medium-sized engineering tasks
 - verification thrash where the same broad checks are repeated without narrowing

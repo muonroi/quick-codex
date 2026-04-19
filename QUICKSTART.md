@@ -14,13 +14,10 @@ Important:
 - if `codex --qc-help` does not show the shim help text, your `PATH` is still resolving the real Codex binary first
 
 After the shim is installed:
-- bare `codex` opens the interactive wrapper shell
+- bare `codex` stays on the real native Codex CLI
+- `codex --qc-ui` opens the Electron host for native Codex sessions behind the Quick Codex boundary
 - `codex "some task"` becomes a one-shot wrapper launch
-- real TTY terminals default to the richer Ink-based TUI
-- in the rich TUI, the Result pane supports scrolling (PgUp/PgDn or Ctrl+Up/Ctrl+Down); use `/result full` to show the full assistant output instead of the preview
-- non-TTY, CI, and `--json` sessions automatically fall back to the plain shell
-- `codex --qc-ui plain` forces the plain shell when you do not want the richer TUI
-- `codex --qc-ui native` launches the experimental stock-Codex bridge instead of the wrapper-owned shell
+- legacy wrapper chat renderers still exist only as fallback/debug surfaces
 - `quick-codex-wrap chat --ui native --native-guarded-slash /status` is the first guarded native proof-path smoke
 - `quick-codex-wrap chat --ui native --native-guarded-slash /compact` is the first guarded continuity-command smoke
 - `quick-codex-wrap chat --ui native --native-guarded-slash /clear` is the next guarded continuity-command smoke
@@ -32,11 +29,7 @@ Minimal rollout check:
 ```bash
 codex --qc-help
 codex
-codex --qc-ui plain
-codex --qc-ui native
-codex --qc-ui native --qc-native-guarded-slash /status
-codex --qc-ui native --qc-native-guarded-slash /compact
-codex --qc-ui native --qc-native-guarded-slash /clear
+codex --qc-ui
 quick-codex-wrap chat --ui native --native-guarded-slash /status
 quick-codex-wrap chat --ui native --native-guarded-slash /compact
 quick-codex-wrap chat --ui native --native-guarded-slash /clear

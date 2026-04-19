@@ -9,7 +9,7 @@ import path from "node:path";
 import { routedWaveRun, runWrapCli, runWrapCliWithEnv, runWrapCliWithInputAndEnv, runCodexShimWithEnv, runCodexShimWithInputAndEnv, runCli, writeStateFile, makeProject, baseRun } from "./test-helpers.js";
 import { ensureProjectBootstrap, inspectProjectBootstrap } from "../lib/wrapper/bootstrap.js";
 import { classifyAutoFollowStop } from "../lib/wrapper/follow-loop.js";
-import { launchNativeCodexSession, NativeSessionController, NativeSessionObserver, sendNativeTaskWithRetry } from "../lib/wrapper/native-session.js";
+import { launchNativeCodexSession, NativeRemoteSession, NativeSessionController, NativeSessionObserver, sendNativeTaskWithRetry } from "../lib/wrapper/native-session.js";
 
 function flowArtifact({ phaseWave, nextPrompt, blockers = ["none"], gate = "execute", executionState = "in_progress" }) {
   const [phase, wave] = phaseWave.split(" / ");
@@ -143,7 +143,8 @@ function makeFakeAppServer(projectDir, {
   turnId = "123e4567-e89b-42d3-a456-426614175000",
   compactTurnId = "123e4567-e89b-42d3-a456-426614175001",
   finalText = "native app-server final answer",
-  stages = []
+  stages = [],
+  threadResumeErrorMessage = null
 } = {}) {
   const scriptPath = path.join(projectDir, "fake-app-server.mjs");
   const manifestPath = path.join(projectDir, "fake-app-server-manifest.json");
@@ -182,6 +183,7 @@ const startupCountPath = process.env.FAKE_APP_SERVER_STARTUP_COUNT;
 const argvPath = process.env.FAKE_APP_SERVER_ARGV;
 const artifactPath = process.env.FAKE_APP_SERVER_ARTIFACT;
 const statePath = process.env.FAKE_APP_SERVER_STATE;
+const threadResumeErrorMessage = process.env.FAKE_APP_SERVER_THREAD_RESUME_ERROR_MESSAGE;
 const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, "utf8")) : {};
 
 const previousStartups = fs.existsSync(startupCountPath) ? Number(fs.readFileSync(startupCountPath, "utf8")) : 0;
@@ -207,6 +209,10 @@ rl.on("line", (line) => {
     return;
   }
   if (message.method === "thread/resume") {
+    if (threadResumeErrorMessage) {
+      send({ jsonrpc: "2.0", id: message.id, error: { message: threadResumeErrorMessage } });
+      return;
+    }
     send({ jsonrpc: "2.0", id: message.id, result: { thread: { id: message.params.threadId } } });
     return;
   }
@@ -315,7 +321,10 @@ rl.on("line", (line) => {
       FAKE_APP_SERVER_STARTUP_COUNT: startupCountPath,
       FAKE_APP_SERVER_ARGV: argvPath,
       FAKE_APP_SERVER_ARTIFACT: artifactPath,
-      FAKE_APP_SERVER_STATE: statePath
+      FAKE_APP_SERVER_STATE: statePath,
+      ...(threadResumeErrorMessage ? {
+        FAKE_APP_SERVER_THREAD_RESUME_ERROR_MESSAGE: threadResumeErrorMessage
+      } : {})
     },
     startupCountPath,
     argvPath
@@ -794,6 +803,17 @@ console.log("› prompt ready for guarded resume");
   };
 }
 
+async function waitForFile(filePath, timeoutMs = 250) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (fs.existsSync(filePath)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return fs.existsSync(filePath);
+}
+
 function makeFakeGuardedResumeTurnSettledNativeBridge(projectDir) {
   const appServerScript = path.join(projectDir, "fake-guarded-resume-turn-settled-app-server.mjs");
   const codexScript = path.join(projectDir, "fake-guarded-resume-turn-settled-codex.mjs");
@@ -983,7 +1003,8 @@ async function withFakeExperienceRouter(options, fn) {
 async function startFakeExperienceRouter(projectDir, {
   routeTaskResponses = [],
   routeModelResponses,
-  routeFeedbackResponse = { ok: true }
+  routeFeedbackResponse = { ok: true },
+  routeModelDelayMs = 0
 }) {
   const scriptPath = path.join(projectDir, "fake-experience-router.mjs");
   const requestsPath = path.join(projectDir, "fake-experience-router-requests.jsonl");
@@ -992,7 +1013,8 @@ async function startFakeExperienceRouter(projectDir, {
   fs.writeFileSync(manifestPath, JSON.stringify({
     routeTaskResponses,
     routeModelResponses,
-    routeFeedbackResponse
+    routeFeedbackResponse,
+    routeModelDelayMs
   }, null, 2), "utf8");
   fs.writeFileSync(requestsPath, "", "utf8");
   fs.writeFileSync(scriptPath, `#!/usr/bin/env node
@@ -1016,6 +1038,9 @@ const server = http.createServer(async (req, res) => {
     routeCallCount += 1;
     const responses = manifest.routeModelResponses || [];
     const routeResult = responses[Math.min(routeCallCount - 1, responses.length - 1)] || {};
+    if (manifest.routeModelDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, manifest.routeModelDelayMs));
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(routeResult));
     return;
@@ -1118,6 +1143,15 @@ test("wrap prompt routes Vietnamese narrow execution work to qc-lock", () => {
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.route, "qc-lock");
   assert.match(payload.prompt, /Use \$qc-lock/);
+});
+
+test("wrap prompt routes Vietnamese broad planning work to qc-flow", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-route-flow-vi-"));
+  const result = runWrapCli(projectDir, "prompt", "--dir", projectDir, "--task", "khảo sát quick-codex rồi lên kế hoạch cải thiện electron host", "--json");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.route, "qc-flow");
+  assert.match(payload.prompt, /Use \$qc-flow/);
 });
 
 test("wrap prompt honors manual route override before brain or heuristic routing", () => {
@@ -1538,6 +1572,37 @@ test("wrap run dry-run consumes Experience Engine route-model and forwards -m to
     const requests = fs.readFileSync(fakeRouter.requestsPath, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
     assert.equal(requests.some((entry) => entry.url === "/api/route-model"), true);
     assert.equal(requests.filter((entry) => entry.url === "/api/route-feedback").length, 0);
+  } finally {
+    await fakeRouter.close();
+  }
+});
+
+test("wrap run dry-run gives broad qc-flow tasks a longer model-router timeout budget", async () => {
+  const projectDir = process.cwd();
+  const fakeRouter = await startFakeExperienceRouter(projectDir, {
+    routeModelResponses: [{
+      taskHash: "route-hash-premium",
+      tier: "premium",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      confidence: 0.79,
+      source: "brain",
+      reason: "broad planning task needs the premium Codex tier"
+    }],
+    routeModelDelayMs: 4500
+  });
+  try {
+    const result = runWrapCliWithEnv(projectDir, {
+      QUICK_CODEX_EXPERIENCE_URL: fakeRouter.baseUrl,
+      QUICK_CODEX_WRAP_ENABLE_MODEL_ROUTER: "1"
+    }, "run", "--dir", projectDir, "--task", "design anti-bot architecture for Storyflow across multiple files and phases", "--dry-run", "--json");
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.route, "qc-flow");
+    assert.equal(payload.model, "gpt-5.4");
+    assert.equal(payload.reasoningEffort, "high");
+    assert.equal(payload.modelRouting.applied, true);
+    assert.equal(payload.modelRouting.source, "brain");
   } finally {
     await fakeRouter.close();
   }
@@ -2299,6 +2364,17 @@ test("native session observer does not mark prompt-ready when startup busy outpu
   assert.equal(observer.events.some((entry) => entry.type === "prompt-ready"), false);
 });
 
+test("native session observer does not treat the OpenAI Codex startup banner as a prompt-ready marker", () => {
+  const observer = new NativeSessionObserver();
+  observer.ingestChunk("stdout", "╭────────────────────────────────────────────╮");
+  observer.ingestChunk("stdout", "│ >_ OpenAI Codex (v0.121.0)                 │");
+  observer.ingestChunk("stdout", "│ model:     gpt-5.4 high   /model to change │");
+  observer.ingestChunk("stdout", "│ directory: /mnt/d/Personal/Core            │");
+  observer.ingestChunk("stdout", "╰────────────────────────────────────────────╯");
+
+  assert.equal(observer.events.some((entry) => entry.type === "prompt-ready"), false);
+});
+
 test("native session controller only sends input when stdin is controllable", async () => {
   const chunks = [];
   const controller = new NativeSessionController({
@@ -2375,7 +2451,7 @@ test("launchNativeCodexSession exposes observer state and controller availabilit
     assert.equal(result.observer.events.some((entry) => entry.type === "bridge-ready"), true);
     assert.equal(result.observer.events.some((entry) => entry.type === "prompt-ready"), true);
     assert.equal(result.observer.events.some((entry) => entry.type === "turn-settled"), true);
-    assert.equal(fs.existsSync(fakeNative.stdinPath), true);
+    assert.equal(await waitForFile(fakeNative.stdinPath), true);
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       if (value == null) {
@@ -2414,7 +2490,7 @@ test("launchNativeCodexSession detects bridge readiness when codex app-server wr
     assert.equal(result.status, 0);
     assert.equal(result.observer.events.some((entry) => entry.type === "bridge-ready"), true);
     assert.equal(result.observer.events.some((entry) => entry.source === "bridge-stderr"), true);
-    assert.equal(fs.existsSync(fakeNative.stdinPath), true);
+    assert.equal(await waitForFile(fakeNative.stdinPath), true);
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
       if (value == null) {
@@ -2690,6 +2766,210 @@ test("sendNativeTaskWithRetry can cross the busy boundary after multiple submit 
       }
     }
   }
+});
+
+test("sendNativeTaskWithRetry falls back when startup marked prompt detection as delayed", async () => {
+  const taskText = "Task should still submit after delayed prompt detection";
+  const observer = new NativeSessionObserver();
+  const sent = [];
+  observer.markBridgeState("ready", { text: "remote=ws://127.0.0.1:4888" });
+  observer.markCodexState("running", { text: "mode=pipe" });
+  observer.markCodexState("waiting-for-prompt", { text: "prompt-detection-delayed" });
+
+  const controller = {
+    mode: "pipe",
+    isControllable() {
+      return true;
+    },
+    sendText(value) {
+      sent.push(value);
+      setTimeout(() => {
+        observer.record("native-busy", {
+          text: "•Working(0s • esc to interrupt)"
+        });
+      }, 10);
+    },
+    submit() {
+      sent.push("<submit>");
+    }
+  };
+
+  const result = await sendNativeTaskWithRetry({
+    controller,
+    observer,
+    task: taskText,
+    timeoutMs: 120,
+    maxSubmitRetries: 1,
+    onProgress: () => {}
+  });
+
+  assert.equal(result.startedBy, "native-busy");
+  assert.equal(result.retries, 0);
+  assert.deepEqual(sent, [taskText]);
+  assert.equal(observer.events.some((entry) => entry.type === "task-await-ready-fallback"), true);
+});
+
+test("sendNativeTaskWithRetry falls back when the Codex startup banner is visible but prompt-ready was not detected yet", async () => {
+  const taskText = "Task should submit from visible startup banner";
+  const observer = new NativeSessionObserver();
+  const sent = [];
+  observer.markBridgeState("ready", { text: "remote=ws://127.0.0.1:4888" });
+  observer.markCodexState("running", { text: "mode=pty" });
+  observer.ingestChunk("pty-output", "╭────────────────────────────────────────────╮");
+  observer.ingestChunk("pty-output", "│ >_ OpenAI Codex (v0.121.0)                 │");
+  observer.ingestChunk("pty-output", "│ model:     gpt-5.4 high   /model to change │");
+  observer.ingestChunk("pty-output", "│ directory: /mnt/d/Personal/Core            │");
+  observer.ingestChunk("pty-output", "╰────────────────────────────────────────────╯");
+
+  const controller = {
+    mode: "pty",
+    isControllable() {
+      return true;
+    },
+    sendText(value) {
+      sent.push(value);
+      setTimeout(() => {
+        observer.record("native-busy", {
+          text: "•Working(0s • esc to interrupt)"
+        });
+      }, 10);
+    },
+    submit() {
+      sent.push("<submit>");
+    }
+  };
+
+  const progress = [];
+  const result = await sendNativeTaskWithRetry({
+    controller,
+    observer,
+    task: taskText,
+    timeoutMs: 120,
+    maxSubmitRetries: 1,
+    onProgress: (entry) => progress.push(entry)
+  });
+
+  assert.equal(result.startedBy, "native-busy");
+  assert.equal(result.retries, 0);
+  assert.deepEqual(sent, [taskText]);
+  assert.equal(progress.includes("native-task=await-ready-fallback | reason=startup-banner-visible"), true);
+  assert.equal(
+    observer.events.some((entry) => entry.type === "task-await-ready-fallback" && entry.reason === "startup-banner-visible"),
+    true
+  );
+});
+
+test("sendNativeTaskWithRetry includes observer trace details when submission start times out", async () => {
+  const taskText = "Task that should expose timeout trace details";
+  const observer = new NativeSessionObserver();
+  const sent = [];
+  observer.markBridgeState("ready", { text: "remote=ws://127.0.0.1:4888" });
+  observer.markCodexState("ready", { text: "prompt-ready" });
+  observer.record("prompt-ready", { text: "›" });
+  observer.ingestChunk("pty-output", "model: gpt-5.4 high /model to change");
+
+  const controller = {
+    mode: "pty",
+    isControllable() {
+      return true;
+    },
+    sendText(value) {
+      sent.push(value);
+    },
+    submit() {
+      sent.push("<submit>");
+    }
+  };
+
+  await assert.rejects(
+    () => sendNativeTaskWithRetry({
+      controller,
+      observer,
+      task: taskText,
+      timeoutMs: 20,
+      maxSubmitRetries: 1,
+      onProgress: () => {}
+    }),
+    (error) => {
+      assert.match(error.message, /Timed out waiting for native task submission to start\./);
+      assert.match(error.message, /snapshot=\{/);
+      assert.match(error.message, /recentEvents=\[/);
+      assert.match(error.message, /task="Task that should expose timeout trace details"/);
+      return true;
+    }
+  );
+
+  assert.deepEqual(sent, [taskText]);
+  assert.equal(observer.events.some((entry) => entry.type === "task-submit-timeout"), true);
+});
+
+test("sendNativeTaskWithRetry retries submit when a long task is echoed back through native-output before busy starts", async () => {
+  const taskText = "Wrapper route: qc-flow Protocol enforcement: passthrough qc-flow contract is active. Run artifact: .quick-codex-flow/sample.md Current declared gate: clarify";
+  const observer = new NativeSessionObserver();
+  const sent = [];
+  const progress = [];
+  observer.markBridgeState("ready", { text: "remote=ws://127.0.0.1:4888" });
+  observer.markCodexState("ready", { text: "prompt-ready" });
+  observer.record("prompt-ready", { text: "›" });
+
+  const controller = {
+    mode: "pty",
+    isControllable() {
+      return true;
+    },
+    sendText(value) {
+      sent.push(value);
+      setTimeout(() => {
+        observer.record("native-output", {
+          text: `› ${value}`
+        });
+      }, 5);
+    },
+    submit() {
+      sent.push("<submit>");
+      setTimeout(() => {
+        observer.record("native-busy", {
+          text: "•Working(0s • esc to interrupt)"
+        });
+      }, 5);
+    }
+  };
+
+  const result = await sendNativeTaskWithRetry({
+    controller,
+    observer,
+    task: taskText,
+    timeoutMs: 120,
+    maxSubmitRetries: 1,
+    onProgress: (entry) => progress.push(entry)
+  });
+
+  assert.equal(result.startedBy, "native-busy");
+  assert.equal(result.retries, 1);
+  assert.deepEqual(sent, [taskText, "<submit>"]);
+  assert.equal(progress.includes("native-task=retry-submit | retry=1 | source=native-output"), true);
+  assert.equal(
+    observer.events.some((entry) => entry.type === "task-submit-retry" && entry.sourceEventType === "native-output"),
+    true
+  );
+});
+
+test("NativeRemoteSession.resize returns false when node-pty resize races with a closed fd", () => {
+  const session = new NativeRemoteSession({
+    dir: "/tmp/qc-native-resize-test",
+    stdioMode: "pty"
+  });
+  session.codexChild = {
+    resize() {
+      const error = new Error("ioctl(2) failed, EBADF");
+      error.code = "EBADF";
+      throw error;
+    }
+  };
+
+  assert.equal(session.resize(120, 40), false);
+  assert.equal(session.cols, 120);
+  assert.equal(session.rows, 40);
 });
 
 test("launchNativeCodexSession retries submit when guarded /clear remains in the composer", async () => {
@@ -3001,18 +3281,46 @@ test("quick-codex init seeds wrapper-config.json into the project scaffold", () 
   assert.equal(config.defaults.chat.uiRenderer, "auto");
 });
 
-test("bare codex now opens the interactive wrapper shell by default", () => {
-  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shim-chat-"));
-  const fakeCodex = makeFakeCodex(projectDir, []);
-  const result = runCodexShimWithInputAndEnv(projectDir, {
-    QUICK_CODEX_WRAP_BIN: path.join(process.cwd(), "bin", "quick-codex-wrap.js"),
-    QUICK_CODEX_REAL_CODEX_BIN: process.execPath,
-    ...fakeCodex.env
-  }, "/status\n/task fix quick-codex-wrap in bin/quick-codex-wrap.js so one command handles a narrow CLI bug\n/exit\n", "--qc-dir", projectDir);
+test("bare codex now launches the real native Codex binary by default", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shim-native-"));
+  const fakeRealCodex = path.join(projectDir, "fake-real-codex.mjs");
+  fs.writeFileSync(fakeRealCodex, `#!/usr/bin/env node
+console.log("FAKE_NATIVE_CODEX");
+console.log(JSON.stringify(process.argv.slice(2)));
+`, "utf8");
+  fs.chmodSync(fakeRealCodex, 0o755);
+  const result = runCodexShimWithEnv(projectDir, {
+    QUICK_CODEX_REAL_CODEX_BIN: fakeRealCodex
+  });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.match(result.stdout, /Quick Codex interactive shell/);
-  assert.match(result.stdout, /\[wrapper\] route=qc-lock/);
-  assert.match(result.stdout, /fake codex assistant reply/);
+  assert.match(result.stdout, /FAKE_NATIVE_CODEX/);
+  assert.match(result.stdout, /\[\]/);
+});
+
+test("codex --qc-ui launches the Electron host and forwards --qc-dir as QUICK_CODEX_DIR", () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shim-electron-"));
+  const fakeRealCodex = path.join(projectDir, "fake-real-codex.mjs");
+  const fakeElectronHost = path.join(projectDir, "fake-electron-host.mjs");
+  const envDumpPath = path.join(projectDir, "electron-env.txt");
+  fs.writeFileSync(fakeRealCodex, `#!/usr/bin/env node
+console.log("REAL_CODEX_SHOULD_NOT_RUN");
+`, "utf8");
+  fs.chmodSync(fakeRealCodex, 0o755);
+  fs.writeFileSync(fakeElectronHost, `#!/usr/bin/env node
+import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(envDumpPath)}, process.env.QUICK_CODEX_DIR || "", "utf8");
+console.log("FAKE_ELECTRON_HOST");
+console.log(JSON.stringify(process.argv.slice(2)));
+`, "utf8");
+  fs.chmodSync(fakeElectronHost, 0o755);
+  const result = runCodexShimWithEnv(projectDir, {
+    QUICK_CODEX_REAL_CODEX_BIN: fakeRealCodex,
+    QUICK_CODEX_ELECTRON_HOST_BIN: fakeElectronHost
+  }, "--qc-ui", "--qc-dir", projectDir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /FAKE_ELECTRON_HOST/);
+  assert.doesNotMatch(result.stdout, /REAL_CODEX_SHOULD_NOT_RUN/);
+  assert.equal(fs.readFileSync(envDumpPath, "utf8"), projectDir);
 });
 
 test("quick-codex install-codex-shim writes a codex-compatible launcher", () => {

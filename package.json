@@ -22,12 +22,17 @@
     "access": "public"
   },
   "type": "module",
+  "exports": {
+    "./host-api": "./host-api.js",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "quick-codex": "bin/quick-codex.js",
     "quick-codex-wrap": "bin/quick-codex-wrap.js"
   },
   "files": [
     "bin",
+    "host-api.js",
     "lib",
     "qc-flow",
     "qc-lock",
