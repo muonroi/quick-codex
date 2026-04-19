@@ -31,8 +31,9 @@ function spawnSession({ mode, dir, task, maxTurns = 5, args = [] }) {
     command = codexBin;
     commandArgs = [...args];
   } else {
-    const nodeBin = process.execPath;
-    command = nodeBin;
+    // In the Electron main process, process.execPath points at the Electron binary.
+    // For orchestrated mode we must invoke the system Node runtime instead.
+    command = process.env.QUICK_CODEX_NODE || process.env.NODE || "node";
     commandArgs = [
       wrapperBin,
       "chat",
