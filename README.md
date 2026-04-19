@@ -166,6 +166,20 @@ quick-codex-wrap chat --ui native --native-guarded-slash /compact
 quick-codex-wrap chat --ui native --native-guarded-slash /clear
 ```
 
+### 2.2 Optional Electron host
+
+If you want a GUI window hosting the Codex native TUI (xterm.js + node-pty) with an explicit input/output interception boundary, there is an experimental Electron app at `apps/qc-electron`.
+
+```bash
+cd quick-codex/apps/qc-electron
+npm install
+npm run dev
+```
+
+Modes:
+- `passthrough`: spawn raw `codex` inside the embedded terminal (native UI, no wrapper mediation)
+- `orchestrated`: spawn `quick-codex-wrap chat --ui native --follow ...` so Quick Codex drives `/clear|/compact|/resume` while Codex renders the native UI
+
 ### 3. What the wrapper is doing for you
 
 Route selection now has three safety layers:

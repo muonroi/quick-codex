@@ -1,0 +1,20 @@
+{
+  "name": "@quick-codex/qc-electron",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Minimal Electron host for Codex native TUI with an input/output interception boundary.",
+  "main": "main.mjs",
+  "scripts": {
+    "vendor": "node ./scripts/vendor.mjs",
+    "postinstall": "node ./scripts/vendor.mjs",
+    "dev": "electron .",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^31.2.0",
+    "node-pty": "^1.0.0",
+    "xterm": "^5.3.0",
+    "xterm-addon-fit": "^0.8.0"
+  }
+}
