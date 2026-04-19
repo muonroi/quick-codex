@@ -177,8 +177,15 @@ npm run dev
 ```
 
 Modes:
-- `passthrough`: spawn raw `codex` inside the embedded terminal (native UI, no wrapper mediation)
-- `orchestrated`: spawn `quick-codex-wrap chat --ui native --follow ...` so Quick Codex drives `/clear|/compact|/resume` while Codex renders the native UI
+- `passthrough`: spawn raw `codex` inside the embedded terminal. You type directly into the terminal (native UI, no wrapper mediation).
+- `orchestrated`: spawn `quick-codex-wrap chat --ui native --follow ...` so Quick Codex drives `/clear|/compact|/resume` while Codex renders the native UI (operator keystrokes are not forwarded in follow mode; submit tasks via the task box).
+
+Electron host control commands (handled locally in the host, not by Codex):
+- `/qc help`
+- `/qc start` / `/qc stop`
+- `/qc mode passthrough|orchestrated`
+- `/qc dir <path>`
+- `/qc turns <n>`
 
 ### 3. What the wrapper is doing for you
 
