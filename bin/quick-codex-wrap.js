@@ -30,6 +30,7 @@ import {
   readRunArtifact,
   routeTask,
   launchNativeCodexSession,
+  NativeRemoteSession,
   runCodexCommand,
   saveWrapperState
 } from "../lib/wrapper/index.js";
@@ -1042,8 +1043,180 @@ async function runNativeChatShell(args) {
     explicitApprovalMode: args.approvalMode,
     wrapperConfig
   });
+
+  // Native follow-loop mode: wrapper owns orchestration, while Codex renders the stock TUI.
+  // This path requires PTY control and does not accept operator keystrokes (Ctrl+C exits the wrapper).
+  if (args.follow) {
+    console.log("[wrapper] launching native Codex follow loop");
+    console.log("[wrapper] note: native TUI is preserved, but operator keystrokes are not forwarded in follow mode.");
+
+    const state = loadWrapperState(args.dir);
+    const maxTurns = Math.max(1, args.maxTurns ?? 3);
+    let run = args.run ?? null;
+    let task = args.task ?? null;
+
+    // Seed the first decision either from a raw task or from the active artifact.
+    let seedArtifact = null;
+    let decision = null;
+    let bootstrapState = null;
+
+    if (task) {
+      const baseDecision = await taskDecisionFromArgs(args);
+      if (baseDecision.needsDisambiguation) {
+        console.log(baseDecision.summary);
+        throw new Error("Native follow loop cannot accept disambiguation interactively yet. Re-run with --route-override or a clearer task.");
+      }
+      bootstrapState = ensureProjectBootstrap({
+        dir: args.dir,
+        route: baseDecision.route,
+        dryRun: args.dryRun
+      });
+      const prompt = baseDecision.promptSource === "active-run"
+        ? baseDecision.prompt
+        : compileTaskPrompt({
+            route: baseDecision.route,
+            task,
+            reason: baseDecision.reason,
+            projectState: bootstrapState
+          });
+      decision = {
+        ...baseDecision,
+        projectState: bootstrapState,
+        prompt
+      };
+      seedArtifact = postTaskArtifact(args.dir, baseDecision.activeRun ?? null);
+      run = seedArtifact?.relativeRunPath ?? decision.activeRun ?? run;
+    } else {
+      const active = readActiveRunArtifact(args.dir);
+      if (!active?.artifact) {
+        throw new Error("Native follow loop requires --task or an active run artifact in .quick-codex-flow/STATE.md.");
+      }
+      seedArtifact = active.artifact;
+      run = seedArtifact.relativeRunPath;
+      decision = decideWrapperAction({ artifact: seedArtifact, state, sameSession: true, preferBoundaryAction: true });
+    }
+
+    const modelRoute = await resolveExperienceModelRoute({
+      dir: args.dir,
+      task,
+      artifact: seedArtifact,
+      decision
+    });
+    const selectedModel = modelRoute.applied ? modelRoute.model : decision.model ?? null;
+    const selectedReasoning = modelRoute.applied
+      ? (modelRoute.reasoningEffort ?? decision.reasoningEffort ?? null)
+      : (decision.reasoningEffort ?? null);
+
+    let session = new NativeRemoteSession({
+      dir: args.dir,
+      policy,
+      model: selectedModel,
+      reasoningEffort: selectedReasoning,
+      stdioMode: "pty",
+      forwardOutput: true
+    });
+    await session.start();
+
+    const mapDecisionToSlash = (nextDecision) => {
+      const action = nextDecision?.handoffAction ?? null;
+      if (action === "clear-session") return "/clear";
+      if (action === "compact-session") return "/compact";
+      if (action === "resume-session") return "/resume --last";
+      return null;
+    };
+
+    const waitForTurnSettled = async (observer, minIndex, timeoutMs) => {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          observer.off("event", handler);
+          reject(new Error("Timed out waiting for native turn settlement."));
+        }, timeoutMs);
+        const handler = (event) => {
+          if (event.type !== "turn-settled") return;
+          if (event.index <= minIndex) return;
+          clearTimeout(timer);
+          observer.off("event", handler);
+          resolve(event);
+        };
+        observer.on("event", handler);
+      });
+    };
+
+    let previousArtifact = null;
+    let lastModel = selectedModel ?? "default";
+    let lastReasoning = selectedReasoning ?? "default";
+
+    for (let turn = 1; turn <= maxTurns; turn += 1) {
+      const slash = mapDecisionToSlash(decision);
+      if (slash) {
+        await session.slash(slash);
+      }
+
+      const minIndex = session.observer.events.length;
+      await session.task(decision.prompt);
+      await waitForTurnSettled(session.observer, minIndex, 60 * 60 * 1000);
+
+      const continuation = resolveAutoContinuation({
+        dir: args.dir,
+        run,
+        state: loadWrapperState(args.dir)
+      });
+      const artifact = continuation.artifact;
+      const nextDecision = continuation.decision ?? {
+        handoffAction: null,
+        prompt: artifact?.recommendedNextCommand ?? null
+      };
+      const stop = classifyAutoFollowStop({
+        previousArtifact,
+        artifact,
+        flowState: continuation.flowState,
+        decision: nextDecision
+      });
+
+      previousArtifact = artifact;
+      run = artifact?.relativeRunPath ?? run;
+      decision = nextDecision;
+
+      if (stop.shouldStop) {
+        break;
+      }
+
+      const nextModelRoute = await resolveExperienceModelRoute({
+        dir: args.dir,
+        task: null,
+        artifact,
+        decision
+      });
+      const nextModel = nextModelRoute.applied ? nextModelRoute.model : decision.model ?? null;
+      const nextReasoning = nextModelRoute.applied
+        ? (nextModelRoute.reasoningEffort ?? decision.reasoningEffort ?? null)
+        : (decision.reasoningEffort ?? null);
+      const nextModelKey = nextModel ?? "default";
+      const nextReasoningKey = nextReasoning ?? "default";
+
+      if (nextModelKey !== lastModel || nextReasoningKey !== lastReasoning) {
+        // Restart the native bridge when the routed model changes.
+        await session.stop();
+        session = new NativeRemoteSession({
+          dir: args.dir,
+          policy,
+          model: nextModel,
+          reasoningEffort: nextReasoning,
+          stdioMode: "pty",
+          forwardOutput: true
+        });
+        await session.start();
+        lastModel = nextModelKey;
+        lastReasoning = nextReasoningKey;
+      }
+    }
+
+    await session.stop();
+    return;
+  }
+
   console.log("[wrapper] launching experimental native Codex bridge");
-  console.log("[wrapper] note: this keeps the stock Codex TUI and slash commands, but per-message wrapper mediation is not enabled in this first slice.");
+  console.log("[wrapper] note: this keeps the stock Codex TUI and slash commands, but per-message wrapper mediation is not enabled in this mode.");
   const result = await launchNativeCodexSession({
     dir: args.dir,
     policy,
