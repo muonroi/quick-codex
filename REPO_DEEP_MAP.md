@@ -28,6 +28,7 @@
 | `bin/quick-codex-wrap.js` | Wrapper frontdoor entry point for raw-task routing, interactive wrapper-shell chat, rich/plain renderer selection, and artifact-driven Codex session orchestration |
 | `bin/codex-qc-shim.js` | Codex-compatible shim that routes `codex --qc-*`, bare `codex`, and plain prompt launches into wrapper surfaces while keeping `--qc-bypass` for the real Codex CLI |
 | `lib/wrapper/` | Wrapper parser, route classifier, active-run preference helper, orchestration helper, follow-loop helper, bootstrap helper, prompt compiler, decision engine, permission/config resolution, Experience Engine route-task + route-model clients, exec/app-server Codex adapters, experimental native-session bridge plus observer/controller primitives and guarded slash injection, rich TUI renderer, and wrapper-local state helpers |
+| `apps/qc-electron/` | Experimental Electron host for native Codex sessions; `main.mjs` owns the window/IPC surface, `session-manager.mjs` owns native-session lifecycle plus per-message interception, `renderer/` hosts the xterm-based UI, and `NATIVE_PARITY.md` tracks what native behavior is already proven versus still manual/e2e |
 | `WRAPPER.md` | Wrapper-specific frontdoor scope, commands, and limitations |
 
 ---

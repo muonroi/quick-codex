@@ -10,6 +10,7 @@
     "postinstall": "node ./scripts/vendor.mjs",
     "dev": "node ./scripts/run-electron.mjs",
     "dev:xvfb": "xvfb-run -a npm run dev",
+    "smoke:xvfb": "QUICK_CODEX_ELECTRON_SMOKE_EXIT_MS=3000 xvfb-run -a npm run dev",
     "start": "node ./scripts/run-electron.mjs"
   },
   "dependencies": {

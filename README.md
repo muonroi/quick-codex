@@ -180,11 +180,12 @@ Headless / CI (Linux without a display):
 
 ```bash
 npm run dev:xvfb
+npm run smoke:xvfb
 ```
 
 Modes:
 - `passthrough`: spawn raw `codex` inside the embedded terminal. You type directly into the terminal (native UI, no wrapper mediation).
-- `orchestrated`: spawn `quick-codex-wrap chat --ui native --follow ...` so Quick Codex drives `/clear|/compact|/resume` while Codex renders the native UI (operator keystrokes are not forwarded in follow mode; submit tasks via the task box).
+- `orchestrated`: keep one native Codex session alive behind the Electron host, route tasks through the session manager, and surface route/model metadata while Codex still renders the native UI.
 
 Electron host control commands (handled locally in the host, not by Codex):
 - `/qc help`
@@ -192,6 +193,11 @@ Electron host control commands (handled locally in the host, not by Codex):
 - `/qc mode passthrough|orchestrated`
 - `/qc dir <path>`
 - `/qc turns <n>`
+
+Native parity status:
+- the current parity matrix lives in `apps/qc-electron/NATIVE_PARITY.md`
+- Electron host already proves session reuse, model/reasoning-driven restart, slash forwarding, raw passthrough writes, resize forwarding, and clean xvfb smoke boot
+- Electron host still needs manual/e2e proof for full native autocomplete, menu/modal parity as rendered inside Electron, copy/paste + multiline ergonomics, and scrollback ergonomics
 
 ### 3. What the wrapper is doing for you
 

@@ -26,6 +26,9 @@ const taskInput = document.getElementById("task");
 const sendBtn = document.getElementById("send");
 const inputBar = document.getElementById("inputbar");
 
+let sessionStarted = false;
+let sessionStatus = null;
+
 dirInput.value = (window.localStorage.getItem("qc_dir") || "").trim();
 
 function writeSystem(line) {
@@ -34,11 +37,7 @@ function writeSystem(line) {
 
 function updateUiForMode() {
   const mode = modeSelect.value;
-  // In passthrough mode, the terminal itself is the input surface.
-  // In orchestrated mode, we keep a separate task box to avoid fighting the native Codex TUI.
-  const showTaskBox = mode !== "passthrough";
-  inputBar.style.display = showTaskBox ? "flex" : "none";
-  // Re-fit so the PTY dimensions match the new layout.
+  inputBar.style.display = mode === "orchestrated" ? "flex" : "none";
   setTimeout(() => {
     fitAddon.fit();
     resizePty().catch(() => {});
@@ -57,8 +56,6 @@ window.addEventListener("resize", () => {
 });
 
 const postOutputHooks = [
-  // Hook signature: (chunk) => ({ chunk, drop? } | chunk)
-  // Keep default identity hook for future orchestration (redaction, stream grouping, etc).
   (chunk) => chunk
 ];
 
@@ -87,12 +84,54 @@ window.qc.onExit((data) => {
 });
 
 window.qc.onStarted((data) => {
+  sessionStarted = true;
   writeSystem(`session started mode=${data.mode} dir=${data.dir}`);
   resizePty().catch(() => {});
 });
 
 window.qc.onStopped(() => {
+  sessionStarted = false;
   writeSystem("session stopped");
+});
+
+window.qc.onStatus((data) => {
+  sessionStatus = data;
+});
+
+window.qc.onSessionEvent((payload) => {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  if (payload.type === "task-route") {
+    writeSystem(`route=${payload.route} source=${payload.routeSource}${payload.activeRun ? ` activeRun=${payload.activeRun}` : ""}`);
+    writeSystem(`reason=${payload.reason}`);
+    return;
+  }
+  if (payload.type === "model-route") {
+    writeSystem(`model=${payload.model}${payload.reasoningEffort ? ` reasoning=${payload.reasoningEffort}` : ""} source=${payload.source || "unknown"}`);
+    if (payload.reason) {
+      writeSystem(`model reason=${payload.reason}`);
+    }
+    return;
+  }
+  if (payload.type === "session-model-ready") {
+    writeSystem(`native session ready model=${payload.model} reasoning=${payload.reasoningEffort}`);
+    return;
+  }
+  if (payload.type === "task-disambiguation") {
+    writeSystem(`task requires disambiguation: ${payload.reason}`);
+    for (const option of payload.options || []) {
+      writeSystem(`- ${option.label}: ${option.description}`);
+    }
+    return;
+  }
+  if (payload.type === "task-result") {
+    writeSystem(`task settled route=${payload.route} model=${payload.model}`);
+    return;
+  }
+  if (payload.type === "progress") {
+    writeSystem(payload.entry);
+  }
 });
 
 async function startSession() {
@@ -102,7 +141,13 @@ async function startSession() {
   }
   const mode = modeSelect.value;
   const maxTurns = Number(maxTurnsInput.value || 5);
-  await window.qc.startSession({ mode, dir: dir || undefined, maxTurns });
+  await window.qc.startSession({
+    mode,
+    dir: dir || undefined,
+    maxTurns,
+    cols: term.cols || 120,
+    rows: term.rows || 40
+  });
 }
 
 async function stopSession() {
@@ -110,7 +155,6 @@ async function stopSession() {
 }
 
 const preInputHooks = [
-  // Hook signature: ({ text, source }) => ({ text, handled? } | null)
   ({ text }) => {
     const trimmed = String(text || "").trim();
     if (!trimmed.startsWith("/qc")) return { text };
@@ -125,8 +169,7 @@ const preInputHooks = [
       writeSystem("/qc mode passthrough|orchestrated");
       writeSystem("/qc dir <path>");
       writeSystem("/qc turns <n>");
-      writeSystem("In passthrough mode: type directly into the terminal.");
-      writeSystem("In orchestrated mode: use the task box.");
+      writeSystem("/qc slash /status|/compact|/clear|/resume --last");
       return { handled: true, text: "" };
     }
     if (cmd === "mode") {
@@ -168,6 +211,15 @@ const preInputHooks = [
       stopSession().catch((e) => writeSystem(`stop failed: ${e.message}`));
       return { handled: true, text: "" };
     }
+    if (cmd === "slash") {
+      const command = rest.trim();
+      if (!command.startsWith("/")) {
+        writeSystem("Usage: /qc slash /status|/compact|/clear|/resume --last");
+        return { handled: true, text: "" };
+      }
+      window.qc.slash(command).catch((e) => writeSystem(`slash failed: ${e.message}`));
+      return { handled: true, text: "" };
+    }
 
     writeSystem("Unknown /qc command. Use /qc help.");
     return { handled: true, text: "" };
@@ -196,18 +248,16 @@ async function sendTask() {
     return;
   }
 
-  const mode = modeSelect.value;
-  if (mode === "orchestrated") {
-    // In orchestrated mode we restart the wrapper follow-loop with the new task payload.
-    const dir = dirInput.value.trim();
-    const maxTurns = Number(maxTurnsInput.value || 5);
-    await window.qc.startSession({ mode, dir: dir || undefined, maxTurns, task: pre.text });
+  if (modeSelect.value !== "orchestrated") {
+    writeSystem("Task box is only used in orchestrated mode.");
     taskInput.value = "";
     return;
   }
 
-  // Passthrough: write straight into PTY.
-  await window.qc.write(`${pre.text}\r`);
+  if (!sessionStarted) {
+    await startSession();
+  }
+  await window.qc.submitTask(pre.text);
   taskInput.value = "";
 }
 
@@ -222,9 +272,7 @@ taskInput.addEventListener("keydown", (event) => {
 });
 
 term.onData((data) => {
-  const mode = modeSelect.value;
-  if (mode !== "passthrough") {
-    // Don't fight the native Codex TUI in orchestrated mode.
+  if (modeSelect.value !== "passthrough" || !sessionStarted) {
     return;
   }
 
@@ -238,5 +286,5 @@ modeSelect.addEventListener("change", updateUiForMode);
 updateUiForMode();
 
 writeSystem("ready.");
-writeSystem("passthrough: type directly into the terminal. /qc help for controls.");
-writeSystem("orchestrated: Start, then use the task box to submit a task to the qc native follow-loop.");
+writeSystem("passthrough: start a native session, then type directly into the terminal.");
+writeSystem("orchestrated: start once, then send routed messages through the native session controller.");
