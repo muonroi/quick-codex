@@ -8,7 +8,7 @@ import path from "node:path";
 
 import { routedWaveRun, runWrapCli, runWrapCliWithEnv, runWrapCliWithInputAndEnv, runCodexShimWithEnv, runCodexShimWithInputAndEnv, runCli, writeStateFile, makeProject, baseRun } from "./test-helpers.js";
 import { ensureProjectBootstrap, inspectProjectBootstrap } from "../lib/wrapper/bootstrap.js";
-import { classifyAutoFollowStop } from "../lib/wrapper/follow-loop.js";
+import { classifyAutoFollowStop, resolveAutoContinuation } from "../lib/wrapper/follow-loop.js";
 import { launchNativeCodexSession, NativeRemoteSession, NativeSessionController, NativeSessionObserver, sendNativeTaskWithRetry } from "../lib/wrapper/native-session.js";
 
 function flowArtifact({ phaseWave, nextPrompt, blockers = ["none"], gate = "execute", executionState = "in_progress" }) {
@@ -1770,14 +1770,14 @@ Status:
   assert.equal(payload.turns.length, 2);
 });
 
-test("wrap auto --follow stops when the artifact exposes a blocker", () => {
+test("wrap auto --follow stops when the artifact exposes a blocker without an actionable next command", () => {
   const stage1 = flowArtifact({
     phaseWave: "P1 / W1",
     nextPrompt: "Use $qc-flow and resume from .quick-codex-flow/sample.md to review and execute P1 / W2."
   });
   const blockedStage = flowArtifact({
     phaseWave: "P1 / W2",
-    nextPrompt: "Use $qc-flow and resume from .quick-codex-flow/sample.md after the blocker is resolved.",
+    nextPrompt: "",
     blockers: ["waiting on API contract clarification"]
   });
   const project = makeProject(stage1);
@@ -3367,6 +3367,78 @@ test("classifyAutoFollowStop detects ask-user and relock boundaries", () => {
     }
   });
   assert.equal(relock.stopReason, "relock");
+});
+
+test("classifyAutoFollowStop keeps auto-follow moving when blockers coexist with an actionable next command", () => {
+  const decision = classifyAutoFollowStop({
+    previousArtifact: null,
+    artifact: {
+      currentGate: "clarify",
+      recommendedNextCommand: "Use $qc-flow and resume from .quick-codex-flow/sample.md. Move from clarify to plan and draft the verified plan only.",
+      blockers: [
+        "Scope lock recorded; use the recommended next command to continue into planning."
+      ]
+    },
+    flowState: { status: "active" },
+    decision: {
+      handoffAction: "compact-session",
+      prompt: "Use $qc-flow and resume from .quick-codex-flow/sample.md. Move from clarify to plan and draft the verified plan only."
+    }
+  });
+
+  assert.equal(decision.shouldStop, false);
+  assert.equal(decision.stopReason, null);
+  assert.equal(decision.checkpointAdvanced, true);
+});
+
+test("resolveAutoContinuation synthesizes a research continuation when no next command exists and gray areas remain", () => {
+  const runText = baseRun
+    .replace("Gray-area triggers:\n- none", "Gray-area triggers:\n- G1: anti-bot boundary is still ambiguous\n- G2: crawler comparison evidence is still incomplete")
+    .replace("- Recommended next command: `Use $qc-flow and resume from .quick-codex-flow/sample.md.`\n", "- Recommended next command: none\n")
+    .replace("## Recommended Next Command\n- `Use $qc-flow and resume from .quick-codex-flow/sample.md.`\n", "## Recommended Next Command\n- none\n");
+  const project = makeProject(runText);
+  const continuation = resolveAutoContinuation({
+    dir: project.dir,
+    state: { version: 1, runs: {} }
+  });
+
+  assert.match(continuation.decision.prompt, /Continue focused research to resolve the remaining gray areas before planning/);
+  assert.match(continuation.decision.prompt, /anti-bot boundary is still ambiguous/);
+  assert.match(continuation.decision.prompt, /crawler comparison evidence is still incomplete/);
+});
+
+test("classifyAutoFollowStop asks the user with synthesized options when gray areas remain unresolved after a research turn", () => {
+  const previousArtifact = {
+    currentGate: "clarify",
+    currentPhaseWave: "P1 / W0",
+    currentStatus: { executionState: "in_progress" },
+    recommendedNextCommand: null
+  };
+  const decision = classifyAutoFollowStop({
+    previousArtifact,
+    artifact: {
+      currentGate: "clarify",
+      currentPhaseWave: "P1 / W0",
+      currentStatus: { executionState: "in_progress" },
+      recommendedNextCommand: null,
+      clarifyState: `Goal:\n- review the anti-bot flow\n\nGray-area triggers:\n- G1: anti-bot boundary is still ambiguous\n- G2: crawler comparison evidence is still incomplete`,
+      blockers: [
+        "waiting on missing anti-bot boundary clarification"
+      ]
+    },
+    flowState: { status: "active" },
+    decision: {
+      handoffAction: "compact-session",
+      prompt: "Use $qc-flow and resume from .quick-codex-flow/sample.md. Continue focused research to resolve the remaining gray areas before planning."
+    }
+  });
+
+  assert.equal(decision.shouldStop, true);
+  assert.equal(decision.stopReason, "ask-user");
+  assert.match(decision.prompt, /Ask the user to resolve the remaining gray areas/);
+  assert.equal(Array.isArray(decision.options), true);
+  assert.equal(decision.options.length, 3);
+  assert.match(decision.options[0], /Option A: narrow the scope/);
 });
 
 test("inspectProjectBootstrap marks missing scaffold for qc-flow routes", () => {
