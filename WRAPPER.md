@@ -11,6 +11,7 @@ Scope of the MVP:
 - compile the wrapper-selected Quick Codex prompt before launch
 - read `.quick-codex-flow/<run>.md` directly
 - classify the next session action from `Phase relation`, `Compaction action`, `Wave Handoff`, and `Next Wave Pack`
+- prefer executable auto-continue commands over paste-only skill prompts when the next safe gate is already explicit
 - launch `codex exec` from the artifact payload
 - optionally resume the last wrapper-tracked exec session when the operator explicitly requests `--same-session`
 
@@ -18,6 +19,14 @@ Why this exists:
 - `quick-codex` owns continuity state
 - Codex CLI owns live session state
 - a wrapper is required if you want Quick Codex routing and phase boundaries to become real launch/session boundaries instead of leaving the operator to choose skills, `/compact`, or `/clear` manually
+
+Hard flow assumptions the wrapper now relies on:
+- flow artifacts should carry `Workflow State`, `Gray Area Register`, and `Delivery Roadmap`
+- flow artifacts should also carry `Delegation State` plus any active `Research Delegation`, `Plan-Check Delegation`, or `Goal-Audit Delegation` checkpoint
+- unresolved gray areas should stop wrapper auto-follow at `ask-user` instead of letting the model guess
+- `Delivery Roadmap` should exist before the wrapper treats a flow artifact as execute-ready
+- `Verified Plan` is phase-local and should not replace roadmap state
+- delegated checkpoints are blocking; wrapper auto-follow should stop on them instead of assuming the main agent can continue optimistically
 
 Current commands:
 
@@ -65,6 +74,9 @@ Current orchestration model:
 - `auto --task ...` is the unified frontdoor for raw tasks
 - `auto --run ...` or plain `auto` on a project with an active flow run is the unified artifact-driven continuation path
 - `auto --follow` keeps rereading the active artifact after each turn and only launches the next turn when the artifact reaches a new checkpoint
+- `auto --follow` now synthesizes the next safe flow continuation from `Workflow State` when the artifact did not record a manual next command yet
+- `auto --follow` stops on unresolved gray areas and asks the operator instead of silently guessing; each gray area should already expose 3 options with one recommended path
+- `auto --follow` also stops on assigned or required delegated checkpoints and surfaces the recorded worker prompt instead of trying to push execution past a missing research / plan-check / goal-audit result
 - `auto --follow` now preserves the artifact boundary decision: same-phase checkpoints with a saved native thread use `thread/compact/start` by default instead of silently downgrading to `thread/resume`
 - `auto --follow` now keeps one persistent `codex app-server` session alive across compact/clear/resume turns, so native thread orchestration can chain multiple checkpoints without respawning the app-server process between turns
 - when Experience Engine model routing is enabled, wrapper launch paths call `POST /api/route-model`, pass the returned `model` down to `codex exec` or `codex app-server`, and post `POST /api/route-feedback` after executed turns
@@ -141,4 +153,5 @@ Current limitations:
 - native thread orchestration now covers `clear-session`, `resume-session`, and `compact-session`; older wrapper state without a saved thread id still limits how much of that path can be forced natively
 - session-id extraction from `codex exec --json` is still heuristic for legacy fallback paths
 - `checkpoint-digest` is not used as the machine interface; the wrapper reads the run file directly because the run file is canonical continuity state
+- wrapper continuity is only as strong as the artifact contract; use `quick-codex doctor-flow` and `quick-codex doctor-run` to validate stale or hand-edited flow artifacts before trusting `auto --follow`
 - Experience Engine model routing remains optional; the wrapper only uses it when explicitly enabled or when the Experience Engine URL is injected into the wrapper environment

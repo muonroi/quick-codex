@@ -6,6 +6,7 @@ Use this once context is sufficient and before execution begins.
 ## Verified Plan
 Goal: <one sentence>
 Feature / issue this roadmap closes: <one feature, issue, or scoped deliverable>
+Roadmap phase this plan implements: <P1>
 Requirements covered: <R1, R2>
 Out of scope: <explicit exclusions>
 Plan inputs / evidence:

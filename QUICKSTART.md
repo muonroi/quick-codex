@@ -112,11 +112,19 @@ Check what the package thinks is active:
 ```bash
 node bin/quick-codex.js status --dir /path/to/project
 node bin/quick-codex.js resume --dir /path/to/project
+node bin/quick-codex.js project-status --dir /path/to/project
+node bin/quick-codex.js sync-project --dir /path/to/project --run .quick-codex-flow/<run>.md
+node bin/quick-codex.js delegate-research --dir /path/to/project --run .quick-codex-flow/<run>.md --question "..." --scope "..."
+node bin/quick-codex.js delegate-plan-check --dir /path/to/project --run .quick-codex-flow/<run>.md --focus "..." --scope "..."
+node bin/quick-codex.js delegate-goal-audit --dir /path/to/project --run .quick-codex-flow/<run>.md --focus "..." --scope "..."
+node bin/quick-codex.js complete-delegation --dir /path/to/project --run .quick-codex-flow/<run>.md --type plan-check --status completed --summary "..." --verdict "pass"
 node bin/quick-codex.js capture-hooks --dir /path/to/project --input /path/to/hooks.txt
 node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
 node bin/quick-codex.js checkpoint-digest --dir /path/to/project
 node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
+node bin/quick-codex.js doctor-flow --dir /path/to/project --run .quick-codex-flow/<run>.md
+node bin/quick-codex.js doctor-project --dir /path/to/project
 node bin/quick-codex.js lock-check --dir /path/to/project --run .quick-codex-flow/<run>.md
 node bin/quick-codex.js verify-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
 node bin/quick-codex.js regression-check --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
@@ -135,6 +143,15 @@ If Codex is losing the thread on a medium task:
 ```text
 Use $qc-flow for this task: <describe the task>. Keep a persistent run artifact and do not rely on chat memory.
 ```
+
+Hard rules in the current flow protocol:
+- discuss -> explore -> research -> delivery roadmap -> phase-local plan -> plan-check -> execute
+- unresolved gray areas are a hard stop for roadmap, planning, and execution
+- each gray area must produce at least 3 user-facing options, with one recommended option and a free-text path
+- delegated `research`, `plan-check`, and `goal-audit` checkpoints are blocking; the main flow does not advance until their result is merged back into the run artifact
+- `Delivery Roadmap` is mandatory before execution; `Verified Plan` is only for the active roadmap phase
+- `PROJECT-ROADMAP.md` and `BACKLOG.md` keep milestone, backlog, deferred-decision, and future-seed state outside any single run
+- `Discuss Register`, `Decision Register`, `Dependency Register`, and `Goal-Backward Verification` make the flow closer to a single-agent GSD discipline instead of a thin artifact shell
 
 If the task tends to drift or reopen scope:
 - clarify
@@ -177,13 +194,28 @@ node bin/quick-codex.js resume --dir /path/to/project
 ```
 
 Expected behavior:
-- `status` tells you the active continuity artifact, gate, risks, and next verify
+- `status` tells you the active continuity artifact, gate, risks, roadmap phase, unresolved gray areas, and the preferred auto-continue command for flow work
+- `project-status` tells you the current milestone, active run register, cross-run dependencies, and backlog/deferred/future-seed counts
 - `resume` prints the exact next prompt to paste plus the active carry-forward cues and any experience constraints to keep in view
+- `status` and `resume` also surface any blocking delegated checkpoint plus its worker prompt, so the operator does not need to rediscover what the next role-specific audit should do
+- `resume` and `checkpoint-digest` also print wrapper-first auto-continue commands, so the operator does not need to copy a skill prompt when the next gate is already clear
+- preferred auto-continue paths are:
+
+```bash
+quick-codex-wrap auto --dir /path/to/project --run .quick-codex-flow/<run>.md --follow
+codex --qc-auto --qc-dir /path/to/project --qc-run-file .quick-codex-flow/<run>.md --qc-follow
+```
+
 - when native planner support exists in the current Codex build, `qc-flow` should keep that planner synced as a short progress mirror rather than a second source of continuity truth
 - at phase checkpoints, that planner mirror should also surface the action family the operator should expect next: `compact`, `clear`, or `relock`
 - `checkpoint-digest` prints a resume card plus deliberate-compaction cues before a pause or a broad verify, including `Baseline action`, optional `Brain verdict`, `Explicit suggested action`, and any same-phase `Next Wave Pack`
-- `repair-run` rewrites stale flow-run resumability sections, including `Wave Handoff`, preserves compact lock artifacts, and realigns `STATE.md`
+- `repair-run` rewrites stale flow-run resumability sections, including `Workflow State`, `Gray Area Register`, `Delivery Roadmap`, and `Wave Handoff`, preserves compact lock artifacts, and realigns `STATE.md`
 - `doctor-run` tells you if the flow run or lock artifact is stale, incomplete, or missing required continuity fields, including a scored handoff-sufficiency check for flow runs
+- `doctor-flow` validates the flow-only hard rules: `Workflow State`, `Delegation State`, `Gray Area Register`, `Delivery Roadmap`, current roadmap phase, delegated checkpoint discipline, and gray-area discipline before roadmap/plan/execute
+- `doctor-project` validates the project-level governance files so milestone, backlog, deferred-decision, and future-seed state stay durable
+- `sync-project` syncs the active flow run into the project-level roadmap register
+- `delegate-research`, `delegate-plan-check`, and `delegate-goal-audit` assign serialized blocking checkpoints when you want role separation without background orchestration
+- `complete-delegation` records the delegated result so `doctor-flow`, wrapper `auto --follow`, and future resumes can advance safely
 - `lock-check` tells you whether a run is explicit enough to hand off to locked execution without guessing
 - `verify-wave` runs the active wave's `Verify:` bullets and appends one-line evidence to `Verification Ledger`
 - `regression-check` reruns the active regression/protected-boundary checks, preferring the current wave, then `Latest Phase Close -> Verification completed`, and only then `Next verify`
@@ -201,9 +233,19 @@ If `doctor-run` fails on an older or partially updated run:
 ```bash
 node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
+node bin/quick-codex.js doctor-flow --dir /path/to/project --run .quick-codex-flow/<run>.md
+node bin/quick-codex.js doctor-project --dir /path/to/project
 ```
 
 After repair, expect the flow artifact to carry:
+- `Project Alignment` with project board, milestone, track, and run class
+- `Workflow State` with current stage, current gate, roadmap phase, roadmap phase status, and next required transition
+- `Discuss Register` with explicit options, recommendation, and chosen answer for non-trivial ambiguity
+- `Decision Register` for durable decisions that should survive a clear session
+- `Dependency Register` for cross-phase and cross-run dependency state
+- `Gray Area Register` with each unresolved question explicitly tracked
+- `Delivery Roadmap` with roadmap phase rows and the next roadmap checkpoint
+- `Goal-Backward Verification` so phase-close and feature-close checkpoints prove outcome closure instead of only local task completion
 - `Compact-Safe Summary` with `Phase relation`, `Compaction action`, optional brain verdict fields, `Carry-forward invariants`, `What to forget`, and `What must remain loaded`
 - `Wave Handoff` with trigger, source checkpoint, next target, optional brain verdict fields, and sealed decisions
 - `Next Wave Pack` whenever a same-phase route is already explicit

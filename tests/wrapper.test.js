@@ -3391,6 +3391,35 @@ test("classifyAutoFollowStop keeps auto-follow moving when blockers coexist with
   assert.equal(decision.checkpointAdvanced, true);
 });
 
+test("classifyAutoFollowStop stops when a delegated checkpoint is still pending", () => {
+  const decision = classifyAutoFollowStop({
+    previousArtifact: null,
+    artifact: {
+      currentGate: "plan-check",
+      recommendedNextCommand: "Use $qc-flow and resume from .quick-codex-flow/sample.md.",
+      blockers: [],
+      delegationState: {
+        planCheck: "assigned",
+        activeCheckpoint: "plan-check",
+        waitingOn: "plan-check"
+      },
+      planCheckDelegation: {
+        delegateStatus: "assigned",
+        workerPrompt: "Use $qc-flow and resume from .quick-codex-flow/sample.md. Work only as a blocking plan-check worker."
+      }
+    },
+    flowState: { status: "active" },
+    decision: {
+      handoffAction: "compact-session",
+      prompt: "Use $qc-flow and resume from .quick-codex-flow/sample.md."
+    }
+  });
+
+  assert.equal(decision.shouldStop, true);
+  assert.equal(decision.stopReason, "delegation-pending");
+  assert.match(decision.prompt, /blocking plan-check worker/);
+});
+
 test("resolveAutoContinuation synthesizes a research continuation when no next command exists and gray areas remain", () => {
   const runText = baseRun
     .replace("Gray-area triggers:\n- none", "Gray-area triggers:\n- G1: anti-bot boundary is still ambiguous\n- G2: crawler comparison evidence is still incomplete")
@@ -3436,9 +3465,11 @@ test("classifyAutoFollowStop asks the user with synthesized options when gray ar
   assert.equal(decision.shouldStop, true);
   assert.equal(decision.stopReason, "ask-user");
   assert.match(decision.prompt, /Ask the user to resolve the remaining gray areas/);
+  assert.match(decision.prompt, /Hard rule: do not guess/);
   assert.equal(Array.isArray(decision.options), true);
-  assert.equal(decision.options.length, 3);
-  assert.match(decision.options[0], /Option A: narrow the scope/);
+  assert.equal(decision.options.length, 6);
+  assert.match(decision.options[0], /\[1\.A Recommended\]/);
+  assert.match(decision.options[3], /\[2\.A Recommended\]/);
 });
 
 test("inspectProjectBootstrap marks missing scaffold for qc-flow routes", () => {

@@ -196,6 +196,48 @@ Current gate:
 Execution mode:
 - manual
 
+## Project Alignment
+- Project board: .quick-codex-flow/PROJECT-ROADMAP.md
+- Milestone: M1
+- Track: default
+- Run class: feature
+- Parent run: none
+
+## Workflow State
+- Current stage: execute
+- Current gate: execute
+- Next required transition: execute -> phase-close
+- Current roadmap phase: P1
+- Current roadmap phase status: in-progress
+- Why blocked or not advancing: none
+
+## Delegation State
+- Research delegation: completed
+- Plan-check delegation: completed
+- Goal-audit delegation: idle
+- Active delegated checkpoint: none
+- Waiting on: none
+- Main-agent rule: Do not advance past the active delegated checkpoint until the matching result is merged into this run artifact.
+
+## Gray Area Register
+| ID | Type | Question | Owner | Resolution path | Status |
+|---|---|---|---|---|---|
+| G1 | sample | no unresolved gray area remains | qc-flow | closed | resolved
+
+## Delivery Roadmap
+Roadmap goal:
+- validate quick-codex command surface
+
+Roadmap status:
+- in-progress
+
+Current roadmap phase:
+- P1
+
+| Phase | Status | Purpose | Depends on | Verification checkpoint |
+|---|---|---|---|---|
+| P1 | in-progress | validate the current execution wave and its handoff data | none | focused checks |
+
 ## Resume Digest
 - Goal: validate quick-codex command surface
 - Execution mode: manual
@@ -296,8 +338,85 @@ Goal:
 Gray-area triggers:
 - none
 
+## Discuss Register
+| ID | Theme | Question | Options considered | Recommended | User answer / decision | Status |
+|---|---|---|---|---|---|---|
+| Q1 | scope | what is the smallest safe continuity contract for this sample run? | flow-only / lock-only / flow-plus-lock | flow-plus-lock | validate the flow artifact while keeping lock compatibility visible | resolved |
+
 ## Evidence Basis
 - repo evidence: sample
+
+## Research Pack
+Answered questions:
+- the sample fixture already encodes the continuity shape under test
+
+## Research Delegation
+Assignment:
+- Resolve the repo-side facts that were blocking roadmap and planning.
+
+Delegate status:
+- completed
+
+Worker prompt:
+- \`Use $qc-flow and resume from .quick-codex-flow/sample.md. Work only as a blocking research worker and return concrete repo facts.\`
+
+Expected artifact update:
+- Research Pack + Gray Area Register + Evidence Basis
+
+Result summary:
+- repo facts and boundaries were captured before planning
+
+Result verdict:
+- pass
+
+Recommended transition:
+- research -> roadmap
+
+## Decision Register
+| ID | Decision | Why now | Revisit when | Status |
+|---|---|---|---|---|
+| D1 | keep the sample run on milestone M1 default track | the fixture only needs one delivery lane | the project introduces a second active delivery lane | active |
+
+## Dependency Register
+| ID | Scope | Depends on | Why | Risk if wrong | Status |
+|---|---|---|---|---|---|
+| DEP1 | sample-run | none | the fixture is self-contained | hidden coupling would make continuity assertions unreliable | clear |
+
+## Verified Plan
+Goal:
+- validate the command surface with an execution-ready phase plan
+
+| Phase | Status | Purpose | Covers requirements | Depends on | Exit criteria | Verify |
+|---|---|---|---|---|---|---|
+| P1 | in_progress | validate the current execution wave and its handoff data | R1 | none | phase close is recorded | focused checks |
+| P2 | pending | validate the post-close handoff route | R1 | P1 | phase close is reviewed | focused checks |
+
+## Waves
+| Wave | Phase | Status | Change | Done when | Verify |
+|---|---|---|---|---|---|
+| W1 | P1 | in_progress | run verify commands | verification ledger is updated | \`printf first-check\`, \`printf second-check\` |
+
+## Plan-Check Delegation
+Assignment:
+- Audit the active Verified Plan and prove that execution may start safely.
+
+Delegate status:
+- completed
+
+Worker prompt:
+- \`Use $qc-flow and resume from .quick-codex-flow/sample.md. Work only as a blocking plan-check worker and audit the Verified Plan.\`
+
+Expected artifact update:
+- Verified Plan + Workflow State + Resume Digest
+
+Result summary:
+- verified plan, boundaries, and verify path are explicit enough for execution
+
+Result verdict:
+- pass
+
+Recommended transition:
+- plan-check -> execute
 
 ## Current Execution Wave
 Phase:
@@ -328,13 +447,46 @@ Execution state: in_progress
 
 ## Requirements Still Satisfied
 - R1
+
+## Goal-Backward Verification
+Goal this checkpoint proves:
+- the sample run remains resumable and verifiable through the current roadmap phase
+
+Proof status:
+- partial
+
+| Check | Why it proves the goal | Evidence | Status |
+|---|---|---|---|
+| Resume continuity | resuming the sample run should not require guessing from chat memory | Resume Digest plus current verify path are explicit | partial |
+
+## Goal-Audit Delegation
+Assignment:
+- Audit whether the current checkpoint truly proves the intended outcome before the run finishes.
+
+Delegate status:
+- idle
+
+Worker prompt:
+- none
+
+Expected artifact update:
+- Goal-Backward Verification + Latest Phase Close + Decision Register
+
+Result summary:
+- none
+
+Result verdict:
+- none
+
+Recommended transition:
+- phase-close -> done
 `;
 
 export const verifiedWaveRun = baseRun.replace("## Verification Ledger\n- initial ledger entry", `## Verification Ledger
 - 2026-01-01T00:00:00.000Z verify-wave P1/W1 \`printf first-check\` -> pass (first-check)
 - 2026-01-01T00:00:01.000Z regression-check P1/W1 \`printf fallback\` -> pass (fallback)`);
 
-export const routedWaveRun = verifiedWaveRun.replace("## Current Execution Wave", `## Verified Plan
+export const routedWaveRun = verifiedWaveRun.replace(/## Verified Plan[\s\S]*?## Plan-Check Delegation/, `## Verified Plan
 Goal:
 - validate routing
 
@@ -348,7 +500,7 @@ Goal:
 | W1 | P1 | in_progress | finish first wave | first wave closes | \`printf first-check\` |
 | W2 | P1 | pending | start second wave | second wave is active | \`printf second-wave\` |
 
-## Current Execution Wave`).replace("## Session Risk", `## Next Wave Pack
+## Plan-Check Delegation`).replace("## Session Risk", `## Next Wave Pack
 - Target: P1 / W2
 - Derived from: P1 / W1
 - Phase relation: same-phase
@@ -368,7 +520,7 @@ Goal:
 
 ## Session Risk`);
 
-export const independentPhaseRun = verifiedWaveRun.replace("## Current Execution Wave", `## Verified Plan
+export const independentPhaseRun = verifiedWaveRun.replace(/## Verified Plan[\s\S]*?## Plan-Check Delegation/, `## Verified Plan
 Goal:
 - validate independent next phase routing
 
@@ -383,9 +535,9 @@ Goal:
 | W1 | P1 | in_progress | finish first phase | first phase closes | \`printf first-check\` |
 | W1 | P2 | pending | start independent second phase | second phase is active | \`printf phase-two\` |
 
-## Current Execution Wave`);
+## Plan-Check Delegation`);
 
-export const finalRoadmapRun = verifiedWaveRun.replace("## Current Execution Wave", `## Verified Plan
+export const finalRoadmapRun = verifiedWaveRun.replace(/## Verified Plan[\s\S]*?## Plan-Check Delegation/, `## Verified Plan
 Goal:
 - validate feature roadmap completion
 
@@ -398,7 +550,7 @@ Goal:
 |---|---|---|---|---|---|
 | W1 | P1 | in_progress | finish the final roadmap wave | feature close is recorded | \`printf first-check\` |
 
-## Current Execution Wave`);
+## Plan-Check Delegation`);
 
 export const baseLockRun = `# Run: sample-lock
 

@@ -19,9 +19,15 @@ const LEGACY_TARGET = path.join(os.homedir(), ".codex", "skills");
 const DEFAULT_SHIM_TARGET = path.join(os.homedir(), ".local", "bin");
 const SUPPORTED_DISCOVERY_TARGETS = [DEFAULT_TARGET, LEGACY_TARGET];
 const FLOW_DIRNAME = ".quick-codex-flow";
+const PROJECT_ROADMAP_FILENAME = "PROJECT-ROADMAP.md";
+const BACKLOG_FILENAME = "BACKLOG.md";
 const UPDATE_CACHE_PATH = path.join(os.homedir(), ".quick-codex", "update-check.json");
 const UPDATE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const UPDATE_CHECK_TIMEOUT_MS = 1500;
+
+function normalizeWhitespace(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
 
 function usage() {
   console.log(`Usage:
@@ -31,6 +37,12 @@ function usage() {
   quick-codex init [--dir <project-dir>] [--force]
   quick-codex status [--dir <project-dir>] [--run <path>]
   quick-codex resume [--dir <project-dir>] [--run <path>]
+  quick-codex project-status [--dir <project-dir>]
+  quick-codex sync-project [--dir <project-dir>] [--run <path>]
+  quick-codex delegate-research [--dir <project-dir>] [--run <path>] [--question <text>] [--scope <text>]
+  quick-codex delegate-plan-check [--dir <project-dir>] [--run <path>] [--focus <text>] [--scope <text>]
+  quick-codex delegate-goal-audit [--dir <project-dir>] [--run <path>] [--focus <text>] [--scope <text>]
+  quick-codex complete-delegation [--dir <project-dir>] [--run <path>] --type <research|plan-check|goal-audit> [--status <completed|blocked>] [--summary <text>] [--verdict <text>] [--recommended-transition <text>]
   quick-codex lock-check [--dir <project-dir>] [--run <path>]
   quick-codex verify-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
   quick-codex regression-check [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
@@ -41,6 +53,8 @@ function usage() {
   quick-codex snapshot [--dir <project-dir>] [--run <path>]
   quick-codex repair-run [--dir <project-dir>] [--run <path>]
   quick-codex doctor-run [--dir <project-dir>] [--run <path>]
+  quick-codex doctor-flow [--dir <project-dir>] [--run <path>]
+  quick-codex doctor-project [--dir <project-dir>]
   quick-codex upgrade [--copy] [--target <dir>]
   quick-codex uninstall [--target <dir>] [--dir <project-dir>]
   quick-codex --help
@@ -52,6 +66,12 @@ Commands:
   init       Scaffold AGENTS.md guidance, .quick-codex-flow/, and a sample run artifact
   status     Show the current active run, gate, risks, experience constraints, and next command
   resume     Print the exact next prompt(s) plus active experience constraints to resume safely
+  project-status  Show project-level roadmap, active runs, and backlog/deferred-decision summary
+  sync-project  Sync the active flow run into project-level roadmap metadata
+  delegate-research  Assign a blocking research checkpoint and record the worker prompt in the run artifact
+  delegate-plan-check  Assign a blocking plan-check checkpoint and record the worker prompt in the run artifact
+  delegate-goal-audit  Assign a blocking goal-audit checkpoint and record the worker prompt in the run artifact
+  complete-delegation  Merge a delegated checkpoint result back into the run artifact so the main flow can advance
   lock-check Validate that a flow or lock artifact is explicit enough for locked execution
   verify-wave Run the active wave verification commands and append bounded evidence to the run artifact
   regression-check Run protected-boundary verification commands and append bounded evidence to the run artifact
@@ -62,6 +82,8 @@ Commands:
   snapshot   Alias for checkpoint-digest
   repair-run Refresh resumability sections, Experience Snapshot, and realign STATE.md for the active run
   doctor-run Validate a run artifact, Experience Snapshot, and STATE.md handoff
+  doctor-flow Validate flow-only workflow state, gray-area discipline, and delivery-roadmap rules
+  doctor-project Validate project-level roadmap, active-run register, backlog parking lot, and future-seed scaffolds
   upgrade    Reinstall the skills into the target directory
   uninstall  Remove installed skills and optionally remove project scaffolds when --dir is provided
 `);
@@ -88,6 +110,15 @@ function parseArgs(argv) {
     timeoutMs: 3000,
     allowShellVerify: false,
     realCodex: null
+    ,
+    type: null,
+    question: null,
+    scope: null,
+    focus: null,
+    delegationStatus: null,
+    summary: null,
+    verdict: null,
+    recommendedTransition: null
   };
 
   if (argv.length === 0 || ["-h", "--help", "help"].includes(argv[0])) {
@@ -129,6 +160,70 @@ function parseArgs(argv) {
         throw new Error("--real-codex requires a path");
       }
       result.realCodex = path.resolve(argv[i]);
+      continue;
+    }
+    if (arg === "--type") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--type requires a value");
+      }
+      result.type = argv[i];
+      continue;
+    }
+    if (arg === "--question") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--question requires a value");
+      }
+      result.question = argv[i];
+      continue;
+    }
+    if (arg === "--scope") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--scope requires a value");
+      }
+      result.scope = argv[i];
+      continue;
+    }
+    if (arg === "--focus") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--focus requires a value");
+      }
+      result.focus = argv[i];
+      continue;
+    }
+    if (arg === "--status") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--status requires a value");
+      }
+      result.delegationStatus = argv[i];
+      continue;
+    }
+    if (arg === "--summary") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--summary requires a value");
+      }
+      result.summary = argv[i];
+      continue;
+    }
+    if (arg === "--verdict") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--verdict requires a value");
+      }
+      result.verdict = argv[i];
+      continue;
+    }
+    if (arg === "--recommended-transition") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--recommended-transition requires a value");
+      }
+      result.recommendedTransition = argv[i];
       continue;
     }
     if (arg === "--run") {
@@ -525,17 +620,23 @@ function initCommand({ dir, force }) {
   const sampleRun = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "sample-run.md");
   const stateTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "STATE.md");
   const wrapperConfigTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "wrapper-config.json");
+  const projectRoadmapTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", PROJECT_ROADMAP_FILENAME);
+  const backlogTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", BACKLOG_FILENAME);
 
   const readmeResult = writeFileIfMissing(path.join(flowDir, "README.md"), fs.readFileSync(flowReadme, "utf8"));
   const sampleResult = writeFileIfMissing(path.join(flowDir, "sample-run.md"), fs.readFileSync(sampleRun, "utf8"));
   const stateResult = writeFileIfMissing(path.join(flowDir, "STATE.md"), fs.readFileSync(stateTemplate, "utf8"));
   const wrapperConfigResult = writeFileIfMissing(path.join(flowDir, "wrapper-config.json"), fs.readFileSync(wrapperConfigTemplate, "utf8"));
+  const projectRoadmapResult = writeFileIfMissing(path.join(flowDir, PROJECT_ROADMAP_FILENAME), fs.readFileSync(projectRoadmapTemplate, "utf8"));
+  const backlogResult = writeFileIfMissing(path.join(flowDir, BACKLOG_FILENAME), fs.readFileSync(backlogTemplate, "utf8"));
 
   console.log(`AGENTS scaffold: ${agentsResult}`);
   console.log(`.quick-codex-flow/README.md: ${readmeResult}`);
   console.log(`.quick-codex-flow/sample-run.md: ${sampleResult}`);
   console.log(`.quick-codex-flow/STATE.md: ${stateResult}`);
   console.log(`.quick-codex-flow/wrapper-config.json: ${wrapperConfigResult}`);
+  console.log(`.quick-codex-flow/${PROJECT_ROADMAP_FILENAME}: ${projectRoadmapResult}`);
+  console.log(`.quick-codex-flow/${BACKLOG_FILENAME}: ${backlogResult}`);
   console.log("");
   console.log("Recommended prompts:");
   console.log('1. Use $qc-flow for this task: <describe the non-trivial task>.');
@@ -557,6 +658,43 @@ function readTextIfExists(filePath) {
     return null;
   }
   return fs.readFileSync(filePath, "utf8");
+}
+
+function ensureProjectArtifacts(projectDir) {
+  const flowDir = flowDirFor(projectDir);
+  ensureDir(flowDir);
+  const roadmapPath = projectRoadmapFileFor(projectDir);
+  const backlogPath = backlogFileFor(projectDir);
+  if (!fs.existsSync(roadmapPath)) {
+    fs.writeFileSync(
+      roadmapPath,
+      fs.readFileSync(path.join(ROOT_DIR, "templates", ".quick-codex-flow", PROJECT_ROADMAP_FILENAME), "utf8"),
+      "utf8"
+    );
+  }
+  if (!fs.existsSync(backlogPath)) {
+    fs.writeFileSync(
+      backlogPath,
+      fs.readFileSync(path.join(ROOT_DIR, "templates", ".quick-codex-flow", BACKLOG_FILENAME), "utf8"),
+      "utf8"
+    );
+  }
+  return { roadmapPath, backlogPath };
+}
+
+function loadProjectMetadata(projectDir) {
+  const roadmapPath = projectRoadmapFileFor(projectDir);
+  const backlogPath = backlogFileFor(projectDir);
+  const roadmapText = readTextIfExists(roadmapPath);
+  const backlogText = readTextIfExists(backlogPath);
+  return {
+    roadmapPath,
+    backlogPath,
+    roadmapText,
+    backlogText,
+    roadmap: roadmapText ? parseProjectRoadmapMetadata(roadmapText) : null,
+    backlog: backlogText ? parseBacklogMetadata(backlogText) : null
+  };
 }
 
 function stripBullet(value) {
@@ -762,10 +900,11 @@ function findSectionBulletValue(text, heading, label) {
 
 function splitMarkdownTableLine(line) {
   const trimmed = line.trim();
-  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) {
+  if (!trimmed.startsWith("|")) {
     return null;
   }
-  return trimmed.slice(1, -1).split("|").map((cell) => cell.trim());
+  const normalized = trimmed.endsWith("|") ? trimmed : `${trimmed}|`;
+  return normalized.slice(1, -1).split("|").map((cell) => cell.trim());
 }
 
 function parseMarkdownTableInSection(text, heading) {
@@ -802,6 +941,108 @@ function parseMarkdownTableInSection(text, heading) {
     beforeLines: sectionLines.slice(0, tableStart),
     afterLines: sectionLines.slice(offset),
     rows
+  };
+}
+
+function parseGrayAreaRegisterRows(text) {
+  const table = parseMarkdownTableInSection(text, "Gray Area Register");
+  if (!table) {
+    return [];
+  }
+  return table.rows.map((row) => ({
+    id: (row.ID ?? "").trim(),
+    type: (row.Type ?? "").trim(),
+    question: (row.Question ?? "").trim(),
+    owner: (row.Owner ?? "").trim(),
+    resolutionPath: (row["Resolution path"] ?? "").trim(),
+    status: (row.Status ?? "").trim().toLowerCase()
+  }));
+}
+
+function parseDiscussRegisterRows(text) {
+  const table = parseMarkdownTableInSection(text, "Discuss Register");
+  if (!table) {
+    return [];
+  }
+  return table.rows.map((row) => ({
+    id: (row.ID ?? "").trim(),
+    theme: (row.Theme ?? "").trim(),
+    question: (row.Question ?? "").trim(),
+    options: (row["Options considered"] ?? "").trim(),
+    recommended: (row.Recommended ?? "").trim(),
+    outcome: (row["User answer / decision"] ?? "").trim(),
+    status: (row.Status ?? "").trim().toLowerCase()
+  }));
+}
+
+function parseDecisionRegisterRows(text) {
+  const table = parseMarkdownTableInSection(text, "Decision Register");
+  if (!table) {
+    return [];
+  }
+  return table.rows.map((row) => ({
+    id: (row.ID ?? "").trim(),
+    decision: (row.Decision ?? "").trim(),
+    whyNow: (row["Why now"] ?? "").trim(),
+    revisitWhen: (row["Revisit when"] ?? "").trim(),
+    status: (row.Status ?? "").trim().toLowerCase()
+  }));
+}
+
+function parseDependencyRegisterRows(text) {
+  const table = parseMarkdownTableInSection(text, "Dependency Register");
+  if (!table) {
+    return [];
+  }
+  return table.rows.map((row) => ({
+    id: (row.ID ?? "").trim(),
+    scope: (row.Scope ?? "").trim(),
+    dependsOn: (row["Depends on"] ?? "").trim(),
+    why: (row.Why ?? "").trim(),
+    riskIfWrong: (row["Risk if wrong"] ?? "").trim(),
+    status: (row.Status ?? "").trim().toLowerCase()
+  }));
+}
+
+function parseDelegationState(text) {
+  return {
+    research: (findSectionBulletValue(text, "Delegation State", "Research delegation") ?? "").trim().toLowerCase() || null,
+    planCheck: (findSectionBulletValue(text, "Delegation State", "Plan-check delegation") ?? "").trim().toLowerCase() || null,
+    goalAudit: (findSectionBulletValue(text, "Delegation State", "Goal-audit delegation") ?? "").trim().toLowerCase() || null,
+    activeCheckpoint: (findSectionBulletValue(text, "Delegation State", "Active delegated checkpoint") ?? "").trim().toLowerCase() || null,
+    waitingOn: (findSectionBulletValue(text, "Delegation State", "Waiting on") ?? "").trim().toLowerCase() || null,
+    mainAgentRule: findSectionBulletValue(text, "Delegation State", "Main-agent rule")
+  };
+}
+
+function parseDelegationSection(text, heading) {
+  return {
+    assignment: findSectionLabelBullets(text, heading, "Assignment")[0] ?? null,
+    delegateStatus: (findSectionLabelBullets(text, heading, "Delegate status")[0] ?? "").trim().toLowerCase() || null,
+    workerPrompt: findSectionLabelBullets(text, heading, "Worker prompt")[0] ?? null,
+    expectedArtifactUpdate: findSectionLabelBullets(text, heading, "Expected artifact update")[0] ?? null,
+    resultSummary: findSectionLabelBullets(text, heading, "Result summary")[0] ?? null,
+    resultVerdict: findSectionLabelBullets(text, heading, "Result verdict")[0] ?? null,
+    recommendedTransition: findSectionLabelBullets(text, heading, "Recommended transition")[0] ?? null
+  };
+}
+
+function parseProjectRoadmapMetadata(text) {
+  return {
+    projectGoal: findSectionLabelBullets(text, "Project Roadmap", "Project goal"),
+    currentMilestone: findSectionLabelBullets(text, "Project Roadmap", "Current milestone")[0] ?? null,
+    currentTrack: findSectionLabelBullets(text, "Project Roadmap", "Current track")[0] ?? null,
+    milestoneRows: parseMarkdownTableInSection(text, "Project Roadmap")?.rows ?? [],
+    activeRunRows: parseMarkdownTableInSection(text, "Active Run Register")?.rows ?? [],
+    dependencyRows: parseMarkdownTableInSection(text, "Cross-Run Dependency Register")?.rows ?? []
+  };
+}
+
+function parseBacklogMetadata(text) {
+  return {
+    parkingRows: parseMarkdownTableInSection(text, "Parking Lot")?.rows ?? [],
+    deferredDecisionRows: parseMarkdownTableInSection(text, "Deferred Decisions")?.rows ?? [],
+    futureSeedRows: parseMarkdownTableInSection(text, "Future Seeds")?.rows ?? []
   };
 }
 
@@ -868,6 +1109,107 @@ function replaceMarkdownTableInSection(text, heading, table) {
   );
 }
 
+function upsertTableRow(rows, keyField, nextRow) {
+  const key = String(nextRow[keyField] ?? "").trim();
+  if (!key) {
+    return rows;
+  }
+  const index = rows.findIndex((row) => String(row[keyField] ?? "").trim() === key);
+  if (index === -1) {
+    return [...rows, nextRow];
+  }
+  const copy = [...rows];
+  copy[index] = { ...copy[index], ...nextRow };
+  return copy;
+}
+
+function milestoneStatusFromRun(metadata) {
+  const gate = String(metadata.currentGate ?? "").trim().toLowerCase();
+  const executionState = String(metadata.executionState ?? metadata.status ?? "").trim().toLowerCase();
+  if (gate === "done") {
+    return "done";
+  }
+  if (gate === "phase-close") {
+    return "verifying";
+  }
+  if (executionState === "blocked") {
+    return "blocked";
+  }
+  return "active";
+}
+
+function syncProjectFromRun(projectDir, metadata, relativeRunPath) {
+  const { roadmapPath, backlogPath } = ensureProjectArtifacts(projectDir);
+  const roadmapText = fs.readFileSync(roadmapPath, "utf8");
+  const roadmapMeta = parseProjectRoadmapMetadata(roadmapText);
+  const milestone = metadata.projectMilestone ?? roadmapMeta.currentMilestone ?? "M1";
+  const track = metadata.projectTrack ?? roadmapMeta.currentTrack ?? "default";
+  const goal = metadata.goal ?? "active run outcome not recorded";
+  const roadmapPhase = metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? metadata.currentPhase ?? "none";
+
+  const milestoneTable = parseMarkdownTableInSection(roadmapText, "Project Roadmap");
+  const activeRunTable = parseMarkdownTableInSection(roadmapText, "Active Run Register");
+  const dependencyTable = parseMarkdownTableInSection(roadmapText, "Cross-Run Dependency Register");
+
+  let nextRoadmapText = roadmapText;
+  if (milestoneTable) {
+    const milestoneRows = upsertTableRow(milestoneTable.rows, "Milestone", {
+      Milestone: milestone,
+      Status: milestoneStatusFromRun(metadata),
+      Outcome: goal,
+      "Active runs": relativeRunPath,
+      "Depends on": "none",
+      "Exit verification": metadata.nextVerify ?? "feature close review"
+    });
+    nextRoadmapText = replaceMarkdownTableInSection(nextRoadmapText, "Project Roadmap", { ...milestoneTable, rows: milestoneRows });
+  }
+  if (activeRunTable) {
+    const activeRunRows = upsertTableRow(activeRunTable.rows, "Run", {
+      Run: relativeRunPath,
+      Status: metadata.executionState ?? metadata.status ?? "unknown",
+      Gate: metadata.currentGate ?? "unknown",
+      "Roadmap phase": roadmapPhase,
+      Milestone: milestone,
+      Track: track,
+      Summary: goal
+    });
+    nextRoadmapText = replaceMarkdownTableInSection(nextRoadmapText, "Active Run Register", { ...activeRunTable, rows: activeRunRows });
+  }
+  if (dependencyTable && metadata.dependencyRegisterRows.length > 0) {
+    let dependencyRows = dependencyTable.rows;
+    for (const row of metadata.dependencyRegisterRows) {
+      dependencyRows = upsertTableRow(dependencyRows, "ID", {
+        ID: row.id || `DEP-${milestone}-${roadmapPhase}`,
+        Scope: row.scope || roadmapPhase,
+        "Depends on": row.dependsOn || "none",
+        Why: row.why || "inherited from run dependency register",
+        Status: row.status || "watch"
+      });
+    }
+    nextRoadmapText = replaceMarkdownTableInSection(nextRoadmapText, "Cross-Run Dependency Register", { ...dependencyTable, rows: dependencyRows });
+  }
+  nextRoadmapText = replaceOrInsertSection(nextRoadmapText, "Project Roadmap", [
+    "Project goal:",
+    `- ${roadmapMeta.projectGoal[0] ?? "coordinate quick-codex delivery across multiple runs"}`,
+    "",
+    "Current milestone:",
+    `- ${milestone}`,
+    "",
+    "Current track:",
+    `- ${track}`,
+    "",
+    ...renderMarkdownTable(
+      milestoneTable?.headers ?? ["Milestone", "Status", "Outcome", "Active runs", "Depends on", "Exit verification"],
+      parseProjectRoadmapMetadata(nextRoadmapText).milestoneRows
+    )
+  ]);
+  fs.writeFileSync(roadmapPath, nextRoadmapText, "utf8");
+
+  if (!fs.existsSync(backlogPath)) {
+    ensureProjectArtifacts(projectDir);
+  }
+}
+
 function normalizeCommandText(value) {
   if (!value) {
     return value;
@@ -893,6 +1235,16 @@ function defaultResumeCommand(relativeRunPath, artifactType = "flow") {
   return `Use $qc-flow and resume from ${relativeRunPath}.`;
 }
 
+function preferredAutoContinueCommands(projectDir, relativeRunPath, artifactType = "flow") {
+  if (artifactType !== "flow") {
+    return [];
+  }
+  return [
+    `quick-codex-wrap auto --dir ${projectDir} --run ${relativeRunPath} --follow`,
+    `codex --qc-auto --qc-dir ${projectDir} --qc-run-file ${relativeRunPath} --qc-follow`
+  ];
+}
+
 function meaningfulList(values) {
   const normalized = values
     .map((value) => value.trim())
@@ -904,6 +1256,389 @@ function meaningfulList(values) {
 function summarizeList(values, fallback = "none recorded") {
   const meaningful = meaningfulList(values);
   return meaningful.length > 0 ? meaningful.join("; ") : fallback;
+}
+
+function unresolvedGrayAreaRows(metadata) {
+  return (metadata.grayAreaRegisterRows ?? []).filter((row) => ["ask-user", "research"].includes(row.status));
+}
+
+function unresolvedGrayAreaSummary(metadata) {
+  const unresolved = unresolvedGrayAreaRows(metadata);
+  if (unresolved.length === 0) {
+    return "none";
+  }
+  return unresolved
+    .map((row) => `${row.id || row.type || "gray-area"}: ${row.question}`)
+    .join("; ");
+}
+
+function gateRequiresClearedGrayAreas(metadata) {
+  const gate = String(metadata.currentGate ?? "").trim().toLowerCase();
+  return ["roadmap", "plan", "plan-check", "execute", "phase-close", "done"].includes(gate);
+}
+
+const DELEGATION_CONFIG = {
+  research: {
+    stateLabel: "Research delegation",
+    heading: "Research Delegation",
+    requiredGate: "research",
+    expectedArtifactUpdate: "Research Pack + Gray Area Register + Evidence Basis",
+    defaultRecommendedTransition: "research -> roadmap"
+  },
+  "plan-check": {
+    stateLabel: "Plan-check delegation",
+    heading: "Plan-Check Delegation",
+    requiredGate: "plan-check",
+    expectedArtifactUpdate: "Verified Plan + Workflow State + Resume Digest",
+    defaultRecommendedTransition: "plan-check -> execute"
+  },
+  "goal-audit": {
+    stateLabel: "Goal-audit delegation",
+    heading: "Goal-Audit Delegation",
+    requiredGate: "phase-close",
+    expectedArtifactUpdate: "Goal-Backward Verification + Latest Phase Close + Decision Register",
+    defaultRecommendedTransition: "phase-close -> done"
+  }
+};
+
+const GATE_ORDER = ["clarify", "explore", "research", "roadmap", "plan", "plan-check", "execute", "phase-close", "done"];
+
+function gateRank(gate) {
+  const normalized = String(gate ?? "").trim().toLowerCase();
+  const index = GATE_ORDER.indexOf(normalized);
+  return index === -1 ? -1 : index;
+}
+
+function delegationStatusValue(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["idle", "required", "assigned", "completed", "blocked"].includes(normalized) ? normalized : null;
+}
+
+function delegationSectionForType(metadata, type) {
+  switch (type) {
+    case "research":
+      return metadata.researchDelegation;
+    case "plan-check":
+      return metadata.planCheckDelegation;
+    case "goal-audit":
+      return metadata.goalAuditDelegation;
+    default:
+      return null;
+  }
+}
+
+function effectiveDelegationStatus(metadata, type) {
+  if (!metadata) {
+    return null;
+  }
+  const state = metadata.delegationState ?? {};
+  const section = delegationSectionForType(metadata, type) ?? {};
+  if (type === "research") {
+    return delegationStatusValue(section.delegateStatus ?? state.research);
+  }
+  if (type === "plan-check") {
+    return delegationStatusValue(section.delegateStatus ?? state.planCheck);
+  }
+  if (type === "goal-audit") {
+    return delegationStatusValue(section.delegateStatus ?? state.goalAudit);
+  }
+  return null;
+}
+
+function delegationPendingForType(metadata, type) {
+  const status = effectiveDelegationStatus(metadata, type);
+  return status === "required" || status === "assigned";
+}
+
+function activeDelegation(metadata) {
+  const state = metadata.delegationState ?? {};
+  const active = String(state.activeCheckpoint ?? "").trim().toLowerCase();
+  const waitingOn = String(state.waitingOn ?? "").trim().toLowerCase();
+  const ordered = [active, waitingOn, "research", "plan-check", "goal-audit"]
+    .filter(Boolean)
+    .map((entry) => {
+      if (["research", "plan-check", "goal-audit"].includes(entry)) {
+        return entry;
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+  for (const type of ordered) {
+    if (delegationPendingForType(metadata, type)) {
+      const section = delegationSectionForType(metadata, type) ?? {};
+      return {
+        type,
+        status: effectiveDelegationStatus(metadata, type),
+        workerPrompt: section.workerPrompt ?? null,
+        recommendedTransition: section.recommendedTransition ?? DELEGATION_CONFIG[type].defaultRecommendedTransition,
+        heading: DELEGATION_CONFIG[type].heading
+      };
+    }
+  }
+
+  for (const type of ["research", "plan-check", "goal-audit"]) {
+    if (delegationPendingForType(metadata, type)) {
+      const section = delegationSectionForType(metadata, type) ?? {};
+      return {
+        type,
+        status: effectiveDelegationStatus(metadata, type),
+        workerPrompt: section.workerPrompt ?? null,
+        recommendedTransition: section.recommendedTransition ?? DELEGATION_CONFIG[type].defaultRecommendedTransition,
+        heading: DELEGATION_CONFIG[type].heading
+      };
+    }
+  }
+
+  return null;
+}
+
+function requiredDelegationViolations(metadata) {
+  const currentGateRank = gateRank(metadata.currentGate);
+  const violations = [];
+
+  if (currentGateRank > gateRank("research") && delegationPendingForType(metadata, "research")) {
+    violations.push("research");
+  }
+  if (currentGateRank > gateRank("plan-check") && effectiveDelegationStatus(metadata, "plan-check") !== "completed") {
+    violations.push("plan-check");
+  }
+  if (currentGateRank > gateRank("phase-close") && delegationPendingForType(metadata, "goal-audit")) {
+    violations.push("goal-audit");
+  }
+
+  return uniqueValues(violations);
+}
+
+function delegationSummary(metadata) {
+  const current = activeDelegation(metadata);
+  if (!current) {
+    return "none";
+  }
+  return `${current.type} (${current.status})`;
+}
+
+function workflowStageFromMetadata(metadata) {
+  const currentGate = String(metadata.currentGate ?? "").trim().toLowerCase();
+  const explicitStage = String(metadata.workflowStage ?? "").trim().toLowerCase();
+  if (explicitStage.length > 0) {
+    return explicitStage;
+  }
+  switch (currentGate) {
+    case "clarify":
+      return "discuss";
+    case "research":
+      return "research";
+    case "roadmap":
+      return "roadmap";
+    case "plan":
+      return "plan";
+    case "plan-check":
+      return "plan-check";
+    case "execute":
+    case "phase-close":
+    case "done":
+      return "execute";
+    default:
+      return "discuss";
+  }
+}
+
+function inferRoadmapPhaseStatus(metadata) {
+  const explicit = String(
+    metadata.workflowCurrentRoadmapPhaseStatus
+      ?? metadata.deliveryRoadmapStatus
+      ?? ""
+  ).trim();
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  const executionState = String(metadata.executionState ?? "").trim().toLowerCase();
+  if (executionState === "done" || String(metadata.currentGate ?? "").trim().toLowerCase() === "done") {
+    return "done";
+  }
+  if (executionState === "blocked") {
+    return "blocked";
+  }
+  return "in-progress";
+}
+
+function synthesizedWorkflowStateLines(metadata) {
+  const currentGate = metadata.currentGate ?? "discuss";
+  const currentRoadmapPhase = metadata.currentPhase ?? "P1";
+  const stage = workflowStageFromMetadata(metadata);
+  const roadmapPhaseStatus = inferRoadmapPhaseStatus(metadata);
+  const nextTransitionByGate = {
+    discuss: "discuss -> explore",
+    explore: "explore -> research",
+    research: "research -> roadmap",
+    roadmap: "roadmap -> plan",
+    plan: "plan -> plan-check",
+    "plan-check": "plan-check -> execute",
+    execute: "execute -> phase-close",
+    "phase-close": "phase-close -> execute",
+    done: "done -> close"
+  };
+  return [
+    `- Current stage: ${stage}`,
+    `- Current gate: ${currentGate}`,
+    `- Next required transition: ${metadata.workflowNextRequiredTransition ?? nextTransitionByGate[stage] ?? `${stage} -> review`}`,
+    `- Current roadmap phase: ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? currentRoadmapPhase}`,
+    `- Current roadmap phase status: ${roadmapPhaseStatus}`,
+    `- Why blocked or not advancing: ${metadata.workflowBlockedReason ?? "none"}`
+  ];
+}
+
+function synthesizedGrayAreaRegisterLines(metadata) {
+  const unresolved = unresolvedGrayAreaRows(metadata);
+  if (unresolved.length > 0) {
+    return [
+      "| ID | Type | Question | Owner | Resolution path | Status |",
+      "|---|---|---|---|---|---|",
+      ...unresolved.map((row) => `| ${row.id || "G1"} | ${row.type || "unknown"} | ${row.question || "unresolved gray area"} | ${row.owner || "qc-flow"} | ${row.resolutionPath || row.status || "ask-user"} | ${row.status || "ask-user"} |`)
+    ];
+  }
+  return [
+    "| ID | Type | Question | Owner | Resolution path | Status |",
+    "|---|---|---|---|---|---|",
+    "| G1 | synthesized | no unresolved gray area remains after repair | qc-flow | closed | resolved |"
+  ];
+}
+
+function synthesizedDelegationStateLines(metadata) {
+  return [
+    `- Research delegation: ${effectiveDelegationStatus(metadata, "research") ?? "idle"}`,
+    `- Plan-check delegation: ${effectiveDelegationStatus(metadata, "plan-check") ?? (gateRank(metadata.currentGate) > gateRank("plan-check") ? "completed" : "idle")}`,
+    `- Goal-audit delegation: ${effectiveDelegationStatus(metadata, "goal-audit") ?? (gateRank(metadata.currentGate) > gateRank("phase-close") ? "completed" : "idle")}`,
+    `- Active delegated checkpoint: ${metadata.delegationState?.activeCheckpoint ?? "none"}`,
+    `- Waiting on: ${metadata.delegationState?.waitingOn ?? "none"}`,
+    `- Main-agent rule: ${metadata.delegationState?.mainAgentRule ?? "Do not advance past the active delegated checkpoint until the matching result is merged into this run artifact."}`
+  ];
+}
+
+function synthesizedDelegationSectionLines(type, metadata) {
+  const config = DELEGATION_CONFIG[type];
+  const section = delegationSectionForType(metadata, type) ?? {};
+  const synthesizedStatus = type === "plan-check"
+    ? (effectiveDelegationStatus(metadata, type) ?? (gateRank(metadata.currentGate) > gateRank("plan-check") ? "completed" : "idle"))
+    : type === "goal-audit"
+      ? (effectiveDelegationStatus(metadata, type) ?? "idle")
+      : (effectiveDelegationStatus(metadata, type) ?? "idle");
+  return [
+    "Assignment:",
+    `- ${section.assignment ?? `${config.heading} has not been assigned yet.`}`,
+    "",
+    "Delegate status:",
+    `- ${section.delegateStatus ?? synthesizedStatus}`,
+    "",
+    "Worker prompt:",
+    `- ${section.workerPrompt ?? "none"}`,
+    "",
+    "Expected artifact update:",
+    `- ${section.expectedArtifactUpdate ?? config.expectedArtifactUpdate}`,
+    "",
+    "Result summary:",
+    `- ${section.resultSummary ?? "none"}`,
+    "",
+    "Result verdict:",
+    `- ${section.resultVerdict ?? "none"}`,
+    "",
+    "Recommended transition:",
+    `- ${section.recommendedTransition ?? config.defaultRecommendedTransition}`
+  ];
+}
+
+function synthesizedDeliveryRoadmapLines(metadata) {
+  const roadmapGoal = metadata.goal ?? "resume the current flow safely";
+  const currentRoadmapPhase = metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? metadata.currentPhase ?? "P1";
+  const roadmapStatus = String(metadata.currentGate ?? "").trim().toLowerCase() === "done"
+    ? "done"
+    : inferRoadmapPhaseStatus(metadata);
+  const verificationCheckpoint = metadata.nextVerify ?? "review the current verify path before continuing";
+  const phasePurpose = metadata.currentExecutionWavePurpose
+    ?? metadata.goal
+    ?? "continue the repaired roadmap phase";
+  return [
+    "Roadmap goal:",
+    `- ${roadmapGoal}`,
+    "",
+    "Roadmap status:",
+    `- ${roadmapStatus}`,
+    "",
+    "Current roadmap phase:",
+    `- ${currentRoadmapPhase}`,
+    "",
+    "Next roadmap checkpoint:",
+    `- ${verificationCheckpoint}`,
+    "",
+    "| Phase | Status | Purpose | Depends on | Verification checkpoint |",
+    "|---|---|---|---|---|",
+    `| ${currentRoadmapPhase} | ${roadmapStatus} | ${phasePurpose} | none | ${verificationCheckpoint} |`
+  ];
+}
+
+function synthesizedProjectAlignmentLines(metadata) {
+  return [
+    `- Project board: .quick-codex-flow/${PROJECT_ROADMAP_FILENAME}`,
+    `- Milestone: ${metadata.projectMilestone ?? "M1"}`,
+    `- Track: ${metadata.projectTrack ?? "default"}`,
+    `- Run class: ${metadata.projectRunClass ?? "feature"}`,
+    `- Parent run: ${metadata.projectParentRun ?? "none"}`
+  ];
+}
+
+function synthesizedDiscussRegisterLines(metadata) {
+  const unresolved = unresolvedGrayAreaRows(metadata);
+  if (unresolved.length > 0) {
+    return [
+      "| ID | Theme | Question | Options considered | Recommended | User answer / decision | Status |",
+      "|---|---|---|---|---|---|---|",
+      ...unresolved.map((row, index) => `| ${row.id || `Q${index + 1}`} | ${row.type || "gray-area"} | ${row.question || "open discussion item"} | option-a / option-b / option-c | option-a | pending user answer | open |`)
+    ];
+  }
+  return [
+    "| ID | Theme | Question | Options considered | Recommended | User answer / decision | Status |",
+    "|---|---|---|---|---|---|---|",
+    "| Q1 | scope | what is the tightest safe interpretation of this run? | direct implementation / staged implementation / defer | staged implementation | current run follows the staged path | resolved |"
+  ];
+}
+
+function synthesizedDecisionRegisterLines(metadata) {
+  return [
+    "| ID | Decision | Why now | Revisit when | Status |",
+    "|---|---|---|---|---|",
+    `| D1 | Use ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? metadata.currentPhase ?? "P1"} as the active roadmap phase | The run already routes through this phase | The roadmap shape changes materially | active |`
+  ];
+}
+
+function synthesizedDependencyRegisterLines(metadata) {
+  return [
+    "| ID | Scope | Depends on | Why | Risk if wrong | Status |",
+    "|---|---|---|---|---|---|",
+    `| DEP1 | ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? metadata.currentPhase ?? "P1"} | none | No upstream dependency is recorded in the repaired artifact | Revisit if research reveals a hidden cross-phase dependency | clear |`
+  ];
+}
+
+function synthesizedGoalBackwardVerificationLines(metadata) {
+  const goal = metadata.goalBackwardGoal
+    ?? metadata.goal
+    ?? "prove the current checkpoint closes the intended outcome";
+  const status = metadata.goalBackwardStatus
+    ?? ((String(metadata.currentGate ?? "").trim().toLowerCase() === "done" || String(metadata.currentGate ?? "").trim().toLowerCase() === "phase-close")
+      ? "partial"
+      : "pending");
+  const evidence = metadata.nextVerify ?? "review the current verify path before continuing";
+  return [
+    "Goal this checkpoint proves:",
+    `- ${goal}`,
+    "",
+    "Proof status:",
+    `- ${status}`,
+    "",
+    "| Check | Why it proves the goal | Evidence | Status |",
+    "|---|---|---|---|",
+    `| Current checkpoint outcome | The active roadmap phase should move the run toward the stated goal instead of only finishing local tasks | ${evidence} | ${status === "pending" ? "pending" : "partial"} |`
+  ];
 }
 
 function normalizeBrainVerdict(value) {
@@ -1820,6 +2555,14 @@ function stateFileFor(projectDir) {
   return path.join(flowDirFor(projectDir), "STATE.md");
 }
 
+function projectRoadmapFileFor(projectDir) {
+  return path.join(flowDirFor(projectDir), PROJECT_ROADMAP_FILENAME);
+}
+
+function backlogFileFor(projectDir) {
+  return path.join(flowDirFor(projectDir), BACKLOG_FILENAME);
+}
+
 function runMetadata(runPath) {
   const text = readTextIfExists(runPath);
   if (text === null) {
@@ -1897,9 +2640,19 @@ function statusCommand({ dir, run }) {
   const runPath = resolveRunPath(dir, run);
   const metadata = runMetadata(runPath);
   const phaseWave = phaseWaveFromMetadata(metadata);
+  const autoCommands = preferredAutoContinueCommands(dir, relPathFrom(dir, runPath), metadata.artifactType);
+  const projectMeta = loadProjectMetadata(dir);
 
   console.log(`Project: ${dir}`);
   console.log(`Active run: ${relPathFrom(dir, runPath)}`);
+  if (metadata.artifactType === "flow") {
+    console.log(`Workflow stage: ${metadata.workflowStage ?? "unknown"}`);
+    console.log(`Roadmap phase: ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? "unknown"}`);
+    console.log(`Roadmap phase status: ${metadata.workflowCurrentRoadmapPhaseStatus ?? "unknown"}`);
+    console.log(`Unresolved gray areas: ${unresolvedGrayAreaSummary(metadata)}`);
+    console.log(`Delegation state: ${delegationSummary(metadata)}`);
+    console.log(`Milestone / track: ${(metadata.projectMilestone ?? "unknown")} / ${(metadata.projectTrack ?? "default")}`);
+  }
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
   console.log(`Execution mode: ${metadata.executionMode ?? "manual"}`);
   console.log(`Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`);
@@ -1913,12 +2666,259 @@ function statusCommand({ dir, run }) {
   console.log(`Experience constraints: ${summarizeList(metadata.experienceConstraints)}`);
   console.log(`Hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`);
   console.log(`Next verify: ${metadata.nextVerify ?? "not recorded"}`);
+  const activeDelegatedCheckpoint = activeDelegation(metadata);
+  if (activeDelegatedCheckpoint) {
+    console.log(`Waiting on delegated checkpoint: ${activeDelegatedCheckpoint.type} (${activeDelegatedCheckpoint.status})`);
+    console.log(`Delegated worker prompt: ${activeDelegatedCheckpoint.workerPrompt ?? "not recorded"}`);
+  }
+  if (autoCommands.length > 0) {
+    console.log("Preferred auto-continue:");
+    for (const command of autoCommands) {
+      console.log(`- ${command}`);
+    }
+  }
   if (metadata.recommendedCommands.length > 0) {
     console.log("Recommended next command:");
     for (const command of metadata.recommendedCommands) {
       console.log(`- ${command}`);
     }
   }
+  if (projectMeta.roadmap || projectMeta.backlog) {
+    console.log("Project board:");
+    console.log(`- Project roadmap: ${fs.existsSync(projectMeta.roadmapPath) ? relPathFrom(dir, projectMeta.roadmapPath) : "missing"}`);
+    console.log(`- Backlog: ${fs.existsSync(projectMeta.backlogPath) ? relPathFrom(dir, projectMeta.backlogPath) : "missing"}`);
+    if (projectMeta.roadmap) {
+      console.log(`- Current milestone: ${projectMeta.roadmap.currentMilestone ?? "unknown"}`);
+      console.log(`- Current track: ${projectMeta.roadmap.currentTrack ?? "default"}`);
+    }
+    if (projectMeta.backlog) {
+      console.log(`- Parking lot items: ${projectMeta.backlog.parkingRows.length}`);
+      console.log(`- Deferred decisions: ${projectMeta.backlog.deferredDecisionRows.length}`);
+      console.log(`- Future seeds: ${projectMeta.backlog.futureSeedRows.length}`);
+    }
+  }
+}
+
+function projectStatusCommand({ dir }) {
+  const projectMeta = loadProjectMetadata(dir);
+  console.log(`Project: ${dir}`);
+  console.log(`Project roadmap: ${fs.existsSync(projectMeta.roadmapPath) ? relPathFrom(dir, projectMeta.roadmapPath) : "missing"}`);
+  console.log(`Backlog: ${fs.existsSync(projectMeta.backlogPath) ? relPathFrom(dir, projectMeta.backlogPath) : "missing"}`);
+  if (projectMeta.roadmap) {
+    console.log(`Current milestone: ${projectMeta.roadmap.currentMilestone ?? "unknown"}`);
+    console.log(`Current track: ${projectMeta.roadmap.currentTrack ?? "default"}`);
+    console.log(`Milestones: ${projectMeta.roadmap.milestoneRows.length}`);
+    for (const row of projectMeta.roadmap.milestoneRows) {
+      console.log(`- ${row.Milestone}: ${row.Status} -> ${row.Outcome}`);
+    }
+    console.log(`Active runs: ${projectMeta.roadmap.activeRunRows.length}`);
+    for (const row of projectMeta.roadmap.activeRunRows) {
+      console.log(`- ${row.Run}: gate=${row.Gate} phase=${row["Roadmap phase"]} milestone=${row.Milestone}`);
+    }
+    console.log(`Cross-run dependencies: ${projectMeta.roadmap.dependencyRows.length}`);
+  }
+  if (projectMeta.backlog) {
+    console.log(`Parking lot items: ${projectMeta.backlog.parkingRows.length}`);
+    console.log(`Deferred decisions: ${projectMeta.backlog.deferredDecisionRows.length}`);
+    console.log(`Future seeds: ${projectMeta.backlog.futureSeedRows.length}`);
+  }
+}
+
+function syncProjectCommand({ dir, run }) {
+  const runPath = resolveRunPath(dir, run);
+  const metadata = runMetadata(runPath);
+  if (metadata.artifactType !== "flow") {
+    throw new Error("sync-project only supports qc-flow run artifacts");
+  }
+  const relativeRunPath = relPathFrom(dir, runPath);
+  syncProjectFromRun(dir, metadata, relativeRunPath);
+  console.log(`Synced project board from ${relativeRunPath}`);
+  console.log(`- ${relPathFrom(dir, projectRoadmapFileFor(dir))}`);
+  console.log(`- ${relPathFrom(dir, backlogFileFor(dir))}`);
+}
+
+function defaultDelegationAssignment(type, metadata) {
+  if (type === "research") {
+    const unresolved = unresolvedGrayAreaRows(metadata);
+    if (unresolved.length > 0) {
+      return `Resolve the remaining repo-side gray areas before roadmap or planning continues: ${unresolved.map((row) => `${row.id || row.type}: ${row.question}`).join("; ")}`;
+    }
+    return "Resolve the missing repo facts and contracts that still block roadmap or phase planning.";
+  }
+  if (type === "plan-check") {
+    return `Audit the current Verified Plan for ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? metadata.currentPhase ?? "the active roadmap phase"} and prove whether execution can safely start.`;
+  }
+  return `Audit whether the active checkpoint truly proves the stated goal before the run moves beyond ${metadata.currentGate ?? "phase-close"}.`;
+}
+
+function defaultDelegationPrompt(type, metadata, relativeRunPath, assignment, scope) {
+  const base = `Use $qc-flow and resume from ${relativeRunPath}.`;
+  if (type === "research") {
+    return `${base} Work only as a blocking research worker. Goal: ${assignment} Scope: ${scope}. Return concrete repo facts, closed gray areas, and a recommended transition. Do not plan or execute code.`;
+  }
+  if (type === "plan-check") {
+    return `${base} Work only as a blocking plan-check worker. Goal: ${assignment} Scope: ${scope}. Audit the Verified Plan against roadmap, dependencies, boundaries, and verify path. Return pass/block plus the recommended transition. Do not execute code.`;
+  }
+  return `${base} Work only as a blocking goal-audit worker. Goal: ${assignment} Scope: ${scope}. Audit the current checkpoint backward from the promised outcome and return pass/block plus the recommended transition. Do not execute code.`;
+}
+
+function delegationStateLines({ metadata, activeType, statusByType }) {
+  return [
+    `- Research delegation: ${statusByType.research ?? effectiveDelegationStatus(metadata, "research") ?? "idle"}`,
+    `- Plan-check delegation: ${statusByType["plan-check"] ?? effectiveDelegationStatus(metadata, "plan-check") ?? "idle"}`,
+    `- Goal-audit delegation: ${statusByType["goal-audit"] ?? effectiveDelegationStatus(metadata, "goal-audit") ?? "idle"}`,
+    `- Active delegated checkpoint: ${activeType ?? metadata.delegationState?.activeCheckpoint ?? "none"}`,
+    `- Waiting on: ${activeType ?? metadata.delegationState?.waitingOn ?? "none"}`,
+    `- Main-agent rule: ${metadata.delegationState?.mainAgentRule ?? "Do not advance past the active delegated checkpoint until the matching result is merged into this run artifact."}`
+  ];
+}
+
+function delegationSectionLines({ type, status, assignment, workerPrompt, expectedArtifactUpdate, resultSummary, resultVerdict, recommendedTransition }) {
+  return [
+    "Assignment:",
+    `- ${assignment}`,
+    "",
+    "Delegate status:",
+    `- ${status}`,
+    "",
+    "Worker prompt:",
+    `- ${workerPrompt}`,
+    "",
+    "Expected artifact update:",
+    `- ${expectedArtifactUpdate}`,
+    "",
+    "Result summary:",
+    `- ${resultSummary}`,
+    "",
+    "Result verdict:",
+    `- ${resultVerdict}`,
+    "",
+    "Recommended transition:",
+    `- ${recommendedTransition}`
+  ];
+}
+
+function applyDelegationGate(type, metadata, nextText) {
+  const config = DELEGATION_CONFIG[type];
+  const gate = config.requiredGate;
+  const workflowStateLines = [
+    `- Current stage: ${gate}`,
+    `- Current gate: ${gate}`,
+    `- Next required transition: ${config.defaultRecommendedTransition}`,
+    `- Current roadmap phase: ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? metadata.currentPhase ?? "none"}`,
+    `- Current roadmap phase status: ${metadata.workflowCurrentRoadmapPhaseStatus ?? metadata.deliveryRoadmapStatus ?? "in-progress"}`,
+    `- Why blocked or not advancing: waiting for the ${type} delegation result to be merged back into this run artifact`
+  ];
+  return replaceOrInsertSection(nextText, "Workflow State", workflowStateLines, "Project Alignment");
+}
+
+function assignDelegationCommand({ dir, run, type, question, scope, focus }) {
+  const config = DELEGATION_CONFIG[type];
+  if (!config) {
+    throw new Error(`Unsupported delegation type: ${type}`);
+  }
+  const runPath = resolveRunPath(dir, run);
+  let metadata = runMetadata(runPath);
+  if (metadata.artifactType !== "flow") {
+    throw new Error(`${type} delegation only supports qc-flow run artifacts`);
+  }
+  const relativeRunPath = relPathFrom(dir, runPath);
+  const assignment = normalizeWhitespace(question ?? focus ?? defaultDelegationAssignment(type, metadata));
+  const delegatedScope = normalizeWhitespace(scope ?? metadata.goal ?? "the active roadmap phase and its bounded affected area");
+  const workerPrompt = defaultDelegationPrompt(type, metadata, relativeRunPath, assignment, delegatedScope);
+  const nextTextStart = replaceOrInsertSection(
+    metadata.text,
+    "Delegation State",
+    delegationStateLines({
+      metadata,
+      activeType: type,
+      statusByType: {
+        research: type === "research" ? "assigned" : effectiveDelegationStatus(metadata, "research") ?? "idle",
+        "plan-check": type === "plan-check" ? "assigned" : effectiveDelegationStatus(metadata, "plan-check") ?? "idle",
+        "goal-audit": type === "goal-audit" ? "assigned" : effectiveDelegationStatus(metadata, "goal-audit") ?? "idle"
+      }
+    }),
+    "Workflow State"
+  );
+  const nextTextWithGate = applyDelegationGate(type, metadata, nextTextStart);
+  const nextText = replaceOrInsertSection(
+    nextTextWithGate,
+    config.heading,
+    delegationSectionLines({
+      type,
+      status: "assigned",
+      assignment,
+      workerPrompt,
+      expectedArtifactUpdate: config.expectedArtifactUpdate,
+      resultSummary: "none",
+      resultVerdict: "none",
+      recommendedTransition: config.defaultRecommendedTransition
+    }),
+    "Goal-Backward Verification"
+  );
+  fs.writeFileSync(runPath, nextText, "utf8");
+  metadata = runMetadata(runPath);
+  fs.writeFileSync(stateFileFor(dir), renderStateFile(relativeRunPath, metadata), "utf8");
+  syncProjectFromRun(dir, metadata, relativeRunPath);
+
+  console.log(`Assigned ${type} delegation on ${relativeRunPath}`);
+  console.log(`Gate locked to: ${config.requiredGate}`);
+  console.log(`Worker prompt: ${workerPrompt}`);
+  console.log(`Complete with: quick-codex complete-delegation --dir ${dir} --run ${relativeRunPath} --type ${type} --status completed --summary \"...\" --verdict \"...\" --recommended-transition \"${config.defaultRecommendedTransition}\"`);
+}
+
+function completeDelegationCommand({ dir, run, type, delegationStatus, summary, verdict, recommendedTransition }) {
+  const config = DELEGATION_CONFIG[type];
+  if (!config) {
+    throw new Error(`Unsupported delegation type: ${type}`);
+  }
+  const runPath = resolveRunPath(dir, run);
+  let metadata = runMetadata(runPath);
+  if (metadata.artifactType !== "flow") {
+    throw new Error("complete-delegation only supports qc-flow run artifacts");
+  }
+  const relativeRunPath = relPathFrom(dir, runPath);
+  const nextStatus = delegationStatusValue(delegationStatus ?? "completed");
+  if (!["completed", "blocked"].includes(nextStatus)) {
+    throw new Error("--status must be completed or blocked");
+  }
+  const existing = delegationSectionForType(metadata, type) ?? {};
+  const nextText = replaceOrInsertSection(
+    replaceOrInsertSection(
+      metadata.text,
+      "Delegation State",
+      delegationStateLines({
+        metadata,
+        activeType: nextStatus === "completed" ? "none" : type,
+        statusByType: {
+          research: type === "research" ? nextStatus : effectiveDelegationStatus(metadata, "research") ?? "idle",
+          "plan-check": type === "plan-check" ? nextStatus : effectiveDelegationStatus(metadata, "plan-check") ?? "idle",
+          "goal-audit": type === "goal-audit" ? nextStatus : effectiveDelegationStatus(metadata, "goal-audit") ?? "idle"
+        }
+      }),
+      "Workflow State"
+    ),
+    config.heading,
+    delegationSectionLines({
+      type,
+      status: nextStatus,
+      assignment: existing.assignment ?? defaultDelegationAssignment(type, metadata),
+      workerPrompt: existing.workerPrompt ?? "none",
+      expectedArtifactUpdate: existing.expectedArtifactUpdate ?? config.expectedArtifactUpdate,
+      resultSummary: normalizeWhitespace(summary ?? existing.resultSummary ?? "delegated result recorded"),
+      resultVerdict: normalizeWhitespace(verdict ?? existing.resultVerdict ?? nextStatus),
+      recommendedTransition: normalizeWhitespace(recommendedTransition ?? existing.recommendedTransition ?? config.defaultRecommendedTransition)
+    }),
+    "Goal-Backward Verification"
+  );
+  fs.writeFileSync(runPath, nextText, "utf8");
+  metadata = runMetadata(runPath);
+  fs.writeFileSync(stateFileFor(dir), renderStateFile(relativeRunPath, metadata), "utf8");
+  syncProjectFromRun(dir, metadata, relativeRunPath);
+
+  console.log(`Recorded ${type} delegation result on ${relativeRunPath}`);
+  console.log(`Status: ${nextStatus}`);
+  console.log(`Result summary: ${summary ?? existing.resultSummary ?? "delegated result recorded"}`);
 }
 
 function firstMeaningfulLine(text) {
@@ -2861,6 +3861,7 @@ function resumeCommand({ dir, run }) {
   const commands = metadata.recommendedCommands.length > 0
     ? metadata.recommendedCommands
     : [defaultResumeCommand(relativeRunPath, metadata.artifactType)];
+  const autoCommands = preferredAutoContinueCommands(dir, relativeRunPath, metadata.artifactType);
   const carryForward = carryForwardState(metadata);
   const phaseWave = phaseWaveFromMetadata(metadata);
   const executionState = metadata.executionState ?? metadata.status ?? "unknown";
@@ -2868,6 +3869,14 @@ function resumeCommand({ dir, run }) {
 
   console.log(`Project: ${dir}`);
   console.log(`Active run: ${relativeRunPath}`);
+  if (metadata.artifactType === "flow") {
+    console.log(`Workflow stage: ${metadata.workflowStage ?? "unknown"}`);
+    console.log(`Roadmap phase: ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? "unknown"}`);
+    console.log(`Roadmap phase status: ${metadata.workflowCurrentRoadmapPhaseStatus ?? "unknown"}`);
+    console.log(`Unresolved gray areas: ${unresolvedGrayAreaSummary(metadata)}`);
+    console.log(`Delegation state: ${delegationSummary(metadata)}`);
+    console.log(`Milestone / track: ${(metadata.projectMilestone ?? "unknown")} / ${(metadata.projectTrack ?? "default")}`);
+  }
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
   console.log(`Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`);
   console.log(`Execution state: ${executionState}`);
@@ -2883,11 +3892,22 @@ function resumeCommand({ dir, run }) {
   console.log(`- Experience constraints: ${summarizeList(metadata.experienceConstraints)}`);
   console.log(`- Hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`);
   console.log(`- Warnings to respect on next step: ${summarizeList(metadata.experienceActiveWarnings)}`);
+  const pendingDelegation = activeDelegation(metadata);
+  if (pendingDelegation) {
+    console.log(`- Delegated checkpoint: ${pendingDelegation.type} (${pendingDelegation.status})`);
+    console.log(`- Delegated worker prompt: ${pendingDelegation.workerPrompt ?? "not recorded"}`);
+  }
   if (metadata.waveHandoffSealedDecisions) {
     console.log(`- Sealed decisions: ${metadata.waveHandoffSealedDecisions}`);
   }
   if (nextWavePack) {
     console.log(`- Next-wave pack: ${nextWavePack.target.phase} / ${nextWavePack.target.wave} -> ${nextWavePack.nextVerify}`);
+  }
+  if (autoCommands.length > 0) {
+    console.log("Auto-continue first:");
+    for (const command of autoCommands) {
+      console.log(`- ${command}`);
+    }
   }
   console.log("Paste one of these next:");
   for (const command of commands) {
@@ -3134,6 +4154,7 @@ function checkpointDigestCommand({ dir, run }) {
   const metadata = runMetadata(runPath);
   const relativeRunPath = relPathFrom(dir, runPath);
   const lines = checkpointDigestLines(metadata, relativeRunPath);
+  const autoCommands = preferredAutoContinueCommands(dir, relativeRunPath, metadata.artifactType);
   const carryForward = carryForwardState(metadata);
   const nextWavePack = nextWavePackState(metadata, relativeRunPath);
   const waveHandoff = metadata.artifactType === "flow"
@@ -3142,6 +4163,12 @@ function checkpointDigestCommand({ dir, run }) {
 
   console.log(`Project: ${dir}`);
   console.log(`Active run: ${relativeRunPath}`);
+  if (metadata.artifactType === "flow") {
+    console.log(`Workflow stage: ${metadata.workflowStage ?? "unknown"}`);
+    console.log(`Roadmap phase: ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? "unknown"}`);
+    console.log(`Roadmap phase status: ${metadata.workflowCurrentRoadmapPhaseStatus ?? "unknown"}`);
+    console.log(`Unresolved gray areas: ${unresolvedGrayAreaSummary(metadata)}`);
+  }
   console.log("Resume card:");
   for (const line of lines) {
     console.log(`- ${line}`);
@@ -3167,6 +4194,12 @@ function checkpointDigestCommand({ dir, run }) {
     console.log(`- Explicit suggested action: ${nextWavePack.suggestedSessionAction}`);
     console.log(`- Next verify: ${nextWavePack.nextVerify}`);
     console.log(`- Resume payload: ${nextWavePack.resumePayload}`);
+  }
+  if (autoCommands.length > 0) {
+    console.log("Auto-continue first:");
+    for (const command of autoCommands) {
+      console.log(`- ${command}`);
+    }
   }
 }
 
@@ -3226,6 +4259,10 @@ function runMetadataStruct(runPath, text) {
   const lockRequirementsStillSatisfied = findSectionLabelBulletsAny(text, lockHeadings, "Requirements still satisfied");
   const lockVerificationEvidence = findSectionLabelBulletsAny(text, lockHeadings, "Verification evidence");
   const lockExperienceInputs = findSectionLabelBulletsAny(text, lockHeadings, "Experience inputs");
+  const delegationState = parseDelegationState(text);
+  const researchDelegation = parseDelegationSection(text, "Research Delegation");
+  const planCheckDelegation = parseDelegationSection(text, "Plan-Check Delegation");
+  const goalAuditDelegation = parseDelegationSection(text, "Goal-Audit Delegation");
 
   return {
     path: runPath,
@@ -3233,7 +4270,19 @@ function runMetadataStruct(runPath, text) {
     artifactType,
     goal: findResumeDigestField(text, "Goal")
       ?? findLabelValue(text, "Original goal"),
+    projectBoard: findSectionLabelBullets(text, "Project Alignment", "Project board")[0] ?? null,
+    projectMilestone: findSectionLabelBullets(text, "Project Alignment", "Milestone")[0] ?? null,
+    projectTrack: findSectionLabelBullets(text, "Project Alignment", "Track")[0] ?? null,
+    projectRunClass: findSectionLabelBullets(text, "Project Alignment", "Run class")[0] ?? null,
+    projectParentRun: findSectionLabelBullets(text, "Project Alignment", "Parent run")[0] ?? null,
+    workflowStage: findSectionBulletValue(text, "Workflow State", "Current stage"),
+    workflowStateGate: findSectionBulletValue(text, "Workflow State", "Current gate"),
+    workflowNextRequiredTransition: findSectionBulletValue(text, "Workflow State", "Next required transition"),
+    workflowCurrentRoadmapPhase: findSectionBulletValue(text, "Workflow State", "Current roadmap phase"),
+    workflowCurrentRoadmapPhaseStatus: findSectionBulletValue(text, "Workflow State", "Current roadmap phase status"),
+    workflowBlockedReason: findSectionBulletValue(text, "Workflow State", "Why blocked or not advancing"),
     currentGate: findResumeDigestField(text, "Current gate")
+      ?? findSectionBulletValue(text, "Workflow State", "Current gate")
       ?? findLabelValue(text, "Current gate")
       ?? findHeadingValue(text, "Current gate")
       ?? (artifactType === "lock" ? "execute" : null),
@@ -3292,12 +4341,28 @@ function runMetadataStruct(runPath, text) {
       ...findSectionLabelBulletsAny(text, lockHeadings, "Evidence basis")
     ]),
     grayAreaTriggers: findSectionLabelBullets(text, "Clarify State", "Gray-area triggers"),
+    grayAreaRegisterRows: parseGrayAreaRegisterRows(text),
+    delegationState,
+    researchDelegation,
+    planCheckDelegation,
+    goalAuditDelegation,
+    discussRegisterRows: parseDiscussRegisterRows(text),
+    decisionRegisterRows: parseDecisionRegisterRows(text),
+    dependencyRegisterRows: parseDependencyRegisterRows(text),
+    deliveryRoadmapGoal: findSectionLabelBullets(text, "Delivery Roadmap", "Roadmap goal"),
+    deliveryRoadmapStatus: findSectionLabelBullets(text, "Delivery Roadmap", "Roadmap status")[0] ?? null,
+    deliveryRoadmapCurrentPhase: findSectionLabelBullets(text, "Delivery Roadmap", "Current roadmap phase")[0] ?? null,
+    deliveryRoadmapNextCheckpoint: findSectionLabelBullets(text, "Delivery Roadmap", "Next roadmap checkpoint")[0] ?? null,
+    deliveryRoadmapPhases: parseMarkdownTableInSection(text, "Delivery Roadmap")?.rows ?? [],
     currentExecutionWavePurpose: findSectionLabelBullets(text, "Current Execution Wave", "Purpose")[0] ?? null,
     currentExecutionWaveDoneWhen: findSectionLabelBullets(text, "Current Execution Wave", "Done when")[0] ?? null,
     currentExecutionWaveVerify: findSectionLabelBullets(text, "Current Execution Wave", "Verify"),
     currentExecutionWaveRequirements: findSectionLabelBullets(text, "Current Execution Wave", "Covers requirements"),
     currentExecutionWaveInvariantRequirements: findSectionLabelBullets(text, "Current Execution Wave", "Invariant requirements"),
     latestPhaseCloseVerificationCompleted: findSectionLabelBullets(text, "Latest Phase Close", "Verification completed"),
+    goalBackwardGoal: findSectionLabelBullets(text, "Goal-Backward Verification", "Goal this checkpoint proves")[0] ?? null,
+    goalBackwardStatus: findSectionLabelBullets(text, "Goal-Backward Verification", "Proof status")[0] ?? null,
+    goalBackwardChecks: parseMarkdownTableInSection(text, "Goal-Backward Verification")?.rows ?? [],
     verifiedPlanPhases: parseMarkdownTableInSection(text, "Verified Plan")?.rows ?? [],
     verifiedPlanWaves: parseMarkdownTableInSection(text, "Waves")?.rows ?? [],
     lockCurrentVerify,
@@ -3401,8 +4466,20 @@ Status:
   }
 
   let nextText = metadata.text;
+  nextText = replaceOrInsertSection(nextText, "Project Alignment", synthesizedProjectAlignmentLines(metadata), "Requirement Baseline");
+  nextText = replaceOrInsertSection(nextText, "Workflow State", synthesizedWorkflowStateLines(metadata), "Requirement Baseline");
+  nextText = replaceOrInsertSection(nextText, "Delegation State", synthesizedDelegationStateLines(metadata), "Workflow State");
+  nextText = replaceOrInsertSection(nextText, "Gray Area Register", synthesizedGrayAreaRegisterLines(metadata), "Delegation State");
+  nextText = replaceOrInsertSection(nextText, "Delivery Roadmap", synthesizedDeliveryRoadmapLines(metadata), "Gray Area Register");
+  nextText = replaceOrInsertSection(nextText, "Discuss Register", synthesizedDiscussRegisterLines(metadata), "Clarify State");
+  nextText = replaceOrInsertSection(nextText, "Decision Register", synthesizedDecisionRegisterLines(metadata), "Research Pack");
+  nextText = replaceOrInsertSection(nextText, "Dependency Register", synthesizedDependencyRegisterLines(metadata), "Decision Register");
+  nextText = replaceOrInsertSection(nextText, "Goal-Backward Verification", synthesizedGoalBackwardVerificationLines(metadata), "Latest Feature Close");
+  nextText = replaceOrInsertSection(nextText, "Research Delegation", synthesizedDelegationSectionLines("research", metadata), "Goal-Backward Verification");
+  nextText = replaceOrInsertSection(nextText, "Plan-Check Delegation", synthesizedDelegationSectionLines("plan-check", metadata), "Research Delegation");
+  nextText = replaceOrInsertSection(nextText, "Goal-Audit Delegation", synthesizedDelegationSectionLines("goal-audit", metadata), "Plan-Check Delegation");
   const repairedMetadata = {
-    ...metadata,
+    ...runMetadataFromText(runPath, nextText),
     nextVerify: metadata.nextVerify
       ?? metadata.currentExecutionWaveVerify[0]
       ?? "review the current verify path before continuing",
@@ -3449,9 +4526,22 @@ Status:
 
   const refreshedMetadata = runMetadata(runPath);
   fs.writeFileSync(statePath, renderStateFile(relativeRunPath, refreshedMetadata), "utf8");
+  syncProjectFromRun(dir, refreshedMetadata, relativeRunPath);
 
   console.log(`Repaired run: ${relativeRunPath}`);
   console.log("Refreshed:");
+  console.log("- Project Alignment");
+  console.log("- Workflow State");
+  console.log("- Delegation State");
+  console.log("- Gray Area Register");
+  console.log("- Delivery Roadmap");
+  console.log("- Discuss Register");
+  console.log("- Decision Register");
+  console.log("- Dependency Register");
+  console.log("- Goal-Backward Verification");
+  console.log("- Research Delegation");
+  console.log("- Plan-Check Delegation");
+  console.log("- Goal-Audit Delegation");
   console.log("- Resume Digest");
   console.log("- Compact-Safe Summary");
   console.log("- Wave Handoff");
@@ -3459,6 +4549,8 @@ Status:
     console.log("- Next Wave Pack");
   }
   console.log("- Experience Snapshot");
+  console.log(`- ${relPathFrom(dir, projectRoadmapFileFor(dir))}`);
+  console.log(`- ${relPathFrom(dir, backlogFileFor(dir))}`);
   console.log(`- ${relPathFrom(dir, statePath)}`);
 }
 
@@ -3481,6 +4573,18 @@ function doctorRunCommand({ dir, run }) {
   const missingIgnoredWarningFeedback = ignoredWarningsMissingFeedback(metadata.ignoredWarnings);
   const flowChecks = [
     ["Requirement Baseline", text.includes("## Requirement Baseline")],
+    ["Project Alignment", text.includes("## Project Alignment")],
+    ["Workflow State", text.includes("## Workflow State")],
+    ["Delegation State", text.includes("## Delegation State")],
+    ["Gray Area Register", text.includes("## Gray Area Register")],
+    ["Delivery Roadmap", text.includes("## Delivery Roadmap")],
+    ["Discuss Register", text.includes("## Discuss Register")],
+    ["Decision Register", text.includes("## Decision Register")],
+    ["Dependency Register", text.includes("## Dependency Register")],
+    ["Goal-Backward Verification", text.includes("## Goal-Backward Verification")],
+    ["Research Delegation", text.includes("## Research Delegation")],
+    ["Plan-Check Delegation", text.includes("## Plan-Check Delegation")],
+    ["Goal-Audit Delegation", text.includes("## Goal-Audit Delegation")],
     ["Resume Digest", text.includes("## Resume Digest")],
     ["Compact-Safe Summary", text.includes("## Compact-Safe Summary")],
     ["Wave Handoff", text.includes("## Wave Handoff")],
@@ -3489,6 +4593,38 @@ function doctorRunCommand({ dir, run }) {
     ["Execution mode", metadata.executionMode !== null],
     ["Burn Risk", metadata.burnRisk !== null],
     ["Approval Strategy", metadata.approvalStrategy !== null],
+    [
+      "Workflow stage",
+      metadata.workflowStage !== null
+    ],
+    [
+      "Discuss register rows",
+      metadata.discussRegisterRows.length > 0
+    ],
+    [
+      "Decision register rows",
+      metadata.decisionRegisterRows.length > 0
+    ],
+    [
+      "Dependency register rows",
+      metadata.dependencyRegisterRows.length > 0
+    ],
+    [
+      "Delivery roadmap rows",
+      metadata.deliveryRoadmapPhases.length > 0
+    ],
+    [
+      "Goal-backward checks",
+      metadata.goalBackwardChecks.length > 0
+    ],
+    [
+      "Gray areas cleared before roadmap/plan/execute",
+      !gateRequiresClearedGrayAreas(metadata) || unresolvedGrayAreaRows(metadata).length === 0
+    ],
+    [
+      "Delegated checkpoints cleared before advancing past their gate",
+      requiredDelegationViolations(metadata).length === 0
+    ],
     [
       "Handoff sufficiency score",
       handoffScore?.passed ?? false
@@ -3546,6 +4682,20 @@ function doctorRunCommand({ dir, run }) {
       console.log(`- ${warning}`);
     }
   }
+  if (metadata.artifactType === "flow") {
+    const unresolved = unresolvedGrayAreaRows(metadata);
+    const delegationViolations = requiredDelegationViolations(metadata);
+    console.log(`Workflow stage: ${metadata.workflowStage ?? "unknown"}`);
+    console.log(`Current roadmap phase: ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? "unknown"}`);
+    console.log(`Unresolved gray areas: ${unresolved.length}`);
+    for (const row of unresolved) {
+      console.log(`- ${row.id || row.type || "gray-area"} [${row.status}] ${row.question}`);
+    }
+    console.log(`Delegation state: ${delegationSummary(metadata)}`);
+    for (const violation of delegationViolations) {
+      console.log(`- delegation gate violation: ${violation} result is not complete for current gate ${metadata.currentGate ?? "unknown"}`);
+    }
+  }
 
   const stateText = readTextIfExists(stateFileFor(dir));
   if (stateText) {
@@ -3573,6 +4723,111 @@ function doctorRunCommand({ dir, run }) {
   }
 
   console.log("Doctor-run passed.");
+}
+
+function doctorFlowChecks(metadata, text) {
+  const unresolvedGrayAreas = unresolvedGrayAreaRows(metadata);
+  const hasRoadmapRows = metadata.deliveryRoadmapPhases.length > 0;
+  const currentRoadmapPhase = metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase;
+  return [
+    ["Project Alignment", text.includes("## Project Alignment")],
+    ["Workflow State", text.includes("## Workflow State")],
+    ["Delegation State", text.includes("## Delegation State")],
+    ["Gray Area Register", text.includes("## Gray Area Register")],
+    ["Delivery Roadmap", text.includes("## Delivery Roadmap")],
+    ["Discuss Register", text.includes("## Discuss Register")],
+    ["Decision Register", text.includes("## Decision Register")],
+    ["Dependency Register", text.includes("## Dependency Register")],
+    ["Goal-Backward Verification", text.includes("## Goal-Backward Verification")],
+    ["Research Delegation", text.includes("## Research Delegation")],
+    ["Plan-Check Delegation", text.includes("## Plan-Check Delegation")],
+    ["Goal-Audit Delegation", text.includes("## Goal-Audit Delegation")],
+    ["Workflow stage", metadata.workflowStage !== null],
+    ["Workflow current roadmap phase", currentRoadmapPhase !== null],
+    ["Discuss register rows", metadata.discussRegisterRows.length > 0],
+    ["Decision register rows", metadata.decisionRegisterRows.length > 0],
+    ["Dependency register rows", metadata.dependencyRegisterRows.length > 0],
+    ["Delivery roadmap rows", hasRoadmapRows],
+    ["Goal-backward checks", metadata.goalBackwardChecks.length > 0],
+    ["Gray areas cleared before roadmap/plan/execute", !gateRequiresClearedGrayAreas(metadata) || unresolvedGrayAreas.length === 0],
+    ["Delegated checkpoints cleared before advancing past their gate", requiredDelegationViolations(metadata).length === 0]
+  ];
+}
+
+function doctorFlowCommand({ dir, run }) {
+  const runPath = resolveRunPath(dir, run);
+  const metadata = runMetadata(runPath);
+  const relativeRunPath = relPathFrom(dir, runPath);
+  if (metadata.artifactType !== "flow") {
+    throw new Error("doctor-flow only supports qc-flow run artifacts");
+  }
+
+  const checks = doctorFlowChecks(metadata, metadata.text);
+  let failed = false;
+  console.log(`Run: ${relativeRunPath}`);
+  for (const [name, passed] of checks) {
+    console.log(`${passed ? "PASS" : "FAIL"}: ${name}`);
+    if (!passed) {
+      failed = true;
+    }
+  }
+  const unresolved = unresolvedGrayAreaRows(metadata);
+  console.log(`Workflow stage: ${metadata.workflowStage ?? "unknown"}`);
+  console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
+  console.log(`Current roadmap phase: ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? "unknown"}`);
+  console.log(`Unresolved gray areas: ${unresolved.length}`);
+  console.log(`Delegation state: ${delegationSummary(metadata)}`);
+  for (const row of unresolved) {
+    console.log(`- ${row.id || row.type || "gray-area"} [${row.status}] ${row.question}`);
+  }
+  for (const violation of requiredDelegationViolations(metadata)) {
+    console.log(`- delegation gate violation: ${violation} result is not complete for current gate ${metadata.currentGate ?? "unknown"}`);
+  }
+  if (failed) {
+    throw new Error("doctor-flow found one or more issues");
+  }
+  console.log("Doctor-flow passed.");
+}
+
+function doctorProjectCommand({ dir }) {
+  const { roadmapPath, backlogPath, roadmapText, backlogText, roadmap, backlog } = loadProjectMetadata(dir);
+  const checks = [
+    ["Project roadmap file", roadmapText !== null],
+    ["Backlog file", backlogText !== null],
+    ["Project Roadmap section", roadmapText?.includes("## Project Roadmap") ?? false],
+    ["Milestone rows", (roadmap?.milestoneRows.length ?? 0) > 0],
+    ["Active Run Register rows", roadmap?.activeRunRows.length !== undefined],
+    ["Cross-Run Dependency Register", roadmapText?.includes("## Cross-Run Dependency Register") ?? false],
+    ["Parking Lot section", backlogText?.includes("## Parking Lot") ?? false],
+    ["Deferred Decisions section", backlogText?.includes("## Deferred Decisions") ?? false],
+    ["Future Seeds section", backlogText?.includes("## Future Seeds") ?? false]
+  ];
+  let failed = false;
+  console.log(`Project: ${dir}`);
+  console.log(`Project roadmap: ${relPathFrom(dir, roadmapPath)}`);
+  console.log(`Backlog: ${relPathFrom(dir, backlogPath)}`);
+  for (const [name, passed] of checks) {
+    console.log(`${passed ? "PASS" : "FAIL"}: ${name}`);
+    if (!passed) {
+      failed = true;
+    }
+  }
+  if (roadmap) {
+    console.log(`Current milestone: ${roadmap.currentMilestone ?? "unknown"}`);
+    console.log(`Current track: ${roadmap.currentTrack ?? "default"}`);
+    console.log(`Milestones: ${roadmap.milestoneRows.length}`);
+    console.log(`Active runs: ${roadmap.activeRunRows.length}`);
+    console.log(`Cross-run dependencies: ${roadmap.dependencyRows.length}`);
+  }
+  if (backlog) {
+    console.log(`Parking lot items: ${backlog.parkingRows.length}`);
+    console.log(`Deferred decisions: ${backlog.deferredDecisionRows.length}`);
+    console.log(`Future seeds: ${backlog.futureSeedRows.length}`);
+  }
+  if (failed) {
+    throw new Error("doctor-project found one or more issues");
+  }
+  console.log("Doctor-project passed.");
 }
 
 async function maybeShowUpdateNotice(command) {
@@ -3626,6 +4881,24 @@ async function main() {
       case "resume":
         resumeCommand(args);
         break;
+      case "project-status":
+        projectStatusCommand(args);
+        break;
+      case "sync-project":
+        syncProjectCommand(args);
+        break;
+      case "delegate-research":
+        assignDelegationCommand({ ...args, type: "research" });
+        break;
+      case "delegate-plan-check":
+        assignDelegationCommand({ ...args, type: "plan-check" });
+        break;
+      case "delegate-goal-audit":
+        assignDelegationCommand({ ...args, type: "goal-audit" });
+        break;
+      case "complete-delegation":
+        completeDelegationCommand(args);
+        break;
       case "lock-check":
         lockCheckCommand(args);
         break;
@@ -3653,6 +4926,12 @@ async function main() {
         break;
       case "doctor-run":
         doctorRunCommand(args);
+        break;
+      case "doctor-flow":
+        doctorFlowCommand(args);
+        break;
+      case "doctor-project":
+        doctorProjectCommand(args);
         break;
       default:
         throw new Error(`Unknown command: ${args.command}`);

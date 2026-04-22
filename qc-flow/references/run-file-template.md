@@ -46,6 +46,50 @@ Current gate:
 Execution mode:
 - manual | auto
 
+## Project Alignment
+- Project board: .quick-codex-flow/PROJECT-ROADMAP.md
+- Milestone: M1
+- Track: default
+- Run class: feature | fix | spike | maintenance
+- Parent run: none
+
+## Workflow State
+- Current stage: discuss | explore | research | roadmap | plan | plan-check | execute | phase-close | done
+- Current gate: clarify | research | roadmap | plan | plan-check | execute | phase-close | done
+- Next required transition: ...
+- Current roadmap phase: none | P1 | P2
+- Current roadmap phase status: not-started | planned | in-progress | blocked | verified
+- Why blocked or not advancing: ...
+
+## Delegation State
+- Research delegation: idle | required | assigned | completed | blocked
+- Plan-check delegation: idle | required | assigned | completed | blocked
+- Goal-audit delegation: idle | required | assigned | completed | blocked
+- Active delegated checkpoint: none | research | plan-check | goal-audit
+- Waiting on: none | research | plan-check | goal-audit
+- Main-agent rule: do not advance past the active delegated checkpoint until the matching result is merged into this run artifact
+
+## Gray Area Register
+| ID | Type | Question | Owner | Resolution path | Status |
+|---|---|---|---|---|---|
+| G1 | user-intent | ... | user + qc-flow | discuss | ask-user |
+| G2 | contract | ... | qc-flow | research | research |
+
+## Delivery Roadmap
+Roadmap goal:
+- ...
+
+Roadmap status:
+- not-started | in-progress | verified | done
+
+Current roadmap phase:
+- none | P1 | P2
+
+| Phase | Status | Purpose | Depends on | Verification checkpoint |
+|---|---|---|---|---|
+| P1 | pending | ... | none | ... |
+| P2 | pending | ... | P1 | ... |
+
 ## Resume Digest
 - Goal: ...
 - Execution mode: ...
@@ -162,6 +206,11 @@ Ignored warnings:
 ## Clarify State
 <paste the current clarify artifact here>
 
+## Discuss Register
+| ID | Theme | Question | Options considered | Recommended | User answer / decision | Status |
+|---|---|---|---|---|---|---|
+| Q1 | scope | ... | ... | ... | ... | open | resolved |
+
 ## Evidence Basis
 - repo evidence: ...
 - docs or external evidence: ...
@@ -170,8 +219,62 @@ Ignored warnings:
 ## Research Pack
 <paste the current research artifact here>
 
+## Research Delegation
+Assignment:
+- ...
+
+Delegate status:
+- idle | required | assigned | completed | blocked
+
+Worker prompt:
+- ...
+
+Expected artifact update:
+- Research Pack + Gray Area Register + Evidence Basis
+
+Result summary:
+- none | ...
+
+Result verdict:
+- none | pass | block | partial
+
+Recommended transition:
+- research -> roadmap
+
+## Decision Register
+| ID | Decision | Why now | Revisit when | Status |
+|---|---|---|---|---|
+| D1 | ... | ... | ... | active |
+
+## Dependency Register
+| ID | Scope | Depends on | Why | Risk if wrong | Status |
+|---|---|---|---|---|---|
+| DEP1 | ... | ... | ... | ... | clear | watch | blocked |
+
 ## Verified Plan
 <paste the verified plan here>
+
+## Plan-Check Delegation
+Assignment:
+- ...
+
+Delegate status:
+- idle | required | assigned | completed | blocked
+
+Worker prompt:
+- ...
+
+Expected artifact update:
+- Verified Plan + Workflow State + Resume Digest
+
+Result summary:
+- none | ...
+
+Result verdict:
+- none | pass | block | partial
+
+Recommended transition:
+- plan-check -> execute
 
 ## Current Execution Wave
 <paste the active execution wave artifact here>
@@ -181,6 +284,39 @@ Ignored warnings:
 
 ## Latest Feature Close
 <paste the most recent feature-close artifact here>
+
+## Goal-Backward Verification
+Goal this checkpoint proves:
+- ...
+
+Proof status:
+- pending | partial | verified
+
+| Check | Why it proves the goal | Evidence | Status |
+|---|---|---|---|
+| ... | ... | ... | pending | partial | verified |
+
+## Goal-Audit Delegation
+Assignment:
+- ...
+
+Delegate status:
+- idle | required | assigned | completed | blocked
+
+Worker prompt:
+- ...
+
+Expected artifact update:
+- Goal-Backward Verification + Latest Phase Close + Decision Register
+
+Result summary:
+- none | ...
+
+Result verdict:
+- none | pass | block | partial
+
+Recommended transition:
+- phase-close -> done
 
 ## Current Status
 Current phase: P1
@@ -213,8 +349,15 @@ Rules:
 - if a native Codex planner is available, keep a short mirror of the current gate and active phase or wave synced to this file, but do not rely on it for continuity
 - keep `.quick-codex-flow/STATE.md` aligned with the current active run
 - always update `Current gate` when moving between workflow stages
+- always update `Workflow State` when moving between discuss, explore, research, roadmap, plan, plan-check, execute, phase-close, and done
+- keep `Project Alignment` current when the active milestone, track, or parent run changes
 - keep `Requirement Baseline` stable unless the user changes requirements
-- treat `Verified Plan` as the roadmap for one feature or issue; phases and waves should stay aligned to it until feature close
+- keep `Gray Area Register` authoritative; unresolved `ask-user` or `research` rows block roadmap, plan, and execution
+- keep `Discuss Register` authoritative for non-trivial user-facing ambiguity resolution; use it to capture options, recommendations, and the final user choice
+- keep `Decision Register` durable for decisions that should survive a clear session without rereading the full narrative
+- keep `Dependency Register` durable for cross-phase and cross-run dependency state
+- treat `Delivery Roadmap` as the roadmap for one feature or issue; `Verified Plan` is phase-local planning that must remain aligned to that roadmap until feature close
+- keep project-level milestone and backlog governance in `.quick-codex-flow/PROJECT-ROADMAP.md` and `.quick-codex-flow/BACKLOG.md`
 - keep `Affected area / blast radius` current when planning or relocking changes what may be touched
 - update `Requirements Still Satisfied` after each completed phase
 - keep `Inputs` current when the plan depends on specific source artifacts or docs
@@ -227,6 +370,7 @@ Rules:
 - refresh `Compact-Safe Summary` after every completed wave and phase
 - refresh `Wave Handoff` after every completed wave and phase
 - refresh `Latest Feature Close` when the final roadmap checkpoint is reached
+- refresh `Goal-Backward Verification` at phase close, feature close, and any checkpoint where local completion could be mistaken for actual outcome closure
 - refresh `Next Wave Pack` when same-phase routing is explicit after a completed wave; remove it when the route is no longer explicit
 - refresh `Compact-Safe Summary` before any broad or long-running verify and before stopping for a pause
 - refresh `Wave Handoff` before any broad or long-running verify and before stopping for a pause

@@ -268,9 +268,7 @@ Status:
 });
 
 test("verify-wave allows shell-style verify commands only with explicit opt-in", () => {
-  const shellRun = baseRun
-    .replace("`printf first-check`", "`printf shell-allowed > shell-allowed.txt`")
-    .replace("`printf second-check`", "`printf second-safe`");
+  const shellRun = baseRun.replace("Verify:\n- `printf first-check`\n- `printf second-check`", "Verify:\n- `printf shell-allowed > shell-allowed.txt`\n- `printf second-safe`");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shell-allow-"));
   const flowDir = path.join(dir, ".quick-codex-flow");
   fs.mkdirSync(flowDir, { recursive: true });

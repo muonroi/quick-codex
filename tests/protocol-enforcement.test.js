@@ -53,7 +53,9 @@ test("enforceQcFlowProtocol bootstraps a task-specific clarify artifact for a fr
   assert.equal(result.created, true);
   assert.equal(result.effectiveGate, "clarify");
   assert.match(result.artifact.relativeRunPath, /^\.quick-codex-flow\/explore-storyflow-anti-bot-behavior-and-plan-the-hardening-work(?:-\d+)?\.md$/);
+  assert.match(result.artifact.delegationState.mainAgentRule, /Do not advance past the active delegated checkpoint/i);
   assert.match(result.prompt, /Do not implement code, do not edit product files/);
+  assert.match(result.prompt, /present at least 3 options for each gray area/);
   assert.match(result.prompt, /Current enforced gate: clarify/);
 
   const state = fs.readFileSync(path.join(dir, ".quick-codex-flow", "STATE.md"), "utf8");
@@ -133,6 +135,20 @@ Original goal:
 ## Research Pack
 Reviewed the relevant Storyflow anti-crawler files.
 
+## Delivery Roadmap
+Roadmap goal:
+- close the Storyflow anti-bot review safely
+
+Roadmap status:
+- in-progress
+
+Current roadmap phase:
+- P1
+
+| Phase | Status | Purpose | Depends on | Verification checkpoint |
+|---|---|---|---|---|
+| P1 | in-progress | validate the first implementation milestone | none | targeted Storyflow tests |
+
 ## Verified Plan
 Pending verified plan.
 
@@ -163,6 +179,86 @@ Execution state: in_progress
   assert.match(result.prompt, /Current enforced gate: plan-check/);
 });
 
+test("enforceQcFlowProtocol blocks planning and execution until a delivery roadmap exists", () => {
+  const dir = makeDir();
+  const runName = writeRun(dir, "storyflow-review.md", `# Run: storyflow-review
+
+## Requirement Baseline
+Original goal:
+- Review Storyflow anti-bot behavior
+
+## Resume Digest
+- Goal: Review Storyflow anti-bot behavior
+- Execution mode: auto
+- Current gate: execute
+- Current phase / wave: P1 / W1
+- Remaining blockers: none
+- Experience constraints: none
+- Active hook-derived invariants: none
+- Next verify: \`dotnet test\`
+- Recommended next command: \`Use $qc-flow and resume from .quick-codex-flow/storyflow-review.md\`
+
+## Verified Plan
+Phase table:
+- P1 / W1: implement trusted telemetry partitioning
+
+## Delegation State
+- Research delegation: completed
+- Plan-check delegation: completed
+- Goal-audit delegation: idle
+- Active delegated checkpoint: none
+- Waiting on: none
+- Main-agent rule: Do not advance past the active delegated checkpoint until the matching result is merged into this run artifact.
+
+## Plan-Check Delegation
+Assignment:
+- Audit the active Verified Plan and prove that execution may start safely.
+
+Delegate status:
+- completed
+
+Worker prompt:
+- Use $qc-flow and resume from .quick-codex-flow/storyflow-review.md. Work only as a blocking plan-check worker.
+
+Expected artifact update:
+- Verified Plan + Workflow State + Resume Digest
+
+Result summary:
+- plan-check completed
+
+Result verdict:
+- pass
+
+Recommended transition:
+- plan-check -> execute
+
+## Current Execution Wave
+Execute the trusted telemetry partitioning change and verify tests.
+
+## Current Status
+Current phase: P1
+Current wave: W1
+Execution state: in_progress
+
+## Recommended Next Command
+- \`Use $qc-flow and resume from .quick-codex-flow/storyflow-review.md\`
+
+## Blockers
+- none
+`);
+  writeState(dir, runName, "execute", "P1 / W1");
+
+  const result = enforceQcFlowProtocol({
+    dir,
+    task: "Implement finding 1 now",
+    executionMode: "auto"
+  });
+
+  assert.equal(result.effectiveGate, "roadmap");
+  assert.match(result.prompt, /Stay in qc-flow roadmap mode/);
+  assert.match(result.prompt, /Current enforced gate: roadmap/);
+});
+
 test("enforceQcFlowProtocol allows execute only after the run contains a verified plan", () => {
   const dir = makeDir();
   const runName = writeRun(dir, "storyflow-review.md", `# Run: storyflow-review
@@ -184,6 +280,20 @@ Original goal:
 
 ## Research Pack
 Reviewed the relevant Storyflow anti-crawler files.
+
+## Delivery Roadmap
+Roadmap goal:
+- close the Storyflow anti-bot review safely
+
+Roadmap status:
+- in-progress
+
+Current roadmap phase:
+- P1
+
+| Phase | Status | Purpose | Depends on | Verification checkpoint |
+|---|---|---|---|---|
+| P1 | in-progress | validate the first implementation milestone | none | targeted Storyflow tests |
 
 ## Verified Plan
 Phase table:
@@ -263,9 +373,54 @@ Affected area / blast radius:
 ## Research Pack
 Confirmed the Storyflow telemetry partitioning paths and the targeted tests.
 
+## Delivery Roadmap
+Roadmap goal:
+- implement Storyflow telemetry hardening safely
+
+Roadmap status:
+- in-progress
+
+Current roadmap phase:
+- P2
+
+| Phase | Status | Purpose | Depends on | Verification checkpoint |
+|---|---|---|---|---|
+| P1 | done | validate the upstream telemetry review | none | targeted read-through |
+| P2 | in-progress | implement the telemetry hardening milestone | P1 | Storyflow.Host.Tests targeted run |
+
 ## Verified Plan
 Phase table:
 - P2 / W1: implement the telemetry hardening change and verify targeted tests
+
+## Delegation State
+- Research delegation: completed
+- Plan-check delegation: completed
+- Goal-audit delegation: idle
+- Active delegated checkpoint: none
+- Waiting on: none
+- Main-agent rule: Do not advance past the active delegated checkpoint until the matching result is merged into this run artifact.
+
+## Plan-Check Delegation
+Assignment:
+- Audit the active Verified Plan and prove that execution may start safely.
+
+Delegate status:
+- completed
+
+Worker prompt:
+- Use $qc-flow and resume from .quick-codex-flow/storyflow-plan.md. Work only as a blocking plan-check worker.
+
+Expected artifact update:
+- Verified Plan + Workflow State + Resume Digest
+
+Result summary:
+- plan-check completed
+
+Result verdict:
+- pass
+
+Recommended transition:
+- plan-check -> execute
 
 ## Current Execution Wave
 Execute the trusted telemetry hardening change and verify targeted tests.

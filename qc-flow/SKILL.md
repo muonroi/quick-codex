@@ -20,6 +20,7 @@ This skill changes the execution model for Codex:
 - no dependence on multi-agent execution
 - sequential phase and wave execution
 - persistent artifacts as the source of truth
+- delegated checkpoints must be blocking and serialized when used
 
 ## Gray-area trigger
 
@@ -38,10 +39,23 @@ Routing rule when gray-area trigger is active:
 - do not use fast path while any gray-area trigger remains active
 - do not hand execution to `$qc-lock` while any gray-area trigger remains active
 - do not silently convert gray area into implementation assumptions
+- do not guess, infer, or "pick the most likely path" while any gray-area trigger remains active
+- if a gray area still requires user input after explore/research, present at least 3 concrete options for that specific gray area, mark one option as recommended, and allow the user to answer free-form instead
+- do not continue to roadmap, plan, or execution until every active gray area is either `resolved` or explicitly moved out of scope by the user
 
 ## Core principle
 
 Think first, surface impact, lock context, prove the missing pieces, then plan, then execute.
+
+When the workflow needs role separation, use blocking delegated checkpoints instead of background orchestration:
+- `research` worker: closes repo-side unknowns before roadmap or planning advances
+- `plan-check` worker: audits the verified plan before execution starts
+- `goal-audit` worker: audits whether a checkpoint proves the promised outcome before the run finishes
+
+Delegation rules:
+- main flow does not advance past the delegated checkpoint until the matching result is merged into the run artifact
+- delegated checkpoints are serialized, not parallel
+- delegated checkpoints return evidence, verdict, and recommended transition; they do not take authority over the run artifact
 
 The workflow must work without any external system.
 When Experience Engine hooks are available, treat them as risk signals that strengthen the current artifact or verification path.
@@ -174,6 +188,7 @@ Selection rules:
 - default to `manual`
 - use `auto` only when the user explicitly asks the agent to keep advancing without waiting for another prompt
 - if the user does not specify, stay in `manual`
+- wrapper-driven or hard-enforced flow mode may choose `auto` when the next safe gate transition is already explicit in the run artifact and no gray-area trigger remains active
 
 Mode behavior:
 - `manual`:
@@ -269,10 +284,11 @@ Follow this sequence:
 2. Affected-area and blast-radius discussion
 3. Context sufficiency check
 4. Research loop
-5. Plan
-6. Plan check
-7. Phase and wave decomposition
-8. Sequential execution handoff
+5. Delivery roadmap
+6. Plan
+7. Plan check
+8. Phase and wave decomposition
+9. Sequential execution handoff
 
 Do not skip a gate because the likely solution feels obvious.
 
@@ -307,11 +323,37 @@ The run file must preserve:
 - phase and wave table
 - current execution wave artifact
 - latest phase-close artifact
+- project alignment
+- discuss register
+- decision register
+- dependency register
+- goal-backward verification
 - current execution status
 - recommended next command
 - verification ledger
 
 Before resuming work, read the run file first.
+
+## Project-level governance
+
+When the work is part of a longer delivery track, keep project-level artifacts in:
+- `.quick-codex-flow/PROJECT-ROADMAP.md`
+- `.quick-codex-flow/BACKLOG.md`
+
+Use them for:
+- milestone-level roadmap across multiple runs
+- active run register
+- cross-run dependency state
+- parking-lot items
+- deferred decisions
+- future seeds
+
+Rules:
+- the run file stays the source of truth for one feature or issue
+- `PROJECT-ROADMAP.md` is the source of truth for milestone and cross-run governance
+- `BACKLOG.md` is the source of truth for parked work, deferred decisions, and future seeds
+- do not let long-lived decisions live only inside one run file when they affect later runs
+- when a run changes milestone state or reveals a cross-run dependency, sync the project-level artifacts before stopping
 
 ## Active run discovery
 
@@ -675,12 +717,36 @@ Research rules:
 
 If research reveals new ambiguity, return to clarify before planning.
 If that ambiguity is still repo-side rather than user-intent-side, keep the run in `research` and record the unresolved gray-area trigger explicitly.
+If a gray area remains unresolved after the current explore/research pass:
+- ask the user instead of guessing
+- emit at least 3 concrete options for that gray area
+- mark one option as recommended
+- allow the user to answer free-form instead of choosing one of the listed options
+- keep the run blocked from roadmap, plan, and execution until the gray area is cleared
 
 When Experience Engine warnings are relevant during research:
 - record them in the research artifact as evidence or risk input
 - map the `Why:` line into the current research rationale or downstream verification path
 
-## Gate 5: Plan
+## Gate 5: Delivery roadmap
+
+Before phase-local planning, create a delivery roadmap for the full task.
+
+The roadmap must:
+- identify the feature or deliverable being closed
+- define the meaningful roadmap phases
+- state dependencies between phases
+- name the verification checkpoint for each phase
+- identify the current roadmap phase
+- make the next required transition explicit
+
+Roadmap rules:
+- roadmap comes before the phase-local plan
+- roadmap is required for non-trivial flow runs
+- do not treat the verified plan as a substitute for the roadmap
+- do not start execution until both roadmap and verified plan exist
+
+## Gate 6: Plan
 
 Once context is sufficient, create a short plan for the whole task.
 
@@ -708,7 +774,7 @@ Planning-only completion rule:
 - do not treat a planning-only run as complete until it includes a concrete `Recommended next command`
 - if the plan is verified but no next command is provided, the run is still incomplete
 
-## Gate 6: Plan check
+## Gate 7: Plan check
 
 Check the plan before execution.
 
@@ -724,7 +790,7 @@ A plan passes only if:
 
 If the plan fails, revise it before execution.
 
-## Gate 7: Phase and wave decomposition
+## Gate 8: Phase and wave decomposition
 
 Decompose the verified plan into phases and waves.
 
@@ -743,7 +809,7 @@ Rules:
 - for coding tasks, every phase and wave must declare verification that covers build cleanliness and unit-test status for the touched scope
 - for non-code tasks, every phase and wave must declare the narrowest concrete verification that proves the artifact change safely
 
-## Gate 8: Sequential execution handoff
+## Gate 9: Sequential execution handoff
 
 After plan verification, switch to sequential execution.
 
@@ -1024,3 +1090,5 @@ Read these only when needed:
 - [references/execution-wave-template.md](references/execution-wave-template.md)
 - [references/phase-close-template.md](references/phase-close-template.md)
 - [references/run-file-template.md](references/run-file-template.md)
+- [references/project-roadmap-template.md](references/project-roadmap-template.md)
+- [references/backlog-template.md](references/backlog-template.md)

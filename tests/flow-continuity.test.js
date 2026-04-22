@@ -167,8 +167,8 @@ test("close-wave --phase-done writes Latest Phase Close and moves the gate to ph
   const updated = fs.readFileSync(project.runPath, "utf8");
   assert.match(updated, /## Latest Phase Close/);
   assert.match(updated, /Phase: P1/);
-  assert.match(updated, /Phase Relation:\n- relock-before-next-phase/);
-  assert.match(updated, /What must remain loaded:\n- Phase relation relock-before-next-phase, requirements still satisfied, and the next recommended command\./);
+  assert.match(updated, /Phase Relation:\n- dependent-next-phase/);
+  assert.match(updated, /What must remain loaded:\n- Phase relation dependent-next-phase, requirements still satisfied, and the next recommended command\./);
   assert.match(updated, /## Compact-Safe Summary[\s\S]*- Brain session-action verdict: relock-first/);
   assert.match(updated, /## Compact-Safe Summary[\s\S]*- Suggested session action: Do not run `\/compact` or `\/clear` yet; relock from \.quick-codex-flow\/sample\.md before continuing\./);
   assert.match(updated, /## Wave Handoff[\s\S]*- Trigger: phase close/);
@@ -233,8 +233,52 @@ test("init scaffolds a sample flow artifact that passes doctor-run", () => {
   assert.equal(initResult.status, 0, initResult.stderr || initResult.stdout);
   assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "sample-run.md")), true);
   assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "STATE.md")), true);
+  assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "PROJECT-ROADMAP.md")), true);
+  assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "BACKLOG.md")), true);
   const doctorResult = runCli(dir, "doctor-run", "--dir", dir, "--run", ".quick-codex-flow/sample-run.md");
   assert.equal(doctorResult.status, 0, doctorResult.stderr || doctorResult.stdout);
+  const doctorProjectResult = runCli(dir, "doctor-project", "--dir", dir);
+  assert.equal(doctorProjectResult.status, 0, doctorProjectResult.stderr || doctorProjectResult.stdout);
+});
+
+test("delegate-plan-check assigns a blocking delegated checkpoint and records the worker prompt", () => {
+  const startingRun = baseRun
+    .replace("- Plan-check delegation: completed", "- Plan-check delegation: idle")
+    .replace("## Plan-Check Delegation\nAssignment:\n- Audit the active Verified Plan and prove that execution may start safely.\n\nDelegate status:\n- completed", "## Plan-Check Delegation\nAssignment:\n- Audit the active Verified Plan and prove that execution may start safely.\n\nDelegate status:\n- idle");
+  const project = makeProject(startingRun);
+  const result = runCli(project.dir, "delegate-plan-check", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--focus", "audit the active plan", "--scope", "P1 only");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const updated = fs.readFileSync(project.runPath, "utf8");
+  assert.match(updated, /## Delegation State[\s\S]*- Plan-check delegation: assigned/);
+  assert.match(updated, /## Delegation State[\s\S]*- Active delegated checkpoint: plan-check/);
+  assert.match(updated, /## Workflow State[\s\S]*- Current stage: plan-check/);
+  assert.match(updated, /## Plan-Check Delegation[\s\S]*Assignment:\n- audit the active plan/);
+  assert.match(updated, /## Plan-Check Delegation[\s\S]*Worker prompt:\n- Use \$qc-flow and resume from \.quick-codex-flow\/sample\.md\./);
+});
+
+test("complete-delegation records a completed result so execute can pass flow doctor", () => {
+  const startingRun = baseRun
+    .replace("- Plan-check delegation: completed", "- Plan-check delegation: assigned")
+    .replace("## Plan-Check Delegation\nAssignment:\n- Audit the active Verified Plan and prove that execution may start safely.\n\nDelegate status:\n- completed", "## Plan-Check Delegation\nAssignment:\n- Audit the active Verified Plan and prove that execution may start safely.\n\nDelegate status:\n- assigned");
+  const project = makeProject(startingRun);
+  const completeResult = runCli(project.dir, "complete-delegation", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--type", "plan-check", "--status", "completed", "--summary", "plan audited", "--verdict", "pass", "--recommended-transition", "plan-check -> execute");
+  assert.equal(completeResult.status, 0, completeResult.stderr || completeResult.stdout);
+  const doctorResult = runCli(project.dir, "doctor-flow", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md");
+  assert.equal(doctorResult.status, 0, doctorResult.stderr || doctorResult.stdout);
+  const updated = fs.readFileSync(project.runPath, "utf8");
+  assert.match(updated, /## Delegation State[\s\S]*- Plan-check delegation: completed/);
+  assert.match(updated, /## Plan-Check Delegation[\s\S]*Result summary:\n- plan audited/);
+  assert.match(updated, /## Plan-Check Delegation[\s\S]*Result verdict:\n- pass/);
+});
+
+test("doctor-flow fails when execute advances without a completed blocking plan-check delegation", () => {
+  const startingRun = baseRun
+    .replace("- Plan-check delegation: completed", "- Plan-check delegation: idle")
+    .replace("## Plan-Check Delegation\nAssignment:\n- Audit the active Verified Plan and prove that execution may start safely.\n\nDelegate status:\n- completed", "## Plan-Check Delegation\nAssignment:\n- Audit the active Verified Plan and prove that execution may start safely.\n\nDelegate status:\n- idle");
+  const project = makeProject(startingRun);
+  const result = runCli(project.dir, "doctor-flow", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md");
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout + result.stderr, /Delegated checkpoints cleared before advancing past their gate/);
 });
 
 test("doctor-run without --run ignores a completed active lock and falls back to the active flow run", () => {
@@ -346,6 +390,11 @@ Execution state: in_progress
   assert.equal(repairResult.status, 0, repairResult.stderr || repairResult.stdout);
   const repaired = fs.readFileSync(path.join(flowDir, "stale-flow.md"), "utf8");
   assert.match(repaired, /## Resume Digest/);
+  assert.match(repaired, /## Project Alignment/);
+  assert.match(repaired, /## Discuss Register/);
+  assert.match(repaired, /## Decision Register/);
+  assert.match(repaired, /## Dependency Register/);
+  assert.match(repaired, /## Goal-Backward Verification/);
   assert.match(repaired, /## Compact-Safe Summary/);
   assert.match(repaired, /## Compact-Safe Summary[\s\S]*- Brain session-action verdict: allow-compact/);
   assert.match(repaired, /## Compact-Safe Summary[\s\S]*- Suggested session action: `\/compact` after reviewing this summary and resume payload\./);
@@ -355,6 +404,8 @@ Execution state: in_progress
   assert.match(repaired, /## Experience Snapshot/);
   const state = fs.readFileSync(path.join(flowDir, "STATE.md"), "utf8");
   assert.match(state, /Active run:\n- \.quick-codex-flow\/stale-flow\.md/);
+  assert.equal(fs.existsSync(path.join(flowDir, "PROJECT-ROADMAP.md")), true);
+  assert.equal(fs.existsSync(path.join(flowDir, "BACKLOG.md")), true);
   const doctorResult = runCli(dir, "doctor-run", "--dir", dir, "--run", ".quick-codex-flow/stale-flow.md");
   assert.equal(doctorResult.status, 0, doctorResult.stderr || doctorResult.stdout);
 });
@@ -401,6 +452,42 @@ test("doctor-run reports a full handoff sufficiency score for a complete flow ar
   const project = makeProject(baseRun);
   const result = runCli(project.dir, "doctor-run", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test("doctor-flow validates workflow state, gray-area discipline, and delivery roadmap for a flow artifact", () => {
+  const project = makeProject(baseRun);
+  const result = runCli(project.dir, "doctor-flow", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /PASS: Project Alignment/);
+  assert.match(result.stdout, /PASS: Workflow State/);
+  assert.match(result.stdout, /PASS: Gray Area Register/);
+  assert.match(result.stdout, /PASS: Delivery Roadmap/);
+});
+
+test("sync-project updates the project roadmap active run register from a flow artifact", () => {
+  const project = makeProject(baseRun);
+  const result = runCli(project.dir, "sync-project", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const roadmap = fs.readFileSync(path.join(project.dir, ".quick-codex-flow", "PROJECT-ROADMAP.md"), "utf8");
+  assert.match(roadmap, /\.quick-codex-flow\/sample\.md/);
+  assert.match(roadmap, /\| M1 \| active \| validate quick-codex command surface \| \.quick-codex-flow\/sample\.md \| none \| `printf fallback` \|/);
+});
+
+test("doctor-run fails when unresolved gray areas survive into execute", () => {
+  const project = makeProject(baseRun
+    .replace("| G1 | sample | no unresolved gray area remains | qc-flow | closed | resolved", "| G1 | contract | API contract is still ambiguous | qc-flow | research | ask-user"));
+  const result = runCli(project.dir, "doctor-run", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /FAIL: Gray areas cleared before roadmap\/plan\/execute/);
+});
+
+test("resume surfaces preferred auto-continue commands for flow artifacts", () => {
+  const project = makeProject(baseRun);
+  const result = runCli(project.dir, "resume", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /Auto-continue first:/);
+  assert.match(result.stdout, /quick-codex-wrap auto --dir/);
+  assert.match(result.stdout, /codex --qc-auto --qc-dir/);
 });
 
 test("close-wave persists brain-guided next-wave pack fields for later checkpoint-digest output", () => {
