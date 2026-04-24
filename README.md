@@ -38,6 +38,13 @@ Quick Codex gives Codex a small, local workflow layer:
 
 The goal is simple: keep non-trivial work readable, resumable, and harder to derail.
 
+Current skill contract:
+- `qc-flow` owns clarification, affected-area discussion, context sufficiency, targeted research, delivery-roadmap planning, phase-local verified plans, serialized delegated checkpoints, and phase/wave closeout
+- `qc-lock` owns narrow execution loops once the scope is understood, using a compact lock artifact with bridge fields for gate, phase, current step, verify path, blockers, verification evidence, and remaining requirements
+- unresolved gray areas stop roadmap, plan, plan-check, and execution until they are resolved or explicitly moved out of scope
+- project memory lives in `.quick-codex-flow/PROJECT-ROADMAP.md` and `.quick-codex-flow/BACKLOG.md`, while each active run stays anchored by `STATE.md`
+- Experience Engine is optional; when present, hook warnings and route/model verdicts are persisted into the relevant run fields instead of becoming chat-only advice
+
 Design rule:
 - `single is good`: Quick Codex must still produce a safe protocol baseline with no external advisor
 - `better together`: when Experience Engine is configured, the same checkpoint can also carry a guarded brain verdict that confirms or vetoes the baseline action
@@ -408,8 +415,9 @@ The common idea is that workflow state should live in files, not just in chat.
 Hard flow guarantees:
 - unresolved gray areas block `roadmap`, `plan`, `plan-check`, and `execute`
 - each unresolved gray area must produce at least 3 operator-facing options, with one recommended option and a free-text escape hatch
-- `Delivery Roadmap` is mandatory before execution; `Verified Plan` only covers the active roadmap phase
+- `Delivery Roadmap` is mandatory before phase-local planning or execution; `Verified Plan` only covers the active roadmap phase
 - `Discuss Register`, `Decision Register`, and `Dependency Register` keep the front-half and cross-phase reasoning durable
+- `Delegation State` makes delegated `research`, `plan-check`, and `goal-audit` checkpoints blocking until their results are merged back into the run artifact
 - `Goal-Backward Verification` keeps checkpoints honest about outcome closure instead of only local task completion
 - `.quick-codex-flow/PROJECT-ROADMAP.md` and `.quick-codex-flow/BACKLOG.md` give the workflow a project-level memory for milestones, parked work, deferred decisions, and future seeds
 - stale flow artifacts can be repaired forward so they gain `Workflow State`, `Gray Area Register`, and `Delivery Roadmap`
@@ -561,6 +569,8 @@ Use `qc-lock` when:
 - the scope needs to stay tight
 - no gray-area trigger remains active
 
+`qc-lock` is allowed to run standalone only after its preflight proves the execution target, affected area, protected boundaries, and verify path. When it follows a `qc-flow` handoff, keep the lock artifact compact and carry only the bridge fields needed for execution instead of copying broad flow summaries.
+
 ### Decision Table
 
 | Situation | Recommended skill | Why |
@@ -679,7 +689,7 @@ Recommended usage:
 
 Migration notes for older artifacts:
 - older `qc-flow` runs can be repaired forward with `repair-run`
-- repaired `qc-flow` runs now gain `Project Alignment`, `Workflow State`, `Discuss Register`, `Decision Register`, `Dependency Register`, `Gray Area Register`, `Delivery Roadmap`, `Goal-Backward Verification`, `Wave Handoff`, the compact keep/drop fields (`Phase relation`, `Carry-forward invariants`, `What to forget`, `What must remain loaded`), and optional brain verdict fields
+- repaired `qc-flow` runs now gain `Project Alignment`, `Workflow State`, `Discuss Register`, `Decision Register`, `Dependency Register`, `Gray Area Register`, `Delivery Roadmap`, `Delegation State`, `Goal-Backward Verification`, `Wave Handoff`, the compact keep/drop fields (`Phase relation`, `Carry-forward invariants`, `What to forget`, `What must remain loaded`), and optional brain verdict fields
 - same-phase auto-routing can also emit a narrow `Next Wave Pack` so the next wave does not need the whole execution-wave narrative to resume safely
 - canonical `qc-lock` artifacts should keep their bridge fields inside `## Locked Plan`
 - older `qc-lock` artifacts may still use legacy `## Current Locked Plan`, but they should gain bridge fields incrementally: `Current gate`, `Current verify`, `Recommended next command`, `Blockers`, `Verification evidence`, and `Requirements still satisfied`

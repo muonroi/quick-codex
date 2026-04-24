@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.4.9
+
+Highlights:
+- corrected package metadata for the `v0.4.9` publish path so GitHub Actions reads `quick-codex@0.4.9` instead of skipping the already-published `0.4.8`
+- refreshed the README to match the current skill contract: gray-area gates, project roadmap/backlog state, blocking delegated checkpoints, qc-lock bridge fields, and wrapper-first operation on top of native Codex
+
 ## 0.4.7
 
 Highlights:
