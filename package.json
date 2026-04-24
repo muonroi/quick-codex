@@ -1,6 +1,6 @@
 {
   "name": "quick-codex",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "description": "A lightweight workflow layer for Codex CLI with persistent run artifacts, resume-safe skills, and local recovery commands.",
   "author": "Muonroi",
   "keywords": [
@@ -27,8 +27,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "quick-codex": "bin/quick-codex.js",
-    "quick-codex-wrap": "bin/quick-codex-wrap.js"
+    "quick-codex": "bin/quick-codex.js"
   },
   "files": [
     "bin",
@@ -51,7 +50,6 @@
     "BENCHMARK-PROOF-COMPACTION-MODES.md",
     "QUICKSTART.md",
     "CHANGELOG.md",
-    "WRAPPER.md",
     "CONTRIBUTING.md",
     "EXAMPLES.md",
     "TASK-SELECTION.md",

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.4.10
+
+Highlights:
+- removed the abandoned thin wrapper and quick-codex-electron test/docs surface from the package documentation and test suite
+- cleaned npm package metadata so the published command surface is skill-first again
+
 ## 0.4.9
 
 Highlights:

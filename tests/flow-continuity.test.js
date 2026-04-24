@@ -481,15 +481,6 @@ test("doctor-run fails when unresolved gray areas survive into execute", () => {
   assert.match(result.stdout, /FAIL: Gray areas cleared before roadmap\/plan\/execute/);
 });
 
-test("resume surfaces preferred auto-continue commands for flow artifacts", () => {
-  const project = makeProject(baseRun);
-  const result = runCli(project.dir, "resume", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.match(result.stdout, /Auto-continue first:/);
-  assert.match(result.stdout, /quick-codex-wrap auto --dir/);
-  assert.match(result.stdout, /codex --qc-auto --qc-dir/);
-});
-
 test("close-wave persists brain-guided next-wave pack fields for later checkpoint-digest output", () => {
   const project = makeProject(routedWaveRun);
   const closeResult = runCliWithEnv(project.dir, {

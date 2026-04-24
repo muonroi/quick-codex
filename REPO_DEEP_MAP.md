@@ -23,15 +23,9 @@
 | `TASK-SELECTION.md` | When to use `qc-flow` vs `qc-lock` |
 | `CHANGELOG.md` | Release-level change log |
 | `CONTINUITY-CONTRACT.md` | Canonical continuity model for flow/lock artifacts |
-| `host-api.js` | Public core host boundary for external Electron-host consumers and repo-split-safe session-manager integrations |
-| `lib/electron-host.js` | Split-safe Electron host locator used by shim and tests to prefer an installed host package over the legacy in-repo app path |
+| `host-api.js` | Public core host boundary retained for compatibility with older integrations |
 | `package.json` | Package metadata, published files, CLI scripts |
 | `bin/quick-codex.js` | CLI entry point for install/status/resume/doctor/verify flows, flow-artifact repair, project-roadmap sync/status, delegated checkpoint commands (`delegate-research`, `delegate-plan-check`, `delegate-goal-audit`, `complete-delegation`), `doctor-flow`, `doctor-project`, and roadmap/gray-area/delegation enforcement checks |
-| `bin/quick-codex-wrap.js` | Wrapper frontdoor entry point for raw-task routing, interactive wrapper-shell chat, rich/plain renderer selection, and artifact-driven Codex session orchestration |
-| `bin/codex-qc-shim.js` | Codex-compatible shim that keeps bare `codex` on the real native Codex CLI, routes `codex --qc-*` and plain prompts into wrapper surfaces, and opens the Electron host via bare `codex --qc-ui` while keeping `--qc-bypass` for explicit raw passthrough |
-| `lib/wrapper/` | Wrapper parser, route classifier, active-run preference helper, orchestration helper, follow-loop helper, bootstrap helper, prompt compiler, protocol enforcement helpers for qc-flow passthrough gates and qc-lock passthrough execution locks, decision engine, permission/config resolution, Experience Engine route-task + route-model clients, exec/app-server Codex adapters, experimental native-session bridge plus observer/controller primitives and guarded slash injection, deprecated rich/plain wrapper renderers, and wrapper-local state helpers |
-| external `quick-codex-electron/` repo | Electron host now lives in a separate workspace repo; `quick-codex` resolves it through `lib/electron-host.js` using installed package, env override, or sibling workspace checkout |
-| `WRAPPER.md` | Wrapper-specific frontdoor scope, commands, and limitations |
 
 ---
 
@@ -68,7 +62,7 @@
 | Path | Purpose |
 |------|---------|
 | `templates/AGENTS.snippet.md` | Snippet added to repo `AGENTS.md` during project init |
-| `templates/.quick-codex-flow/` | Sample flow-state scaffolding, including `PROJECT-ROADMAP.md`, `BACKLOG.md`, and `wrapper-config.json` for repo-level wrapper defaults |
+| `templates/.quick-codex-flow/` | Sample flow-state scaffolding, including `PROJECT-ROADMAP.md`, `BACKLOG.md`, and wrapper config compatibility data |
 | `.quick-codex-flow/` | Local example or validation artifacts used during development |
 | `.quick-codex-lock/` | Local example lock artifacts used during development |
 
@@ -82,8 +76,6 @@
 | `scripts/lint-skills.sh` | Skill/package linting before publish |
 | `tests/flow-continuity.test.js` | Continuity coverage for flow artifacts, including workflow-state, gray-area, delivery-roadmap, repair, and auto-continue enforcement |
 | `tests/lock-continuity.test.js` | Continuity coverage for lock artifacts |
-| `tests/electron-host.test.js` | Electron host/session-manager contract coverage, including passthrough interception, qc-flow protocol enforcement, qc-lock trusted-handoff enforcement, slash forwarding, resize, and managed follow-loop semantics |
-| `tests/electron-host-e2e.test.js` | Deterministic Electron app-level passthrough e2e proof for renderer -> IPC -> session-manager -> native-session chaining and automatic continuity actions |
 | `tests/protocol-enforcement.test.js` | Unit coverage for passthrough protocol enforcement: qc-flow artifact bootstrap + front-half gate prompts and qc-lock standalone/trusted-handoff lock contracts |
 | `tests/test-helpers.js` | Shared test fixtures/helpers |
 

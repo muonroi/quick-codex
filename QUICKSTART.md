@@ -1,41 +1,6 @@
 # Quick Start
 
-Recommended current surface: install the shim and use Quick Codex as a thin wrapper in front of `codex`.
-
-```bash
-npx quick-codex install
-npx quick-codex install-codex-shim --force
-codex
-```
-
-Important:
-- installing `quick-codex` alone does not change the behavior of `codex`
-- `codex` only becomes wrapper-first after `install-codex-shim --force`
-- if `codex --qc-help` does not show the shim help text, your `PATH` is still resolving the real Codex binary first
-
-After the shim is installed:
-- bare `codex` stays on the real native Codex CLI
-- `codex --qc-ui` opens the Electron host for native Codex sessions behind the Quick Codex boundary
-- `codex "some task"` becomes a one-shot wrapper launch
-- legacy wrapper chat renderers still exist only as fallback/debug surfaces
-- `quick-codex-wrap chat --ui native --native-guarded-slash /status` is the first guarded native proof-path smoke
-- `quick-codex-wrap chat --ui native --native-guarded-slash /compact` is the first guarded continuity-command smoke
-- `quick-codex-wrap chat --ui native --native-guarded-slash /clear` is the next guarded continuity-command smoke
-- the native bridge keeps the stock Codex TUI and now exposes internal observer/controller primitives for future automation work, but it does not yet auto-inject slash commands
-- `codex --qc-bypass` is the escape hatch for raw Codex behavior
-
-Minimal rollout check:
-
-```bash
-codex --qc-help
-codex
-codex --qc-ui
-quick-codex-wrap chat --ui native --native-guarded-slash /status
-quick-codex-wrap chat --ui native --native-guarded-slash /compact
-quick-codex-wrap chat --ui native --native-guarded-slash /clear
-```
-
-The rest of this file covers the lower-level install and workflow details.
+Recommended current surface: install the skills and invoke `qc-flow` or `qc-lock` explicitly when a task needs durable workflow state.
 
 ## 1. Install the skills
 
@@ -198,14 +163,6 @@ Expected behavior:
 - `project-status` tells you the current milestone, active run register, cross-run dependencies, and backlog/deferred/future-seed counts
 - `resume` prints the exact next prompt to paste plus the active carry-forward cues and any experience constraints to keep in view
 - `status` and `resume` also surface any blocking delegated checkpoint plus its worker prompt, so the operator does not need to rediscover what the next role-specific audit should do
-- `resume` and `checkpoint-digest` also print wrapper-first auto-continue commands, so the operator does not need to copy a skill prompt when the next gate is already clear
-- preferred auto-continue paths are:
-
-```bash
-quick-codex-wrap auto --dir /path/to/project --run .quick-codex-flow/<run>.md --follow
-codex --qc-auto --qc-dir /path/to/project --qc-run-file .quick-codex-flow/<run>.md --qc-follow
-```
-
 - when native planner support exists in the current Codex build, `qc-flow` should keep that planner synced as a short progress mirror rather than a second source of continuity truth
 - at phase checkpoints, that planner mirror should also surface the action family the operator should expect next: `compact`, `clear`, or `relock`
 - `checkpoint-digest` prints a resume card plus deliberate-compaction cues before a pause or a broad verify, including `Baseline action`, optional `Brain verdict`, `Explicit suggested action`, and any same-phase `Next Wave Pack`
@@ -215,7 +172,7 @@ codex --qc-auto --qc-dir /path/to/project --qc-run-file .quick-codex-flow/<run>.
 - `doctor-project` validates the project-level governance files so milestone, backlog, deferred-decision, and future-seed state stay durable
 - `sync-project` syncs the active flow run into the project-level roadmap register
 - `delegate-research`, `delegate-plan-check`, and `delegate-goal-audit` assign serialized blocking checkpoints when you want role separation without background orchestration
-- `complete-delegation` records the delegated result so `doctor-flow`, wrapper `auto --follow`, and future resumes can advance safely
+- `complete-delegation` records the delegated result so `doctor-flow` and future resumes can advance safely
 - `lock-check` tells you whether a run is explicit enough to hand off to locked execution without guessing
 - `verify-wave` runs the active wave's `Verify:` bullets and appends one-line evidence to `Verification Ledger`
 - `regression-check` reruns the active regression/protected-boundary checks, preferring the current wave, then `Latest Phase Close -> Verification completed`, and only then `Next verify`
@@ -265,62 +222,7 @@ node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --to
 `single is good, better together`:
 - without Experience Engine, Quick Codex still produces the protocol baseline and a safe suggested action
 - with Experience Engine, the same checkpoint can also carry a guarded brain verdict that confirms or vetoes the baseline action
-- model choice and cost routing stay upstream in Experience Engine; `quick-codex-wrap` now consumes the returned `route-model` verdict, passes `-m <model>` to Codex, and posts `route-feedback` after executed turns
-- if Experience Engine also returns `reasoningEffort`, the wrapper passes it through as `-c model_reasoning_effort="..."` so the Codex reasoning menu does not need to be picked manually for routed launches
-- raw-task routing now handles Vietnamese prompts better in both the local fallback router and the shell-first wrapper path
-
-Wrapper-first local UX:
-
-```bash
-node bin/quick-codex.js install-codex-shim --force
-codex
-```
-
-- bare `codex` now opens the interactive wrapper shell
-- each entered line is routed through the thin wrapper before Codex sees it
-- `codex "fix the wrapper follow loop"` stays as the one-shot wrapper shortcut
-- qc-only overlays also default into the wrapper, so `codex --qc-full --qc-task "..."` now routes to wrapper auto mode without needing `--qc-auto`
-- if Experience Engine returns `needs_disambiguation`, the shell shows numbered route options plus a free-text path instead of guessing
-- `codex --qc-bypass` is the escape hatch for the raw Codex TUI
-- shell commands:
-  - `/task <text>`
-  - `/perm <safe|full|yolo|readonly>`
-  - `/route <auto|flow|lock|direct>`
-  - `/approval <manual|autonomous|untrusted>`
-  - `/mode <fast|safe|follow-safe>`
-  - `/follow <on|off>`
-  - `/turns <n>`
-  - `Tab` completes these slash commands and known profile values
-
-Project-local wrapper defaults live in:
-
-```json
-{
-  "version": 1,
-  "defaults": {
-    "permissionProfile": "safe",
-    "approvalMode": null,
-    "executionProfile": "follow-safe",
-    "chat": {
-      "follow": true,
-      "maxTurns": 5
-    }
-  }
-}
-```
-
-Manual route overrides:
-
-```bash
-codex --qc-force-flow --qc-task "research the repo and plan the work" --qc-json
-codex --qc-force-lock --qc-task "fix one narrow bug in README.md" --qc-json
-codex --qc-force-direct --qc-task "explain the wrapper architecture" --qc-json
-```
-
-Routing safety layers:
-- brain route when Experience Engine is alive
-- heuristic fallback when the brain is unavailable
-- explicit manual override when the operator wants to force the route
+- model choice and cost routing stay upstream in Experience Engine; Quick Codex records relevant hook warnings and advisor verdicts into the run artifact when they affect workflow safety
 
 If you are updating an older lock artifact:
 - add the compact bridge fields instead of copying flow sections

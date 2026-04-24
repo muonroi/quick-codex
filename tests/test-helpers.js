@@ -9,8 +9,6 @@ const __dirname = path.dirname(__filename);
 
 export const repoRoot = path.resolve(__dirname, "..");
 export const cliPath = path.join(repoRoot, "bin", "quick-codex.js");
-export const wrapCliPath = path.join(repoRoot, "bin", "quick-codex-wrap.js");
-export const codexShimPath = path.join(repoRoot, "bin", "codex-qc-shim.js");
 
 function mergedTestEnv(envExtra = {}) {
   const env = {
@@ -113,65 +111,6 @@ export function runCliWithEnv(projectDir, envExtra, ...args) {
     cwd: repoRoot,
     env: mergedTestEnv(envExtra),
     encoding: "utf8"
-  });
-}
-
-export function runWrapCli(projectDir, ...args) {
-  return spawnSync(process.execPath, [wrapCliPath, ...args], {
-    cwd: repoRoot,
-    env: mergedTestEnv(),
-    encoding: "utf8"
-  });
-}
-
-export function runWrapCliWithInput(projectDir, input, ...args) {
-  return spawnSync(process.execPath, [wrapCliPath, ...args], {
-    cwd: repoRoot,
-    env: mergedTestEnv(),
-    encoding: "utf8",
-    input
-  });
-}
-
-export function runWrapCliWithInputAndEnv(projectDir, envExtra, input, ...args) {
-  return spawnSync(process.execPath, [wrapCliPath, ...args], {
-    cwd: repoRoot,
-    env: mergedTestEnv(envExtra),
-    encoding: "utf8",
-    input
-  });
-}
-
-export function runWrapCliWithEnv(projectDir, envExtra, ...args) {
-  return spawnSync(process.execPath, [wrapCliPath, ...args], {
-    cwd: repoRoot,
-    env: mergedTestEnv(envExtra),
-    encoding: "utf8"
-  });
-}
-
-export function runCodexShim(projectDir, ...args) {
-  return spawnSync(process.execPath, [codexShimPath, ...args], {
-    cwd: repoRoot,
-    env: mergedTestEnv(),
-    encoding: "utf8"
-  });
-}
-
-export function runCodexShimWithEnv(projectDir, envExtra, ...args) {
-  return spawnSync(process.execPath, [codexShimPath, ...args], {
-    cwd: repoRoot,
-    env: mergedTestEnv(envExtra),
-    encoding: "utf8"
-  });
-}
-
-export function runCodexShimWithInputAndEnv(projectDir, envExtra, input, ...args) {
-  return spawnSync(process.execPath, [codexShimPath, ...args], {
-    cwd: repoRoot,
-    env: mergedTestEnv(envExtra),
-    encoding: "utf8",
-    input
   });
 }
 
