@@ -267,6 +267,8 @@ Active hook-derived invariants:
 - none
 Still relevant:
 - none
+Warning disposition:
+- none
 Ignored warnings:
 - none
 

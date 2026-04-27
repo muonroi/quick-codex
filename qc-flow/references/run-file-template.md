@@ -200,6 +200,8 @@ Active hook-derived invariants:
 - none
 Still relevant:
 - no hook-derived carry-forward is active
+Warning disposition:
+- none
 Ignored warnings:
 - none
 
@@ -361,7 +363,7 @@ Rules:
 - keep `Affected area / blast radius` current when planning or relocking changes what may be touched
 - update `Requirements Still Satisfied` after each completed phase
 - keep `Inputs` current when the plan depends on specific source artifacts or docs
-- keep `Experience Snapshot` current whenever a hook warning changes scope, verify, or invariant requirements
+- keep `Experience Snapshot` current whenever a hook warning changes scope, verify, invariant requirements, or warning disposition
 - when pasting artifacts into a section, do not repeat the section heading inside that section
 - keep `Recommended Next Command` concrete enough that the user can paste it directly
 - do not mark a planning-only run complete until `Recommended Next Command` is filled in

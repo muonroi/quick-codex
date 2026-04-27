@@ -480,7 +480,7 @@ Recommended routing for relevant hook warnings:
 - `Phase Close` -> carry-forward notes, open risks
 - `Phase Close` -> `Phase Relation`, sealed decisions, carry-forward invariants, expired context
 - `Phase Relation` -> compaction action: `same-phase` => `compact`, `dependent-next-phase` => downstream-only `compact`, `independent-next-phase` => `clear`, `relock-before-next-phase` => `relock`
-- `Experience Snapshot` -> active warnings, decision impact, carry-forward constraints, ignored warnings
+- `Experience Snapshot` -> active warnings, decision impact, carry-forward constraints, warning disposition, legacy ignored warnings
 
 Recommended routing for the hook `Why:` line:
 - `Risks`
@@ -488,7 +488,7 @@ Recommended routing for the hook `Why:` line:
 - `Verify`
 
 For resume-sensitive work, do not leave this as chat-only interpretation.
-Persist the warning impact into the run file:
+Persist active warning impact into the run file:
 - `Resume Digest` -> `Experience constraints`
 - `Compact-Safe Summary` -> `Experience constraints`
 - `Compact-Safe Summary` -> `Active hook-derived invariants`
@@ -508,7 +508,20 @@ When you want the engine to evaluate a concrete next tool action itself:
 node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
 ```
 
-If a warning is noisy and you intentionally ignore it, do not ignore it silently. Report it back so the engine can improve.
+Quick Codex and Experience Engine use a passive-first feedback split:
+- Quick Codex owns artifact disposition in `Experience Snapshot -> Warning disposition`
+- Experience Engine owns passive hook/server-side learning from PostToolUse/Stop-side evidence
+- `/api/feedback` is a manual correction channel for clear false or noisy signals, not the primary loop
+
+Use this fixed disposition format:
+
+```text
+- [id:xxxx col:name] status=<active|applied|irrelevant|unused|manual-feedback-sent> evidence=<artifact|tool|session|manual> reason=<short reason>
+```
+
+`capture-hooks` and `sync-experience` initialize captured warnings as `status=active`. Change the status in the run file when the warning is applied, irrelevant, stale/unused, or manually reported back to the engine. `doctor-run` validates disposition coverage and still accepts legacy `Ignored warnings` entries with `feedback: sent`, `feedback: recorded`, `feedback: posted`, or `feedback: false`.
+
+If a warning is clearly noisy and you intentionally send manual feedback, also mark the matching disposition as `status=manual-feedback-sent`.
 
 ## Known Limits
 

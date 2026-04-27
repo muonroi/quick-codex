@@ -402,6 +402,7 @@ Execution state: in_progress
   assert.match(repaired, /## Wave Handoff[\s\S]*- Brain session-action verdict: allow-compact/);
   assert.match(repaired, /## Wave Handoff[\s\S]*- Suggested session action: `\/compact` after reviewing this summary and resume payload\./);
   assert.match(repaired, /## Experience Snapshot/);
+  assert.match(repaired, /Warning disposition:\n- none/);
   const state = fs.readFileSync(path.join(flowDir, "STATE.md"), "utf8");
   assert.match(state, /Active run:\n- \.quick-codex-flow\/stale-flow\.md/);
   assert.equal(fs.existsSync(path.join(flowDir, "PROJECT-ROADMAP.md")), true);
@@ -452,6 +453,65 @@ test("doctor-run reports a full handoff sufficiency score for a complete flow ar
   const project = makeProject(baseRun);
   const result = runCli(project.dir, "doctor-run", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test("doctor-run passes with passive warning disposition evidence and no feedback marker", () => {
+  const passiveDispositionRun = baseRun
+    .replace("Active warnings:\n- none", "Active warnings:\n- ⚠️ [Experience] Check package boundaries [id:warn1 col:flow]")
+    .replace("Why:\n- none", "Why:\n- boundary warning was evaluated")
+    .replace("Warning disposition:\n- none", "Warning disposition:\n- [id:warn1 col:flow] status=irrelevant evidence=artifact reason=Fixture does not cross package boundaries")
+    .replace("Ignored warnings:\n- none", "Ignored warnings:\n- [id:warn1 col:flow] ignored without legacy feedback marker");
+  const project = makeProject(passiveDispositionRun);
+  const result = runCli(project.dir, "doctor-run", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /PASS: Warning disposition coverage/);
+});
+
+test("doctor-run accepts legacy ignored-warning feedback markers during migration", () => {
+  const legacyFeedbackRun = baseRun
+    .replace("Active warnings:\n- none", "Active warnings:\n- ⚠️ [Experience] Old feedback marker [id:legacy1 col:flow]")
+    .replace("Ignored warnings:\n- none", "Ignored warnings:\n- [id:legacy1 col:flow] feedback: sent");
+  const project = makeProject(legacyFeedbackRun);
+  const result = runCli(project.dir, "doctor-run", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /PASS: Warning disposition coverage/);
+});
+
+test("doctor-run fails when a warning disposition is explicitly unresolved", () => {
+  const unresolvedRun = baseRun.replace(
+    "Warning disposition:\n- none",
+    "Warning disposition:\n- [id:warn2 col:flow] status=active evidence=tool reason=Captured warning still needs a disposition"
+  );
+  const project = makeProject(unresolvedRun);
+  const result = runCli(project.dir, "doctor-run", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /FAIL: Warning disposition coverage/);
+  assert.match(result.stdout, /unresolved: \[id:warn2 col:flow\] status=active/);
+});
+
+test("doctor-run fails when warning disposition format is malformed", () => {
+  const malformedRun = baseRun.replace(
+    "Warning disposition:\n- none",
+    "Warning disposition:\n- [id:warn3 col:flow] status=maybe evidence=artifact reason=invalid status"
+  );
+  const project = makeProject(malformedRun);
+  const result = runCli(project.dir, "doctor-run", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /FAIL: Warning disposition coverage/);
+  assert.match(result.stdout, /malformed: \[id:warn3 col:flow\] status=maybe/);
+});
+
+test("capture-hooks writes active warning disposition for captured warnings", () => {
+  const project = makeProject(baseRun);
+  const hookPath = path.join(project.dir, "hooks.txt");
+  fs.writeFileSync(hookPath, `⚠️ [Experience - High Confidence] Prefer MCP tools [id:cap1 col:flow]
+Why: MCP preserves structured evidence for this repo
+`, "utf8");
+  const result = runCli(project.dir, "capture-hooks", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir, "--input", hookPath);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const updated = fs.readFileSync(project.runPath, "utf8");
+  assert.match(updated, /Active warnings:\n- ⚠️ \[Experience - High Confidence\] Prefer MCP tools \[id:cap1 col:flow\]/);
+  assert.match(updated, /Warning disposition:\n- \[id:cap1 col:flow\] status=active evidence=tool reason=Captured via quick-codex capture-hooks/);
 });
 
 test("doctor-flow validates workflow state, gray-area discipline, and delivery roadmap for a flow artifact", () => {

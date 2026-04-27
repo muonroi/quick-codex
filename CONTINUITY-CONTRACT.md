@@ -306,7 +306,7 @@ This map freezes where each continuity layer should land next.
 - consumed by CLI recovery when deciding whether an artifact is trustworthy enough to resume
 
 `C5 experience continuity`:
-- owned in `Experience Snapshot`
+- owned in `Experience Snapshot`, including passive-first `Warning disposition`
 - bridged in `qc-lock` only when a live lock is constrained by active warnings or invariants
 - taught briefly in scaffold guidance so users know where experience carry-forward belongs
 
@@ -324,6 +324,7 @@ This map freezes where each continuity layer should land next.
 For `qc-flow` runs, it should require:
 - the full `qc-flow` required subset
 - continuity carry-forward sections such as `Resume Digest`, `Compact-Safe Summary`, and `Experience Snapshot`
+- warning disposition coverage for hook-derived warnings, while accepting legacy ignored-warning feedback markers during migration
 - `Wave Handoff` and `Phase Relation` when the run has crossed a verified wave, phase close, broad verify checkpoint, or deliberate pause
 - proof that `Recommended Next Command` and `Verification Ledger` are still present and coherent
 

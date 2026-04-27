@@ -1916,6 +1916,126 @@ function ignoredWarningsMissingFeedback(values) {
   return meaningfulList(values).filter((value) => !/\[id:[^\]]+\]/.test(value) || !/feedback:\s*(sent|recorded|posted|false)/i.test(value));
 }
 
+function warningKeyFromText(value) {
+  const match = value.match(/\[id:([^\s\]]+)\s+col:([^\]]+)\]/);
+  return match ? `${match[2]}:${match[1]}` : null;
+}
+
+function parseWarningDispositionLine(value) {
+  const match = value.match(/^\[id:([^\s\]]+)\s+col:([^\]]+)\]\s+status=([a-z/-]+)\s+evidence=(artifact|tool|session|manual)\s+reason=(.+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const status = match[3].toLowerCase();
+  const allowedStatuses = new Set(["active", "applied", "irrelevant", "unused", "stale", "unused/stale", "manual-feedback-sent"]);
+  if (!allowedStatuses.has(status) || match[5].trim().length === 0) {
+    return null;
+  }
+
+  return {
+    key: `${match[2]}:${match[1]}`,
+    pointId: match[1],
+    collection: match[2],
+    status,
+    evidence: match[4].toLowerCase(),
+    reason: match[5].trim(),
+    raw: value
+  };
+}
+
+function warningDispositionCoverage(metadata) {
+  const dispositionValues = meaningfulList(metadata.warningDisposition ?? []);
+  const entries = [];
+  const malformed = [];
+  const unresolved = [];
+  const dispositionKeys = new Set();
+  const resolvedDispositionKeys = new Set();
+
+  for (const value of dispositionValues) {
+    const parsed = parseWarningDispositionLine(value);
+    if (!parsed) {
+      malformed.push(value);
+      continue;
+    }
+    entries.push(parsed);
+    dispositionKeys.add(parsed.key);
+    if (parsed.status === "active") {
+      unresolved.push(value);
+    } else {
+      resolvedDispositionKeys.add(parsed.key);
+    }
+  }
+
+  const legacyFeedbackKeys = new Set(
+    meaningfulList(metadata.ignoredWarnings ?? [])
+      .filter((value) => /\[id:[^\]]+\]/.test(value) && /feedback:\s*(sent|recorded|posted|false)/i.test(value))
+      .map(warningKeyFromText)
+      .filter(Boolean)
+  );
+  const missing = [];
+
+  for (const warning of meaningfulList(metadata.experienceActiveWarnings ?? [])) {
+    const key = warningKeyFromText(warning);
+    if (key && !dispositionKeys.has(key) && !legacyFeedbackKeys.has(key)) {
+      missing.push(warning);
+    }
+  }
+
+  const legacyProblems = ignoredWarningsMissingFeedback(metadata.ignoredWarnings ?? [])
+    .filter((warning) => {
+      const key = warningKeyFromText(warning);
+      return !key || !resolvedDispositionKeys.has(key);
+    });
+
+  return {
+    passed: malformed.length === 0 && unresolved.length === 0 && missing.length === 0 && legacyProblems.length === 0,
+    entries,
+    hasAnyDisposition: entries.length > 0,
+    hasActiveDisposition: unresolved.length > 0,
+    malformed,
+    unresolved,
+    missing,
+    legacyProblems
+  };
+}
+
+function shouldCarryExperienceForward(metadata) {
+  const coverage = warningDispositionCoverage(metadata);
+  if (coverage.hasAnyDisposition) {
+    return coverage.hasActiveDisposition;
+  }
+  const trackedActiveWarningKeys = meaningfulList(metadata.experienceActiveWarnings ?? [])
+    .map(warningKeyFromText)
+    .filter(Boolean);
+  if (trackedActiveWarningKeys.length > 0 && coverage.passed) {
+    return false;
+  }
+  return meaningfulList([
+    ...(metadata.experienceActiveWarnings ?? []),
+    ...(metadata.experienceDecisionImpact ?? []),
+    ...(metadata.experienceConstraints ?? []),
+    ...(metadata.experienceHookInvariants ?? []),
+    ...(metadata.experienceStillRelevant ?? [])
+  ]).length > 0;
+}
+
+function activeExperienceValues(metadata, values) {
+  return shouldCarryExperienceForward(metadata) ? values : [];
+}
+
+function activeWarningValues(metadata) {
+  const coverage = warningDispositionCoverage(metadata);
+  if (!coverage.hasAnyDisposition) {
+    return metadata.experienceActiveWarnings;
+  }
+  const activeKeys = new Set(coverage.entries.filter((entry) => entry.status === "active").map((entry) => entry.key));
+  return metadata.experienceActiveWarnings.filter((warning) => {
+    const key = warningKeyFromText(warning);
+    return key ? activeKeys.has(key) : activeKeys.size > 0;
+  });
+}
+
 function uniqueValues(values) {
   return [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
 }
@@ -1934,6 +2054,8 @@ function experienceSnapshotLines(snapshot) {
     ...(snapshot.experienceHookInvariants.length > 0 ? snapshot.experienceHookInvariants.map((value) => `- ${value}`) : ["- none"]),
     "Still relevant:",
     ...(snapshot.experienceStillRelevant.length > 0 ? snapshot.experienceStillRelevant.map((value) => `- ${value}`) : ["- no hook-derived carry-forward is active"]),
+    "Warning disposition:",
+    ...((snapshot.warningDisposition ?? []).length > 0 ? snapshot.warningDisposition.map((value) => `- ${value}`) : ["- none"]),
     "Ignored warnings:",
     ...(snapshot.ignoredWarnings.length > 0 ? snapshot.ignoredWarnings.map((value) => `- ${value}`) : ["- none"])
   ];
@@ -2049,31 +2171,45 @@ function parseHookWarnings(text) {
 function mergeExperienceSnapshot(metadata, parsedWarnings, sourceLabel = "quick-codex capture-hooks") {
   const timestamp = new Date().toISOString();
   const warningHeadlines = uniqueValues([
-    ...metadata.experienceActiveWarnings,
+    ...meaningfulList(metadata.experienceActiveWarnings),
     ...parsedWarnings.map((warning) => warning.headline)
   ]);
   const whyLines = uniqueValues([
-    ...metadata.experienceWhy,
+    ...meaningfulList(metadata.experienceWhy),
     ...parsedWarnings.map((warning) => warning.why).filter(Boolean)
   ]);
   const constraints = uniqueValues([
-    ...metadata.experienceConstraints,
+    ...meaningfulList(metadata.experienceConstraints),
     ...parsedWarnings.map((warning) => warning.why ? `Respect hook rationale: ${warning.why}` : `Review captured warning before the next broad verify: ${warning.headline}`)
   ]);
   const invariants = uniqueValues([
-    ...metadata.experienceHookInvariants,
+    ...meaningfulList(metadata.experienceHookInvariants),
     ...parsedWarnings.map((warning) => warning.why
       ? `Do not continue as if this warning did not happen: ${warning.why}`
       : `Keep this warning active until the run records it as resolved: ${warning.headline}`)
   ]);
   const decisionImpact = uniqueValues([
-    ...metadata.experienceDecisionImpact,
+    ...meaningfulList(metadata.experienceDecisionImpact),
     ...parsedWarnings.map((warning) => `Captured via ${sourceLabel} on ${timestamp}: ${warning.headline}`)
   ]);
   const stillRelevant = uniqueValues([
-    ...metadata.experienceStillRelevant,
+    ...meaningfulList(metadata.experienceStillRelevant),
     ...parsedWarnings.map((warning) => `yes - captured on ${timestamp}: ${warning.headline}`)
   ]);
+  const existingDisposition = meaningfulList(metadata.warningDisposition ?? []);
+  const dispositionKeys = new Set(existingDisposition.map(warningKeyFromText).filter(Boolean));
+  const warningDisposition = [...existingDisposition];
+  for (const warning of parsedWarnings) {
+    if (!warning.pointId || !warning.collection) {
+      continue;
+    }
+    const key = `${warning.collection}:${warning.pointId}`;
+    if (dispositionKeys.has(key)) {
+      continue;
+    }
+    dispositionKeys.add(key);
+    warningDisposition.push(`[id:${warning.pointId} col:${warning.collection}] status=active evidence=tool reason=Captured via ${sourceLabel} on ${timestamp}: ${warning.headline}`);
+  }
 
   return {
     experienceActiveWarnings: warningHeadlines,
@@ -2082,6 +2218,7 @@ function mergeExperienceSnapshot(metadata, parsedWarnings, sourceLabel = "quick-
     experienceConstraints: constraints,
     experienceHookInvariants: invariants,
     experienceStillRelevant: stillRelevant,
+    warningDisposition,
     ignoredWarnings: metadata.ignoredWarnings
   };
 }
@@ -2348,9 +2485,9 @@ function buildSessionActionBrainPrompt({ metadata, relativeRunPath, nextWavePack
   const nextTarget = nextWavePack
     ? `${nextWavePack.target.phase} / ${nextWavePack.target.wave}`
     : (metadata.waveHandoffNextTarget ?? `resume ${phaseWave.phase} / ${phaseWave.wave}`);
-  const activeWarnings = summarizeList(metadata.experienceActiveWarnings, "none");
-  const constraints = summarizeList(metadata.experienceConstraints, "none");
-  const invariants = summarizeList(metadata.experienceHookInvariants, "none");
+  const activeWarnings = summarizeList(activeWarningValues(metadata), "none");
+  const constraints = summarizeList(activeExperienceValues(metadata, metadata.experienceConstraints), "none");
+  const invariants = summarizeList(activeExperienceValues(metadata, metadata.experienceHookInvariants), "none");
   const evidenceBasis = summarizeList(metadata.evidenceBasis, "not recorded");
   return [
     "You are the Experience Engine brain deciding whether Quick Codex should recommend `/compact`, `/clear`, or neither.",
@@ -2663,8 +2800,8 @@ function statusCommand({ dir, run }) {
   console.log(`Burn risk: ${metadata.burnRisk ?? "low"}`);
   console.log(`Session risk: ${metadata.sessionRisk ?? "unknown"}`);
   console.log(`Context risk: ${metadata.contextRisk ?? "unknown"}`);
-  console.log(`Experience constraints: ${summarizeList(metadata.experienceConstraints)}`);
-  console.log(`Hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`);
+  console.log(`Experience constraints: ${summarizeList(activeExperienceValues(metadata, metadata.experienceConstraints))}`);
+  console.log(`Hook-derived invariants: ${summarizeList(activeExperienceValues(metadata, metadata.experienceHookInvariants))}`);
   console.log(`Next verify: ${metadata.nextVerify ?? "not recorded"}`);
   const activeDelegatedCheckpoint = activeDelegation(metadata);
   if (activeDelegatedCheckpoint) {
@@ -3889,9 +4026,9 @@ function resumeCommand({ dir, run }) {
   console.log(`- Explicit suggested action: ${carryForward.suggestedSessionAction}`);
   console.log(`- What to forget: ${carryForward.whatToForget}`);
   console.log(`- What must remain loaded: ${carryForward.whatMustRemainLoaded}`);
-  console.log(`- Experience constraints: ${summarizeList(metadata.experienceConstraints)}`);
-  console.log(`- Hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`);
-  console.log(`- Warnings to respect on next step: ${summarizeList(metadata.experienceActiveWarnings)}`);
+  console.log(`- Experience constraints: ${summarizeList(activeExperienceValues(metadata, metadata.experienceConstraints))}`);
+  console.log(`- Hook-derived invariants: ${summarizeList(activeExperienceValues(metadata, metadata.experienceHookInvariants))}`);
+  console.log(`- Warnings to respect on next step: ${summarizeList(activeWarningValues(metadata))}`);
   const pendingDelegation = activeDelegation(metadata);
   if (pendingDelegation) {
     console.log(`- Delegated checkpoint: ${pendingDelegation.type} (${pendingDelegation.status})`);
@@ -3944,8 +4081,8 @@ function checkpointDigestLines(metadata, relativeRunPath, { preferExisting = tru
     `Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`,
     `Requirements still satisfied: ${requirements}`,
     `Remaining blockers: ${metadata.blockers ?? "none"}`,
-    `Experience constraints: ${summarizeList(metadata.experienceConstraints)}`,
-    `Active hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`,
+    `Experience constraints: ${summarizeList(activeExperienceValues(metadata, metadata.experienceConstraints))}`,
+    `Active hook-derived invariants: ${summarizeList(activeExperienceValues(metadata, metadata.experienceHookInvariants))}`,
     `Phase relation: ${carryForward.phaseRelation}`,
     `Compaction action: ${carryForward.compactionAction}`,
     `Brain session-action verdict: ${carryForward.brainVerdict.verdict}`,
@@ -3972,8 +4109,8 @@ function resumeDigestLines(metadata, relativeRunPath) {
     `- Current gate: ${metadata.currentGate ?? "unknown"}`,
     `- Current phase / wave: ${phaseWave.phase} / ${phaseWave.wave}`,
     `- Remaining blockers: ${metadata.blockers ?? "none"}`,
-    `- Experience constraints: ${summarizeList(metadata.experienceConstraints)}`,
-    `- Active hook-derived invariants: ${summarizeList(metadata.experienceHookInvariants)}`,
+    `- Experience constraints: ${summarizeList(activeExperienceValues(metadata, metadata.experienceConstraints))}`,
+    `- Active hook-derived invariants: ${summarizeList(activeExperienceValues(metadata, metadata.experienceHookInvariants))}`,
     `- Next verify: ${metadata.nextVerify ?? "not recorded"}`,
     `- Recommended next command: ${recommendedNextCommand}`
   ];
@@ -4059,6 +4196,7 @@ function defaultExperienceSnapshotLines() {
     experienceConstraints: [],
     experienceHookInvariants: [],
     experienceStillRelevant: [],
+    warningDisposition: [],
     ignoredWarnings: []
   });
 }
@@ -4379,6 +4517,7 @@ function runMetadataStruct(runPath, text) {
     experienceWhy: findSectionLabelBullets(text, "Experience Snapshot", "Why"),
     experienceDecisionImpact: findSectionLabelBullets(text, "Experience Snapshot", "Decision impact"),
     experienceStillRelevant: findSectionLabelBullets(text, "Experience Snapshot", "Still relevant"),
+    warningDisposition: findSectionLabelBullets(text, "Experience Snapshot", "Warning disposition"),
     ignoredWarnings: findSectionLabelBullets(text, "Experience Snapshot", "Ignored warnings"),
     digestExperienceConstraints: findResumeDigestField(text, "Experience constraints"),
     digestHookInvariants: findResumeDigestField(text, "Active hook-derived invariants"),
@@ -4563,14 +4702,8 @@ function doctorRunCommand({ dir, run }) {
   const handoffScore = metadata.artifactType === "flow"
     ? handoffSufficiency(metadata, relativeRunPath)
     : null;
-  const requiresExperienceCarryForward = meaningfulList([
-    ...metadata.experienceActiveWarnings,
-    ...metadata.experienceDecisionImpact,
-    ...metadata.experienceConstraints,
-    ...metadata.experienceHookInvariants,
-    ...metadata.experienceStillRelevant
-  ]).length > 0;
-  const missingIgnoredWarningFeedback = ignoredWarningsMissingFeedback(metadata.ignoredWarnings);
+  const warningCoverage = warningDispositionCoverage(metadata);
+  const requiresExperienceCarryForward = shouldCarryExperienceForward(metadata);
   const flowChecks = [
     ["Requirement Baseline", text.includes("## Requirement Baseline")],
     ["Project Alignment", text.includes("## Project Alignment")],
@@ -4638,7 +4771,7 @@ function doctorRunCommand({ dir, run }) {
         meaningfulList([metadata.summaryHookInvariants ?? ""]).length > 0
       )
     ],
-    ["Ignored warning feedback ids", missingIgnoredWarningFeedback.length === 0],
+    ["Warning disposition coverage", warningCoverage.passed],
     ["Recommended Next Command", metadata.recommendedCommands.length > 0],
     ["Verification Ledger", text.includes("## Verification Ledger")]
   ];
@@ -4652,7 +4785,7 @@ function doctorRunCommand({ dir, run }) {
     ["Blockers", hasSection(text, "Blockers") || findSectionLabelBulletsAny(text, lockHeadings, "Blockers").length > 0],
     ["Verification evidence", metadata.verificationEvidence.length > 0],
     ["Requirements still satisfied", metadata.requirementsStillSatisfied.length > 0],
-    ["Ignored warning feedback ids", missingIgnoredWarningFeedback.length === 0]
+    ["Warning disposition coverage", warningCoverage.passed]
   ];
   const checks = metadata.artifactType === "lock" ? lockChecks : flowChecks;
 
@@ -4676,10 +4809,19 @@ function doctorRunCommand({ dir, run }) {
       }
     }
   }
-  if (missingIgnoredWarningFeedback.length > 0) {
-    console.log("Missing ignored-warning feedback markers:");
-    for (const warning of missingIgnoredWarningFeedback) {
-      console.log(`- ${warning}`);
+  if (!warningCoverage.passed) {
+    console.log("Warning disposition issues:");
+    for (const warning of warningCoverage.malformed) {
+      console.log(`- malformed: ${warning}`);
+    }
+    for (const warning of warningCoverage.unresolved) {
+      console.log(`- unresolved: ${warning}`);
+    }
+    for (const warning of warningCoverage.missing) {
+      console.log(`- missing disposition: ${warning}`);
+    }
+    for (const warning of warningCoverage.legacyProblems) {
+      console.log(`- legacy ignored warning lacks feedback or disposition: ${warning}`);
     }
   }
   if (metadata.artifactType === "flow") {

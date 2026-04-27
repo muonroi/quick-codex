@@ -981,6 +981,7 @@ This skill must not depend on `experience-engine`, but it should work well with 
 When hooks surface a relevant warning:
 - fold the warning into the current clarify, research, plan, or execution artifact
 - record the same warning in `Experience Snapshot` when it changes scope, verify, or invariant requirements across turns
+- record warning disposition in the run artifact first; do not rely on an agent calling Experience Engine feedback as the primary learning loop
 - route the warning into the right artifact section:
   - `Clarify State` -> scope, constraints, or open questions
   - `Research Pack` -> evidence, answered questions, or unresolved risks
@@ -992,7 +993,22 @@ When hooks surface a relevant warning:
   - `Verify`
 - do not silently ignore repeated noisy warnings
 
-If you deliberately ignore a repeated noisy suggestion, report it with:
+Use `Experience Snapshot -> Warning disposition` with one line per warning when a hook warning changes state:
+
+```text
+- [id:xxxx col:name] status=<active|applied|irrelevant|unused|manual-feedback-sent> evidence=<artifact|tool|session|manual> reason=<short reason>
+```
+
+Disposition meanings:
+- `active` -> still affects scope, verify, or invariant requirements and must be carried forward
+- `applied` -> incorporated into the artifact or implementation
+- `irrelevant` -> checked against the current task and found not applicable
+- `unused` -> not used because the warning is stale or lower priority than current evidence
+- `manual-feedback-sent` -> a user or agent actively corrected Experience Engine outside the passive artifact loop
+
+`Ignored warnings` remains a legacy/backcompat field. Do not make it the source of truth for passing `doctor-run`; use `Warning disposition` first.
+
+Only send active feedback to Experience Engine when the agent or user is deliberately correcting a clear false or noisy signal:
 
 ```bash
 curl -s -X POST http://localhost:8082/api/feedback \
@@ -1005,6 +1021,8 @@ Replace `xxxx` and `col-name` from the hook suffix:
 ```text
 [id:xxxx col:name]
 ```
+
+When manual feedback is sent, also update the matching disposition to `status=manual-feedback-sent`.
 
 ## Output contract
 

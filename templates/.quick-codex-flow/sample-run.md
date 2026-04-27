@@ -164,6 +164,8 @@ Active hook-derived invariants:
 - a relevant warning stays active until the run records that it is no longer relevant
 Still relevant:
 - yes, this sample demonstrates experience-preserving resume
+Warning disposition:
+- [id:demo1 col:experience-demo] status=applied evidence=artifact reason=Sample carries the hook-derived guardrail through Resume Digest and Wave Handoff
 Ignored warnings:
 - none
 ## Clarify State
