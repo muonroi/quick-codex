@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.4.11
+
+Highlights:
+- redesigned README with product-first structure: problem/solution framing, six-layer continuity table, architecture diagram, OpenAI native integration section, and GIF demo placeholders
+- condensed CLI reference into grouped sections and moved to end of document
+- collapsed troubleshooting into collapsible sections to reduce noise above the fold
+
 ## 0.4.10
 
 Highlights:
