@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" font-family="'Cascadia Code','Fira Mono','Consolas',monospace" font-size="13">
+  <rect width="800" height="420" rx="10" ry="10" fill="#1e1e2e"/>
+  <rect width="800" height="36" rx="10" ry="10" fill="#313244"/>
+  <rect y="18" width="800" height="18" fill="#313244"/>
+  <circle cx="20" cy="18" r="7" fill="#f38ba8"/>
+  <circle cx="44" cy="18" r="7" fill="#f9e2af"/>
+  <circle cx="68" cy="18" r="7" fill="#a6e3a1"/>
+  <text x="400" y="23" text-anchor="middle" fill="#cdd6f4" font-size="12">Codex — qc-lock execution session</text>
+
+  <!-- Prompt -->
+  <text x="20" y="65" fill="#a6e3a1">$</text>
+  <text x="34" y="65" fill="#cdd6f4" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="0.3s" fill="freeze"/>
+    # Prompt: Use $qc-lock for: fix missing branch name error in repo-tool
+  </text>
+
+  <!-- Preflight -->
+  <text x="20" y="97" fill="#89b4fa" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="1.0s" fill="freeze"/>
+    [qc-lock] Preflight
+  </text>
+  <text x="34" y="115" fill="#6c7086" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="1.4s" fill="freeze"/>
+    Affected file      src/repo-tool.js:L142
+  </text>
+  <text x="34" y="133" fill="#6c7086" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="1.6s" fill="freeze"/>
+    Protected boundary existing --switch behavior unchanged
+  </text>
+  <text x="34" y="151" fill="#6c7086" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="1.8s" fill="freeze"/>
+    Verify path        node test/branch-error.test.js
+  </text>
+  <text x="34" y="169" fill="#a6e3a1" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="2.0s" fill="freeze"/>
+    Preflight passed ✓
+  </text>
+
+  <!-- Plan -->
+  <text x="20" y="201" fill="#89b4fa" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="2.5s" fill="freeze"/>
+    [qc-lock] Locked Plan
+  </text>
+  <text x="34" y="219" fill="#cdd6f4" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="2.8s" fill="freeze"/>
+    Step 1  add guard clause for missing branch name → exit 1 with message
+  </text>
+  <text x="34" y="237" fill="#cdd6f4" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="3.0s" fill="freeze"/>
+    Step 2  run: node test/branch-error.test.js
+  </text>
+
+  <!-- Execute -->
+  <text x="20" y="269" fill="#89b4fa" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="3.5s" fill="freeze"/>
+    [qc-lock] Execute  step 1
+  </text>
+  <text x="34" y="287" fill="#6c7086" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="3.8s" fill="freeze"/>
+    Edit   src/repo-tool.js  +4 lines
+  </text>
+
+  <!-- Verify -->
+  <text x="20" y="319" fill="#89b4fa" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="4.3s" fill="freeze"/>
+    [qc-lock] Verify
+  </text>
+  <text x="34" y="337" fill="#6c7086" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="4.6s" fill="freeze"/>
+    $ node test/branch-error.test.js
+  </text>
+  <text x="34" y="355" fill="#a6e3a1" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.5s" begin="5.0s" fill="freeze"/>
+    ✓  missing branch name → exits 1 with "branch name required"
+  </text>
+  <text x="34" y="373" fill="#a6e3a1" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.5s" begin="5.2s" fill="freeze"/>
+    ✓  existing --switch behavior unchanged
+  </text>
+
+  <!-- Done -->
+  <text x="20" y="401" fill="#cba6f7" opacity="0">
+    <animate attributeName="opacity" values="0;1" dur="0.3s" begin="5.7s" fill="freeze"/>
+    Done — requirements still satisfied ✓  gate: done
+  </text>
+
+  <rect x="20" y="408" width="8" height="13" fill="#cdd6f4" opacity="0">
+    <animate attributeName="opacity" values="0;1;0;1;0" dur="1s" begin="6.1s" repeatCount="indefinite"/>
+  </rect>
+</svg>

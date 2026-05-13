@@ -93,104 +93,27 @@ YOUR TASK
 
 ## Demo
 
-> The GIFs below show real terminal sessions. Record your own with [asciinema](https://asciinema.org/).
-
 ### 1 — Resume after interruption
 
-<!-- 
-  RECORD THIS SCENARIO:
-  1. Run: quick-codex status --dir ./demo-project
-  2. Run: quick-codex resume --dir ./demo-project
-  3. Show the output: active gate, next prompt to paste, carry-forward cues
-  Save as: docs/demo/resume.gif
--->
+![Resume demo](docs/demo/resume.svg)
 
-```
-$ quick-codex resume --dir ./my-project
-
-Active run:   .quick-codex-flow/add-sync-feature.md
-Current gate: Execute → Wave 2
-Phase:        P2 — Implementation
-
-Next prompt to paste:
-  Use $qc-flow and resume from .quick-codex-flow/add-sync-feature.md.
-  Restate: gate, phase, wave, blockers, experience constraints, next verify.
-
-Carry-forward cues:
-  Phase relation:        same-phase
-  Compaction action:     compact
-  What to forget:        Wave 1 implementation detail
-  What must remain:      protected boundary list, verify path
-```
-
-> **[▶ Watch full demo — record and replace this block with your GIF]**
-> Place at: `docs/demo/resume.gif` then embed with `![Resume demo](docs/demo/resume.gif)`
+Recover the active run, next gate, and exact prompt to paste — from local file state, not chat memory.
 
 ---
 
 ### 2 — qc-flow: plan a non-trivial task
 
-<!-- 
-  RECORD THIS SCENARIO:
-  1. Prompt Codex: "Use $qc-flow for this task: add safer multi-repo sync preview"
-  2. Show: discuss → affected area surfaced → gray area register → delivery roadmap created
-  3. Show: quick-codex doctor-flow confirming the artifact
-  Save as: docs/demo/qc-flow.gif
--->
+![qc-flow demo](docs/demo/qc-flow.svg)
 
-```
-$ # Prompt: Use $qc-flow for: add safer multi-repo sync preview
-
-[qc-flow] Clarify State
-  Goal confirmed: add preview mode before sync executes
-  Affected area: scripts/sync.sh, repo-tool CLI, 3 config files
-  Gray area #1: should preview be opt-in flag or default?
-  → 3 options generated, recommended: opt-in --dry-run flag
-
-[qc-flow] Delivery Roadmap created
-  P1 — Add --dry-run flag to sync.sh
-  P2 — Surface preview output in repo-tool CLI
-  P3 — Document and verify edge cases
-
-[qc-flow] Verified Plan (P1)
-  Wave 1: modify sync.sh + unit test
-  Wave 2: wire CLI flag
-  Verify: bash test/sync-dry-run.sh
-```
-
-> **[▶ Watch full demo — record and replace this block with your GIF]**
-> Place at: `docs/demo/qc-flow.gif`
+Clarify → surface affected area → clear gray areas → build a delivery roadmap with a verified phase plan.
 
 ---
 
 ### 3 — qc-lock: strict execution with verification
 
-<!-- 
-  RECORD THIS SCENARIO:
-  1. Prompt: "Use $qc-lock for: fix repo-tool missing branch name fails cleanly"
-  2. Show: preflight → lock artifact created → execute → verify output → fix → verify pass
-  3. Show: quick-codex doctor-run confirming handoff-sufficiency score
-  Save as: docs/demo/qc-lock.gif
--->
+![qc-lock demo](docs/demo/qc-lock.svg)
 
-```
-$ # Prompt: Use $qc-lock for: fix missing branch name error in repo-tool
-
-[qc-lock] Preflight
-  Affected file: src/repo-tool.js:L142
-  Protected boundary: existing --switch behavior
-  Verify path: node test/branch-error.test.js
-
-[qc-lock] Locked Plan
-  Step 1: add guard clause for missing branch name
-  Step 2: run verify
-  → PASS: node test/branch-error.test.js exits 0
-
-[qc-lock] Done — requirements still satisfied ✓
-```
-
-> **[▶ Watch full demo — record and replace this block with your GIF]**
-> Place at: `docs/demo/qc-lock.gif`
+Preflight → lock → execute one step → verify output → done. No drift, no guessing.
 
 ---
 
