@@ -89,6 +89,11 @@ Validate accepted IDs, record `{ id, kind, source, ownerNonce, parent }` in
 `.session.json`, give explicit `--run` precedence, reject owner conflicts, and
 make recent-session discovery unavailable to this resolver.
 
+For recovery claims, atomically rename a stale canonical claim into a unique
+quarantine filename before inspecting/removing it. Never decide from one
+pathname version and unlink another; a publisher that arrives after the rename
+must create a new canonical claim that the cleaner cannot touch.
+
 - [ ] **Step 4: Add promotion and transient-write failure tests**
 
 ```js

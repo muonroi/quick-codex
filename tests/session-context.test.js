@@ -252,9 +252,8 @@ test("recovery cleanup cannot race an unpublished claim into a live claim before
     import("../lib/wrapper/atomic-fs.js?publication-owner"),
     import("../lib/wrapper/atomic-fs.js?publication-cleaner")
   ]);
-  const open = fs.promises.open;
   const link = fs.promises.link;
-  const unlink = fs.promises.unlink;
+  const rename = fs.promises.rename;
   let pausePublication;
   const publicationPaused = new Promise((resolve) => {
     pausePublication = resolve;
@@ -267,76 +266,143 @@ test("recovery cleanup cannot race an unpublished claim into a live claim before
   const publicationAttempted = new Promise((resolve) => {
     markPublicationAttempted = resolve;
   });
+  let finishPublication;
+  const publicationMayFinish = new Promise((resolve) => {
+    finishPublication = resolve;
+  });
   let publicationIsPaused = false;
   let cleanupInterleaved = false;
-  let cleanupObservedLiveMetadata = false;
+  let staleQuarantinePath = null;
+  let successorPublished = false;
+  let publisherEntered = false;
   let cleanerEntered = false;
+  let publisherOutcome;
+  let cleanerOutcome;
 
-  fs.promises.open = async (target, flags, ...args) => {
-    const handle = await open(target, flags, ...args);
-    if (target === recoveryPath && flags === "wx" && !publicationIsPaused) {
-      publicationIsPaused = true;
-      const writeFile = handle.writeFile.bind(handle);
-      handle.writeFile = async (...writeArgs) => {
-        pausePublication();
-        await publicationMayContinue;
-        try {
-          return await writeFile(...writeArgs);
-        } finally {
-          markPublicationAttempted();
-        }
-      };
-    }
-    return handle;
-  };
   fs.promises.link = async (source, target) => {
     if (target === recoveryPath && !publicationIsPaused) {
       publicationIsPaused = true;
       pausePublication();
       await publicationMayContinue;
       try {
-        return await link(source, target);
+        const result = await link(source, target);
+        markPublicationAttempted();
+        await publicationMayFinish;
+        return result;
       } finally {
         markPublicationAttempted();
       }
     }
     return link(source, target);
   };
-  fs.promises.unlink = async (target, ...args) => {
-    if (target === recoveryPath && !cleanupInterleaved) {
+  fs.promises.rename = async (source, target, ...args) => {
+    const result = await rename(source, target, ...args);
+    if (source === recoveryPath && !cleanupInterleaved) {
       cleanupInterleaved = true;
+      staleQuarantinePath = target;
       resumePublication();
       await publicationAttempted;
       try {
         const metadata = JSON.parse(fs.readFileSync(recoveryPath, "utf8"));
-        cleanupObservedLiveMetadata = metadata.pid === process.pid && typeof metadata.nonce === "string";
+        successorPublished = metadata.pid === process.pid && typeof metadata.nonce === "string";
       } catch {
-        // A malformed claim is still safe to reclaim.
+        // The assertion below reports an absent or malformed publication.
       }
     }
-    return unlink(target, ...args);
+    return result;
   };
 
   try {
-    const publisher = publishWithPathLock(filePath, async () => {}, { retries: 0 });
+    const publisher = publishWithPathLock(filePath, async () => {
+      publisherEntered = true;
+    }, { retries: 0 });
     await publicationPaused;
-    if (!fs.existsSync(recoveryPath)) {
-      fs.writeFileSync(recoveryPath, "", "utf8");
-    }
+    fs.writeFileSync(recoveryPath, "", "utf8");
     const staleTime = new Date(Date.now() - 2_000);
     fs.utimesSync(recoveryPath, staleTime, staleTime);
 
     const cleaner = cleanWithPathLock(filePath, async () => {
       cleanerEntered = true;
     }, { retries: 0 });
-    await Promise.allSettled([publisher, cleaner]);
+    [cleanerOutcome] = await Promise.allSettled([cleaner]);
+    finishPublication();
+    [publisherOutcome] = await Promise.allSettled([publisher]);
   } finally {
     resumePublication();
-    fs.promises.open = open;
+    finishPublication();
     fs.promises.link = link;
+    fs.promises.rename = rename;
+  }
+
+  assert.equal(successorPublished, true);
+  assert.equal(cleanerOutcome?.status, "rejected");
+  assert.equal(cleanerOutcome?.reason?.code, "EEXIST");
+  assert.equal(cleanerEntered, false);
+  assert.equal(publisherOutcome?.status, "fulfilled");
+  assert.equal(publisherEntered, true);
+  assert.notEqual(staleQuarantinePath, null);
+  assert.equal(fs.existsSync(staleQuarantinePath), false);
+});
+
+test("recovery cleanup cannot delete a successor published after stale-claim quarantine", async () => {
+  const dir = makeProject();
+  const filePath = path.join(dir, "state.json");
+  const recoveryPath = `${filePath}.lock.recovery`;
+  const staleClaim = { pid: 999999999, nonce: "stale-claim" };
+  const successorClaim = { pid: process.pid, nonce: "successor-claim" };
+  fs.writeFileSync(recoveryPath, `${JSON.stringify(staleClaim)}\n`, "utf8");
+
+  const rename = fs.promises.rename;
+  const unlink = fs.promises.unlink;
+  let staleQuarantinePath = null;
+  let successorPublished = false;
+  let cleanerEntered = false;
+  let acquisitionError = null;
+
+  const publishSuccessor = () => {
+    fs.writeFileSync(recoveryPath, `${JSON.stringify(successorClaim)}\n`, {
+      encoding: "utf8",
+      flag: "wx"
+    });
+    successorPublished = true;
+  };
+
+  fs.promises.rename = async (source, target, ...args) => {
+    if (source === recoveryPath && staleQuarantinePath === null) {
+      await rename(source, target, ...args);
+      staleQuarantinePath = target;
+      publishSuccessor();
+      return;
+    }
+    return rename(source, target, ...args);
+  };
+  fs.promises.unlink = async (target, ...args) => {
+    if (target === recoveryPath && !successorPublished) {
+      // Model cleaner B removing the observed stale claim and a publisher
+      // installing its structured successor before cleaner A's unlink lands.
+      await unlink(target, ...args);
+      publishSuccessor();
+      return unlink(target, ...args);
+    }
+    return unlink(target, ...args);
+  };
+
+  try {
+    await withPathLock(filePath, async () => {
+      cleanerEntered = true;
+    }, { retries: 0 });
+  } catch (error) {
+    acquisitionError = error;
+  } finally {
+    fs.promises.rename = rename;
     fs.promises.unlink = unlink;
   }
 
-  assert.equal(cleanupObservedLiveMetadata, false);
-  assert.equal(cleanerEntered, true);
+  assert.equal(successorPublished, true);
+  assert.equal(cleanerEntered, false);
+  assert.equal(acquisitionError?.code, "EEXIST");
+  assert.notEqual(staleQuarantinePath, null);
+  assert.equal(path.dirname(staleQuarantinePath), path.dirname(recoveryPath));
+  assert.equal(fs.existsSync(staleQuarantinePath), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(recoveryPath, "utf8")), successorClaim);
 });
