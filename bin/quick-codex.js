@@ -8,6 +8,16 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { resolveSessionContext } from "../lib/wrapper/session-context.js";
+import { writeFileAtomic } from "../lib/wrapper/atomic-fs.js";
+import {
+  aggregateReviewerResults,
+  buildReviewerAssignments,
+  parseReviewerPanels,
+  renderReviewerPanelSection,
+  reviewerGateViolation,
+  reviewerPanelForGate,
+  reviewerPanelSummary
+} from "../lib/wrapper/reviewer-panel.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,6 +56,8 @@ function usage() {
   quick-codex delegate-plan-check [--dir <project-dir>] [--run <path>] [--focus <text>] [--scope <text>]
   quick-codex delegate-goal-audit [--dir <project-dir>] [--run <path>] [--focus <text>] [--scope <text>]
   quick-codex complete-delegation [--dir <project-dir>] [--run <path>] --type <research|plan-check|goal-audit> [--status <completed|blocked>] [--summary <text>] [--verdict <text>] [--recommended-transition <text>]
+  quick-codex assign-reviewer-panel [--dir <project-dir>] [--run <path>] --gate <plan-check|wave-close|phase-close|feature-close> [--count <n>] [--focus <text>] [--scope <text>]
+  quick-codex complete-reviewer [--dir <project-dir>] [--run <path>] --gate <gate> --reviewer <id> --status completed --verdict <pass|block|partial> --evidence-ref <ref> [--disposition <accepted|resolved|waived|pending>]
   quick-codex lock-check [--dir <project-dir>] [--run <path>]
   quick-codex verify-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
   quick-codex regression-check [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
@@ -76,6 +88,8 @@ Commands:
   delegate-plan-check  Assign a blocking plan-check checkpoint and record the worker prompt in the run artifact
   delegate-goal-audit  Assign a blocking goal-audit checkpoint and record the worker prompt in the run artifact
   complete-delegation  Merge a delegated checkpoint result back into the run artifact so the main flow can advance
+  assign-reviewer-panel  Assign distinct read-only reviewers for a judgement-bearing gate
+  complete-reviewer  Parent-only recording of one reviewer result and its disposition
   lock-check Validate that a flow or lock artifact is explicit enough for locked execution
   verify-wave Run the active wave verification commands and append bounded evidence to the run artifact
   regression-check Run protected-boundary verification commands and append bounded evidence to the run artifact
@@ -127,7 +141,12 @@ function parseArgs(argv) {
     delegationStatus: null,
     summary: null,
     verdict: null,
-    recommendedTransition: null
+    recommendedTransition: null,
+    gate: null,
+    count: 3,
+    reviewer: null,
+    evidenceRef: null,
+    disposition: null
   };
 
   if (argv.length === 0 || ["-h", "--help", "help"].includes(argv[0])) {
@@ -257,6 +276,37 @@ function parseArgs(argv) {
         throw new Error("--recommended-transition requires a value");
       }
       result.recommendedTransition = argv[i];
+      continue;
+    }
+    if (arg === "--gate") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--gate requires a value");
+      result.gate = argv[i];
+      continue;
+    }
+    if (arg === "--count") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--count requires a number");
+      result.count = Number(argv[i]);
+      if (!Number.isInteger(result.count)) throw new Error("--count must be an integer");
+      continue;
+    }
+    if (arg === "--reviewer") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--reviewer requires an id");
+      result.reviewer = argv[i];
+      continue;
+    }
+    if (arg === "--evidence-ref") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--evidence-ref requires a value");
+      result.evidenceRef = argv[i];
+      continue;
+    }
+    if (arg === "--disposition") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--disposition requires a value");
+      result.disposition = argv[i];
       continue;
     }
     if (arg === "--run") {
@@ -1338,6 +1388,7 @@ const DELEGATION_CONFIG = {
 };
 
 const GATE_ORDER = ["clarify", "explore", "research", "roadmap", "plan", "plan-check", "execute", "phase-close", "done"];
+const REVIEWER_GATES = new Set(["plan-check", "wave-close", "phase-close", "feature-close"]);
 
 function gateRank(gate) {
   const normalized = String(gate ?? "").trim().toLowerCase();
@@ -1436,7 +1487,11 @@ function requiredDelegationViolations(metadata) {
   if (currentGateRank > gateRank("research") && delegationPendingForType(metadata, "research")) {
     violations.push("research");
   }
-  if (currentGateRank > gateRank("plan-check") && effectiveDelegationStatus(metadata, "plan-check") !== "completed") {
+  if (
+    currentGateRank > gateRank("plan-check")
+    && !metadata.hasReviewerPanelSection
+    && effectiveDelegationStatus(metadata, "plan-check") !== "completed"
+  ) {
     violations.push("plan-check");
   }
   if (currentGateRank > gateRank("phase-close") && delegationPendingForType(metadata, "goal-audit")) {
@@ -1452,6 +1507,17 @@ function delegationSummary(metadata) {
     return "none";
   }
   return `${current.type} (${current.status})`;
+}
+
+function requiredReviewerPanelViolations(metadata) {
+  if (!metadata?.hasReviewerPanelSection) return [];
+  const gates = [];
+  if (gateRank(metadata.currentGate) > gateRank("plan-check")) gates.push("plan-check");
+  if (String(metadata.currentGate ?? "").trim().toLowerCase() === "phase-close") gates.push("phase-close");
+  if (String(metadata.currentGate ?? "").trim().toLowerCase() === "done") gates.push("feature-close");
+  return gates
+    .map((gate) => ({ gate, violation: reviewerGateViolation(metadata, gate) }))
+    .filter((entry) => entry.violation);
 }
 
 function workflowStageFromMetadata(metadata) {
@@ -2853,6 +2919,7 @@ function statusCommand({ dir, run, context }) {
     console.log(`Roadmap phase status: ${metadata.workflowCurrentRoadmapPhaseStatus ?? "unknown"}`);
     console.log(`Unresolved gray areas: ${unresolvedGrayAreaSummary(metadata)}`);
     console.log(`Delegation state: ${delegationSummary(metadata)}`);
+    console.log(`Reviewer panels: ${reviewerPanelSummary(metadata)}`);
     console.log(`Milestone / track: ${(metadata.projectMilestone ?? "unknown")} / ${(metadata.projectTrack ?? "default")}`);
   }
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
@@ -3024,6 +3091,18 @@ function assignDelegationCommand({ dir, run, context, type, question, scope, foc
   if (metadata.artifactType !== "flow") {
     throw new Error(`${type} delegation only supports qc-flow run artifacts`);
   }
+  if (metadata.hasReviewerPanelSection && (type === "plan-check" || type === "goal-audit")) {
+    assignReviewerPanelCommand({
+      dir,
+      run,
+      context,
+      gate: type === "plan-check" ? "plan-check" : "feature-close",
+      count: 3,
+      focus,
+      scope
+    });
+    return;
+  }
   const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const assignment = normalizeWhitespace(question ?? focus ?? defaultDelegationAssignment(type, metadata));
   const delegatedScope = normalizeWhitespace(scope ?? metadata.goal ?? "the active roadmap phase and its bounded affected area");
@@ -3080,6 +3159,17 @@ function completeDelegationCommand({ dir, run, context, type, delegationStatus, 
   if (metadata.artifactType !== "flow") {
     throw new Error("complete-delegation only supports qc-flow run artifacts");
   }
+  const panelGates = type === "plan-check"
+    ? ["plan-check"]
+    : type === "goal-audit"
+      ? ["phase-close", "feature-close"]
+      : [];
+  const activePanel = panelGates
+    .map((gate) => reviewerPanelForGate(metadata, gate))
+    .find((panel) => panel && !panel.legacy && panel.reviewers.length > 1 && aggregateReviewerResults(panel.reviewers).status !== "pass");
+  if (activePanel) {
+    throw new Error(`complete-delegation cannot close active multi-reviewer panel ${activePanel.gate}; record each reviewer with complete-reviewer`);
+  }
   const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const nextStatus = delegationStatusValue(delegationStatus ?? "completed");
   if (!["completed", "blocked"].includes(nextStatus)) {
@@ -3122,6 +3212,107 @@ function completeDelegationCommand({ dir, run, context, type, delegationStatus, 
   console.log(`Recorded ${type} delegation result on ${relativeRunPath}`);
   console.log(`Status: ${nextStatus}`);
   console.log(`Result summary: ${summary ?? existing.resultSummary ?? "delegated result recorded"}`);
+}
+
+function normalizedReviewerGate(gate) {
+  const value = String(gate ?? "").trim().toLowerCase();
+  if (!REVIEWER_GATES.has(value)) {
+    throw new Error(`--gate must be one of ${[...REVIEWER_GATES].join(", ")}`);
+  }
+  return value;
+}
+
+function ownerSelectorForPrompt(context) {
+  return context && context.kind !== "legacy" ? ` --session ${context.id}` : " --legacy";
+}
+
+function reviewerCheckpointForMetadata(metadata, gate) {
+  if (gate === "plan-check") return "plan";
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  return `${phaseWave.phase}/${phaseWave.wave}`;
+}
+
+function writeReviewerPanels(runPath, text, panels) {
+  const nextText = replaceOrInsertSection(
+    text,
+    "Reviewer Panels",
+    renderReviewerPanelSection(panels),
+    "Delegation State"
+  );
+  writeFileAtomic(runPath, nextText);
+}
+
+function assignReviewerPanelCommand({ dir, run, context, gate, count, focus, scope }) {
+  const reviewerGate = normalizedReviewerGate(gate);
+  const runPath = resolveRunPath(dir, run, context);
+  const metadata = runMetadata(runPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
+  const checkpoint = reviewerCheckpointForMetadata(metadata, reviewerGate);
+  const existing = reviewerPanelForGate(metadata, reviewerGate, checkpoint);
+  if (existing && !existing.legacy && aggregateReviewerResults(existing.reviewers).status !== "pass") {
+    throw new Error(`Reviewer panel for ${reviewerGate} is already active`);
+  }
+
+  const boundedScope = normalizeWhitespace(scope ?? focus ?? metadata.goal ?? "the active gate and its deterministic evidence");
+  const reviewers = buildReviewerAssignments({ gate: reviewerGate, count }).map((reviewer) => ({
+    ...reviewer,
+    scope: `${reviewer.scope} Bounded source scope: ${boundedScope}`
+  }));
+  const panels = [
+    ...(metadata.reviewerPanels ?? []).filter((panel) => panel.legacy || panel.gate !== reviewerGate || panel.checkpoint !== checkpoint),
+    { gate: reviewerGate, checkpoint, legacy: false, reviewers }
+  ];
+  writeReviewerPanels(runPath, metadata.text, panels);
+
+  const ownerSelector = ownerSelectorForPrompt(context);
+  console.log(`Assigned reviewer panel: ${reviewerGate}`);
+  console.log(`Checkpoint: ${checkpoint}`);
+  console.log(`Reviewers: ${reviewers.length}`);
+  for (const reviewer of reviewers) {
+    const recordCommand = `quick-codex complete-reviewer --dir ${dir} --run ${relativeRunPath}${ownerSelector} --gate ${reviewerGate} --reviewer ${reviewer.id} --status completed --verdict pass --evidence-ref \"...\" --disposition accepted`;
+    console.log(`Reviewer prompt: Read-only independent reviewer ${reviewer.id} (${reviewer.role}). Owner artifact: --run ${relativeRunPath}${ownerSelector}. Scope: ${reviewer.scope} Use the same bounded artifact and source evidence as every panel member, but work blind and independently; you cannot see peer conclusions. Hard gates: every distinct reviewer must complete, majority is never sufficient, every block or partial must be resolved or explicitly waived by the parent, and deterministic verification evidence remains required. Do not edit the artifact and do not run its parent record command. Return verdict, evidence reference, blockers, and suggested disposition to the parent. Parent record command: ${recordCommand}`);
+  }
+}
+
+function completeReviewerCommand({ dir, run, context, gate, reviewer, delegationStatus, verdict, evidenceRef, disposition }) {
+  const reviewerGate = normalizedReviewerGate(gate);
+  if (!reviewer) throw new Error("--reviewer is required");
+  const status = String(delegationStatus ?? "completed").trim().toLowerCase();
+  if (status !== "completed") throw new Error("--status must be completed for reviewer results");
+  const resultVerdict = String(verdict ?? "").trim().toLowerCase();
+  if (!new Set(["pass", "block", "partial"]).has(resultVerdict)) {
+    throw new Error("--verdict must be pass, block, or partial");
+  }
+  if (!normalizeWhitespace(evidenceRef)) throw new Error("--evidence-ref is required");
+  const resultDisposition = String(disposition ?? (resultVerdict === "pass" ? "accepted" : "pending")).trim().toLowerCase();
+  if (!new Set(["accepted", "resolved", "waived", "pending"]).has(resultDisposition)) {
+    throw new Error("--disposition must be accepted, resolved, waived, or pending");
+  }
+
+  const runPath = resolveRunPath(dir, run, context);
+  const metadata = runMetadata(runPath);
+  const checkpoint = reviewerCheckpointForMetadata(metadata, reviewerGate);
+  const panel = reviewerPanelForGate(metadata, reviewerGate, checkpoint);
+  if (!panel || panel.legacy) throw new Error(`No active multi-reviewer panel found for ${reviewerGate}`);
+  const rowIndex = panel.reviewers.findIndex((row) => row.id === reviewer);
+  if (rowIndex === -1) throw new Error(`Reviewer ${reviewer} is not assigned to ${reviewerGate}`);
+  const reviewers = [...panel.reviewers];
+  reviewers[rowIndex] = {
+    ...reviewers[rowIndex],
+    status,
+    verdict: resultVerdict,
+    evidenceRef: normalizeWhitespace(evidenceRef),
+    disposition: resultDisposition
+  };
+  const panels = metadata.reviewerPanels.map((entry) => (
+    entry.gate === reviewerGate && entry.checkpoint === checkpoint ? { ...entry, reviewers } : entry
+  ));
+  writeReviewerPanels(runPath, metadata.text, panels);
+  const aggregate = aggregateReviewerResults(reviewers);
+  console.log(`Recorded reviewer: ${reviewer}`);
+  console.log(`Reviewer panel: ${reviewerGate}`);
+  console.log(`Aggregate status: ${aggregate.status}`);
+  for (const blocker of aggregate.blockers) console.log(`- ${blocker}`);
 }
 
 function firstMeaningfulLine(text) {
@@ -3714,6 +3905,11 @@ async function closeWaveCommand({ dir, run, context, phase, wave, phaseDone }) {
   ]);
   const nextWaveRoute = plannedNextWaveRoute(metadata, phaseWave.phase, phaseWave.wave, phaseDone);
   const featureComplete = featureRoadmapComplete(metadata, phaseDone, phaseWave.phase);
+  const requiredPanelGate = featureComplete ? "feature-close" : (phaseDone ? "phase-close" : "wave-close");
+  const panelViolation = reviewerGateViolation(metadata, requiredPanelGate, `${phaseWave.phase}/${phaseWave.wave}`);
+  if (panelViolation) {
+    throw new Error(panelViolation);
+  }
   const phaseRelation = closeWavePhaseRelation(metadata, phaseWave.phase, phaseDone, nextWaveRoute);
   const compactionAction = compactionActionForRelation(phaseRelation);
   const nextGate = featureComplete ? "done" : (phaseDone ? "phase-close" : "execute");
@@ -4078,6 +4274,7 @@ function resumeCommand({ dir, run, context }) {
     console.log(`Roadmap phase status: ${metadata.workflowCurrentRoadmapPhaseStatus ?? "unknown"}`);
     console.log(`Unresolved gray areas: ${unresolvedGrayAreaSummary(metadata)}`);
     console.log(`Delegation state: ${delegationSummary(metadata)}`);
+    console.log(`Reviewer panels: ${reviewerPanelSummary(metadata)}`);
     console.log(`Milestone / track: ${(metadata.projectMilestone ?? "unknown")} / ${(metadata.projectTrack ?? "default")}`);
   }
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
@@ -4467,6 +4664,20 @@ function runMetadataStruct(runPath, text) {
   const researchDelegation = parseDelegationSection(text, "Research Delegation");
   const planCheckDelegation = parseDelegationSection(text, "Plan-Check Delegation");
   const goalAuditDelegation = parseDelegationSection(text, "Goal-Audit Delegation");
+  const reviewerPanelState = parseReviewerPanels(text, [
+    {
+      gate: "plan-check",
+      status: planCheckDelegation.delegateStatus,
+      verdict: planCheckDelegation.resultVerdict,
+      scope: planCheckDelegation.assignment
+    },
+    {
+      gate: "feature-close",
+      status: goalAuditDelegation.delegateStatus,
+      verdict: goalAuditDelegation.resultVerdict,
+      scope: goalAuditDelegation.assignment
+    }
+  ]);
 
   return {
     path: runPath,
@@ -4550,6 +4761,7 @@ function runMetadataStruct(runPath, text) {
     researchDelegation,
     planCheckDelegation,
     goalAuditDelegation,
+    ...reviewerPanelState,
     discussRegisterRows: parseDiscussRegisterRows(text),
     decisionRegisterRows: parseDecisionRegisterRows(text),
     dependencyRegisterRows: parseDependencyRegisterRows(text),
@@ -4825,6 +5037,10 @@ function doctorRunCommand({ dir, run, context }) {
       requiredDelegationViolations(metadata).length === 0
     ],
     [
+      "Required reviewer panels cleared",
+      requiredReviewerPanelViolations(metadata).length === 0
+    ],
+    [
       "Handoff sufficiency score",
       handoffScore?.passed ?? false
     ],
@@ -4900,8 +5116,12 @@ function doctorRunCommand({ dir, run, context }) {
       console.log(`- ${row.id || row.type || "gray-area"} [${row.status}] ${row.question}`);
     }
     console.log(`Delegation state: ${delegationSummary(metadata)}`);
+    console.log(`Reviewer panels: ${reviewerPanelSummary(metadata)}`);
     for (const violation of delegationViolations) {
       console.log(`- delegation gate violation: ${violation} result is not complete for current gate ${metadata.currentGate ?? "unknown"}`);
+    }
+    for (const { gate, violation } of requiredReviewerPanelViolations(metadata)) {
+      console.log(`- reviewer panel gate violation: ${gate}: ${violation}`);
     }
   }
 
@@ -4958,7 +5178,8 @@ function doctorFlowChecks(metadata, text) {
     ["Delivery roadmap rows", hasRoadmapRows],
     ["Goal-backward checks", metadata.goalBackwardChecks.length > 0],
     ["Gray areas cleared before roadmap/plan/execute", !gateRequiresClearedGrayAreas(metadata) || unresolvedGrayAreas.length === 0],
-    ["Delegated checkpoints cleared before advancing past their gate", requiredDelegationViolations(metadata).length === 0]
+    ["Delegated checkpoints cleared before advancing past their gate", requiredDelegationViolations(metadata).length === 0],
+    ["Required reviewer panels cleared", requiredReviewerPanelViolations(metadata).length === 0]
   ];
 }
 
@@ -4985,11 +5206,15 @@ function doctorFlowCommand({ dir, run, context }) {
   console.log(`Current roadmap phase: ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? "unknown"}`);
   console.log(`Unresolved gray areas: ${unresolved.length}`);
   console.log(`Delegation state: ${delegationSummary(metadata)}`);
+  console.log(`Reviewer panels: ${reviewerPanelSummary(metadata)}`);
   for (const row of unresolved) {
     console.log(`- ${row.id || row.type || "gray-area"} [${row.status}] ${row.question}`);
   }
   for (const violation of requiredDelegationViolations(metadata)) {
     console.log(`- delegation gate violation: ${violation} result is not complete for current gate ${metadata.currentGate ?? "unknown"}`);
+  }
+  for (const { gate, violation } of requiredReviewerPanelViolations(metadata)) {
+    console.log(`- reviewer panel gate violation: ${gate}: ${violation}`);
   }
   if (failed) {
     throw new Error("doctor-flow found one or more issues");
@@ -5041,6 +5266,7 @@ function doctorProjectCommand({ dir, context }) {
 const SESSION_COMMANDS = new Set([
   "status", "resume", "project-status", "sync-project",
   "delegate-research", "delegate-plan-check", "delegate-goal-audit", "complete-delegation",
+  "assign-reviewer-panel", "complete-reviewer",
   "lock-check", "verify-wave", "regression-check", "close-wave", "capture-hooks", "sync-experience",
   "checkpoint-digest", "snapshot", "repair-run", "doctor-run", "doctor-flow", "doctor-project"
 ]);
@@ -5386,6 +5612,12 @@ async function main() {
         break;
       case "complete-delegation":
         completeDelegationCommand(args);
+        break;
+      case "assign-reviewer-panel":
+        assignReviewerPanelCommand(args);
+        break;
+      case "complete-reviewer":
+        completeReviewerCommand(args);
         break;
       case "lock-check":
         lockCheckCommand(args);

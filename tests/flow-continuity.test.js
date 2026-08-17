@@ -21,6 +21,17 @@ import {
 
 import { resolveSessionContext } from "../lib/wrapper/session-context.js";
 
+const emptyReviewerPanels = `## Reviewer Panels
+Aggregate synthesis:
+- none assigned
+
+| Gate | Checkpoint | ID | Role | Scope | Status | Verdict | Evidence Ref | Disposition |
+|---|---|---|---|---|---|---|---|---|`;
+
+function withReviewerPanels(runText) {
+  return runText.replace("## Delegation State", `${emptyReviewerPanels}\n\n## Delegation State`);
+}
+
 test("session-aware flow mutation writes companion state and project files inside the run owner", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-flow-session-owner-"));
   const context = resolveSessionContext({ dir, sessionId: "thread-flow" });
@@ -59,6 +70,92 @@ test("session delegation prints an owner-bearing completion command that execute
   const completed = spawnSync(completionCommand, { cwd: repoRoot, env, encoding: "utf8", shell: true });
   assert.equal(completed.status, 0, completed.stderr || completed.stdout);
   assert.match(fs.readFileSync(runPath, "utf8"), /Delegate status:\n- completed/);
+});
+
+test("delegate-plan-check upgrades panel-aware artifacts to the default three-role panel", () => {
+  const project = makeProject(withReviewerPanels(baseRun));
+  const result = runCli(project.dir, "delegate-plan-check", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--scope", "P1 plan and evidence");
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal((result.stdout.match(/^Reviewer prompt:/gm) ?? []).length, 3);
+  assert.match(fs.readFileSync(project.runPath, "utf8"), /\| plan-check \| plan \| plan-check-reviewer-3 \| adversarial-verification \|/);
+});
+
+test("a session-owned reviewer panel emits blind read-only prompts and records each result independently", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-reviewer-panel-"));
+  const context = resolveSessionContext({ dir, sessionId: "thread-review" });
+  fs.mkdirSync(context.runsDir, { recursive: true });
+  const runPath = path.join(context.runsDir, "sample.md");
+  const panelOwnedRun = withReviewerPanels(baseRun)
+    .replace("- Plan-check delegation: completed", "- Plan-check delegation: idle")
+    .replace("## Plan-Check Delegation\nAssignment:\n- Audit the active Verified Plan and prove that execution may start safely.\n\nDelegate status:\n- completed", "## Plan-Check Delegation\nAssignment:\n- Audit the active Verified Plan and prove that execution may start safely.\n\nDelegate status:\n- idle");
+  fs.writeFileSync(runPath, panelOwnedRun, "utf8");
+  fs.writeFileSync(context.statePath, "# Quick Codex Flow State\n\nActive run:\n- runs/sample.md\n\nActive lock:\n- none\n\nStatus:\n- active\n", "utf8");
+
+  const assigned = runCli(dir, "assign-reviewer-panel", "--session", "thread-review", "--dir", dir, "--run", "runs/sample.md", "--gate", "plan-check");
+  assert.equal(assigned.status, 0, assigned.stderr || assigned.stdout);
+  assert.equal((assigned.stdout.match(/^Reviewer prompt:/gm) ?? []).length, 3);
+  assert.match(assigned.stdout, /--run runs\/sample\.md --session thread-review/);
+  assert.match(assigned.stdout, /read-only/i);
+  assert.match(assigned.stdout, /cannot see peer conclusions/i);
+  assert.match(assigned.stdout, /majority is never sufficient/i);
+  assert.match(assigned.stdout, /deterministic verification evidence remains required/i);
+
+  const legacyCompletion = runCli(dir, "complete-delegation", "--session", "thread-review", "--dir", dir, "--run", "runs/sample.md", "--type", "plan-check", "--status", "completed");
+  assert.notEqual(legacyCompletion.status, 0);
+  assert.match(legacyCompletion.stderr, /active multi-reviewer panel/i);
+
+  for (let index = 1; index <= 3; index += 1) {
+    const completed = runCli(dir, "complete-reviewer", "--session", "thread-review", "--dir", dir, "--run", "runs/sample.md", "--gate", "plan-check", "--reviewer", `plan-check-reviewer-${index}`, "--status", "completed", "--verdict", "pass", "--evidence-ref", `review-${index}.md`, "--disposition", "accepted");
+    assert.equal(completed.status, 0, completed.stderr || completed.stdout);
+  }
+
+  const status = runCli(dir, "status", "--session", "thread-review", "--dir", dir, "--run", "runs/sample.md");
+  assert.equal(status.status, 0, status.stderr || status.stdout);
+  assert.match(status.stdout, /Reviewer panels: plan-check@plan: pass \(3\/3 completed\)/);
+  const resume = runCli(dir, "resume", "--session", "thread-review", "--dir", dir, "--run", "runs/sample.md");
+  assert.match(resume.stdout, /Reviewer panels: plan-check@plan: pass \(3\/3 completed\)/);
+  const doctor = runCli(dir, "doctor-flow", "--session", "thread-review", "--dir", dir, "--run", "runs/sample.md");
+  assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
+  assert.match(doctor.stdout, /PASS: Required reviewer panels cleared/);
+});
+
+test("close-wave requires the gate-specific panel as well as deterministic verification", () => {
+  const cases = [
+    { gate: "wave-close", run: verifiedWaveRun, args: [] },
+    { gate: "phase-close", run: independentPhaseRun, args: ["--phase-done"] },
+    { gate: "feature-close", run: finalRoadmapRun, args: ["--phase-done"] }
+  ];
+
+  for (const entry of cases) {
+    const project = makeProject(withReviewerPanels(entry.run));
+    const assigned = runCli(project.dir, "assign-reviewer-panel", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--gate", entry.gate);
+    assert.equal(assigned.status, 0, assigned.stderr || assigned.stdout);
+    const blocked = runCli(project.dir, "close-wave", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", ...entry.args);
+    assert.notEqual(blocked.status, 0);
+    assert.match(blocked.stderr, new RegExp(`Reviewer panel for ${entry.gate} is pending`, "i"));
+
+    for (let index = 1; index <= 3; index += 1) {
+      const completed = runCli(project.dir, "complete-reviewer", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--gate", entry.gate, "--reviewer", `${entry.gate}-reviewer-${index}`, "--status", "completed", "--verdict", "pass", "--evidence-ref", `review-${index}.md`, "--disposition", "accepted");
+      assert.equal(completed.status, 0, completed.stderr || completed.stdout);
+    }
+    const closed = runCli(project.dir, "close-wave", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", ...entry.args);
+    assert.equal(closed.status, 0, closed.stderr || closed.stdout);
+  }
+});
+
+test("a completed wave-close panel cannot be reused for the next wave", () => {
+  const project = makeProject(withReviewerPanels(routedWaveRun));
+  assert.equal(runCli(project.dir, "assign-reviewer-panel", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--gate", "wave-close").status, 0);
+  for (let index = 1; index <= 3; index += 1) {
+    const result = runCli(project.dir, "complete-reviewer", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--gate", "wave-close", "--reviewer", `wave-close-reviewer-${index}`, "--status", "completed", "--verdict", "pass", "--evidence-ref", `review-${index}.md`, "--disposition", "accepted");
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  }
+  assert.equal(runCli(project.dir, "close-wave", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md").status, 0);
+  const verified = runCli(project.dir, "verify-wave", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md");
+  assert.equal(verified.status, 0, verified.stderr || verified.stdout);
+  const reused = runCli(project.dir, "close-wave", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md");
+  assert.notEqual(reused.status, 0);
+  assert.match(reused.stderr, /Reviewer panel for wave-close is required/i);
 });
 
 test("lock-check passes when affected area, exclusions, evidence, and verify path are explicit", () => {

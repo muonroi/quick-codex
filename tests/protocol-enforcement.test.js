@@ -8,6 +8,8 @@ import { enforceQcFlowProtocol, enforceQcLockProtocol } from "../lib/wrapper/pro
 import { resolveSessionContext } from "../lib/wrapper/session-context.js";
 import { loadWrapperState, saveWrapperState } from "../lib/wrapper/state.js";
 import { inspectProjectBootstrap } from "../lib/wrapper/bootstrap.js";
+import { readRunArtifact } from "../lib/wrapper/run-file.js";
+import { buildReviewerAssignments } from "../lib/wrapper/reviewer-panel.js";
 
 function makeDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qc-protocol-"));
@@ -60,6 +62,12 @@ test("enforceQcFlowProtocol bootstraps a task-specific clarify artifact for a fr
   assert.match(result.prompt, /Do not implement code, do not edit product files/);
   assert.match(result.prompt, /present at least 3 options for each gray area/);
   assert.match(result.prompt, /Current enforced gate: clarify/);
+  assert.equal(result.artifact.hasReviewerPanelSection, true);
+  assert.deepEqual(result.artifact.reviewerPanels, []);
+
+  const reparsed = readRunArtifact({ dir, run: result.artifact.relativeRunPath });
+  assert.equal(reparsed.hasReviewerPanelSection, true);
+  assert.deepEqual(reparsed.reviewerPanels, []);
 
   const state = fs.readFileSync(path.join(dir, ".quick-codex-flow", "STATE.md"), "utf8");
   assert.match(state, /Current gate:\n- clarify/);
@@ -81,6 +89,35 @@ test("flow bootstrap keeps identical task slugs inside their owner contexts", ()
   assert.equal(fs.existsSync(b.statePath), true);
 });
 
+test("panel-aware flow cannot enter execute until every plan-check reviewer clears", () => {
+  const dir = makeDir();
+  const fresh = enforceQcFlowProtocol({ dir, task: "Plan storage" }).artifact;
+  const executeReady = {
+    ...fresh,
+    currentGate: "execute",
+    deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |",
+    verifiedPlan: "P1 / W1: implement storage with focused verification"
+  };
+
+  const blocked = enforceQcFlowProtocol({ dir, task: "Plan storage", activeArtifact: executeReady });
+  assert.equal(blocked.effectiveGate, "plan-check");
+  assert.match(blocked.gateReason, /Reviewer panel for plan-check is required/);
+
+  const reviewers = buildReviewerAssignments({ gate: "plan-check" }).map((reviewer) => ({
+    ...reviewer,
+    status: "completed",
+    verdict: "pass",
+    evidenceRef: `${reviewer.id}.md`,
+    disposition: "accepted"
+  }));
+  const allowed = enforceQcFlowProtocol({
+    dir,
+    task: "Plan storage",
+    activeArtifact: { ...executeReady, reviewerPanels: [{ gate: "plan-check", reviewers }] }
+  });
+  assert.equal(allowed.effectiveGate, "execute");
+});
+
 test("session locks retain only their own session flow pointers and reject legacy handoffs", () => {
   const dir = makeDir();
   const context = resolveSessionContext({ dir, sessionId: "thread-a" });
@@ -90,7 +127,17 @@ test("session locks retain only their own session flow pointers and reject legac
     relativeRunPath: ".quick-codex-flow/legacy.md",
     currentGate: "execute",
     verifiedPlan: "P1 / W1: perform the planned change",
-    deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |"
+    deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |",
+    reviewerPanels: [{
+      gate: "plan-check",
+      reviewers: buildReviewerAssignments({ gate: "plan-check" }).map((reviewer) => ({
+        ...reviewer,
+        status: "completed",
+        verdict: "pass",
+        evidenceRef: `${reviewer.id}.md`,
+        disposition: "accepted"
+      }))
+    }]
   };
 
   const lock = enforceQcLockProtocol({
