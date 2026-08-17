@@ -5101,7 +5101,9 @@ function resolveCliContext(args) {
   const inspection = inspectSessionNamespaces(args.dir);
   const sessions = inspection.entries;
   const byId = new Map(sessions.map((entry) => [entry.id, entry]));
-  const trustedId = process.env.CODEX_THREAD_ID ?? process.env.CODEX_SESSION_ID ?? null;
+  const trustedId = [process.env.CODEX_THREAD_ID, process.env.CODEX_SESSION_ID]
+    .map((value) => value?.trim())
+    .find(Boolean) ?? null;
 
   if (args.run) {
     if (args.sessionId && /^(runs|locks)(?:\/|\\)/.test(args.run) && !path.isAbsolute(args.run)) {

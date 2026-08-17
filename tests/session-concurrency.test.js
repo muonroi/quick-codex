@@ -170,6 +170,19 @@ test("an unknown trusted ambient identity never mutates the sole unrelated names
   assert.deepEqual(snapshotTree(a.root), beforeA);
 });
 
+test("an empty primary trusted identity does not mask a non-empty fallback identity", () => {
+  const dir = makeDir();
+  const a = createSession(dir, "thread-a");
+  const beforeA = snapshotTree(a.root);
+  const hookPath = path.join(dir, "fallback-owner-hook.txt");
+  fs.writeFileSync(hookPath, "⚠️ [Experience] fallback owner check [id:fallback1 col:test]\nWhy: empty primary identity must not mask the fallback owner\n", "utf8");
+
+  const result = runCliWithEnv(dir, { CODEX_THREAD_ID: "", CODEX_SESSION_ID: "thread-b" }, "capture-hooks", "--dir", dir, "--input", hookPath);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /thread-b|--session|identity|namespace/i);
+  assert.deepEqual(snapshotTree(a.root), beforeA);
+});
+
 test("a session state pointer cannot escape into another session namespace", () => {
   const dir = makeDir();
   const a = createSession(dir, "thread-a");
