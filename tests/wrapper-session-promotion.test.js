@@ -21,6 +21,7 @@ import {
   NativeSessionObserver,
   promoteObservedNativeContext
 } from "../lib/wrapper/native-session.js";
+import { baseRun } from "./test-helpers.js";
 
 const policy = {
   permissionProfile: "safe",
@@ -200,6 +201,28 @@ class FakeMissingIdAppServerSession extends FakeAppServerSession {
   }
 }
 
+class FakeMissingFallbackAppServerSession extends FakeAppServerSession {
+  constructor(events, dir) {
+    super(events);
+    this.dir = dir;
+    this.pendingAtFreshStart = [];
+  }
+
+  async send(method, params = null) {
+    this.events.push(method);
+    if (method === "thread/resume") {
+      throw new Error("thread/resume space limit exceeded");
+    }
+    if (method === "thread/start") {
+      const sessionsRoot = path.join(this.dir, ".quick-codex-flow", "sessions");
+      this.pendingAtFreshStart = fs.readdirSync(sessionsRoot).filter((name) => name.startsWith("pending-"));
+      return { thread: {} };
+    }
+    if (method === "turn/start") throw new Error("turn/start must not be reached");
+    return {};
+  }
+}
+
 test("app-server promotes before turn/start", async () => {
   const dir = makeProject();
   const context = createProvisionalContext({ dir });
@@ -325,6 +348,35 @@ test("app-server missing a final thread id fails before turn/start and marks rec
   assert.equal(JSON.parse(fs.readFileSync(source.manifestPath, "utf8")).recovery, undefined);
 });
 
+for (const nativeThreadAction of ["thread/resume", "thread/compact/start"]) {
+  test(`${nativeThreadAction} missing-id fallback creates and marks a provisional child before fresh start`, async () => {
+    const dir = makeProject();
+    const source = resolveSessionContext({ dir, sessionId: "thread-source" });
+    const sourceBefore = snapshotTree(source.root);
+    const events = [];
+    const session = new FakeMissingFallbackAppServerSession(events, dir);
+
+    await assert.rejects(
+      session.runDecision({
+        dir,
+        decision: decision({ nativeThreadAction, resumableThreadId: source.id }),
+        policy,
+        context: source,
+        sourceContext: source
+      }),
+      /thread id/i
+    );
+
+    assert.equal(events.includes("turn/start"), false);
+    assert.equal(session.pendingAtFreshStart.length, 1);
+    const pendingRoot = path.join(path.dirname(source.root), session.pendingAtFreshStart[0]);
+    const manifest = JSON.parse(fs.readFileSync(path.join(pendingRoot, ".session.json"), "utf8"));
+    assert.equal(manifest.parent, source.id);
+    assert.equal(manifest.recovery.reason, "missing-final-id");
+    assert.deepEqual(snapshotTree(source.root), sourceBefore);
+  });
+}
+
 test("a destination collision fails closed and preserves both namespaces", () => {
   const dir = makeProject();
   const pending = createProvisionalContext({ dir });
@@ -415,24 +467,49 @@ test("native context waits for an observed trusted id", () => {
   assert.equal(promoted.id, "thread-native");
 });
 
-test("native first task submits under the provisional owner and promotes after trusted turn settlement", async () => {
+test("native first task promotes a trusted observed owner before any in-turn state write", async () => {
   const dir = makeProject();
   const pending = createProvisionalContext({ dir });
   const observer = new NativeSessionObserver();
   const events = [];
+  let session;
   const stdin = {
     destroyed: false,
     write(value) {
       events.push(`write:${value}`);
-      assert.equal(fs.existsSync(pending.root), true);
+      events.push(`owner:${session.ownerContext.kind}:${session.ownerContext.id}`);
+      fs.writeFileSync(session.ownerContext.statePath, "in-turn-final-write", "utf8");
       queueMicrotask(() => {
         events.push("busy");
         observer.record("native-busy", { text: "working" });
-        setImmediate(() => {
-          events.push("settled");
-          observer.record("turn-settled", { sessionId: "thread-native-first", text: "session id: thread-native-first" });
-        });
       });
+    }
+  };
+  session = new NativeRemoteSession({ dir, context: pending, observer });
+  session.started = true;
+  session.controller = new NativeSessionController({ stdin, mode: "pipe" });
+  observer.record("prompt-ready", { text: ">" });
+  observer.record("turn-settled", { sessionId: "thread-native-first", text: "session id: thread-native-first" });
+
+  const submitted = await session.task("do work", { timeoutMs: 1000 });
+
+  assert.equal(submitted.startedBy, "native-busy");
+  assert.deepEqual(events, ["write:do work\n", "owner:session:thread-native-first", "busy"]);
+  assert.equal(session.ownerContext.id, "thread-native-first");
+  assert.equal(fs.readFileSync(session.ownerContext.statePath, "utf8"), "in-turn-final-write");
+  assert.equal(fs.existsSync(pending.root), false);
+});
+
+test("native first task without a trusted startup id marks recovery and never submits", async () => {
+  const dir = makeProject();
+  const pending = createProvisionalContext({ dir });
+  const observer = new NativeSessionObserver();
+  let writes = 0;
+  const stdin = {
+    destroyed: false,
+    write() {
+      writes += 1;
+      queueMicrotask(() => observer.record("native-busy", { text: "working" }));
     }
   };
   const session = new NativeRemoteSession({ dir, context: pending, observer });
@@ -440,19 +517,44 @@ test("native first task submits under the provisional owner and promotes after t
   session.controller = new NativeSessionController({ stdin, mode: "pipe" });
   observer.record("prompt-ready", { text: ">" });
 
-  const submitted = await session.task("do work", { timeoutMs: 1000 });
+  await assert.rejects(
+    session.task("do work", { timeoutMs: 20 }),
+    /trusted.*thread id/i
+  );
 
-  assert.equal(submitted.startedBy, "native-busy");
-  assert.equal(submitted.ownerPromotedBy, "turn-settled");
-  assert.equal(events[0], "write:do work\n");
-  assert.deepEqual(events.slice(1), ["busy", "settled"]);
-  assert.equal(session.ownerContext.id, "thread-native-first");
-  assert.equal(fs.existsSync(pending.root), false);
+  assert.equal(writes, 0);
+  const manifest = JSON.parse(fs.readFileSync(pending.manifestPath, "utf8"));
+  assert.equal(manifest.recovery.reason, "missing-final-id");
 });
 
-test("run dry-run leaves both an empty project and an existing source namespace byte-unchanged", () => {
+test("native observed owner collision fails before submission and preserves both owners", async () => {
+  const dir = makeProject();
+  const occupied = resolveSessionContext({ dir, sessionId: "thread-occupied" });
+  const occupiedBefore = snapshotTree(occupied.root);
+  const pending = createProvisionalContext({ dir });
+  const observer = new NativeSessionObserver();
+  let writes = 0;
+  const session = new NativeRemoteSession({ dir, context: pending, observer });
+  session.started = true;
+  session.controller = new NativeSessionController({
+    mode: "pipe",
+    stdin: { destroyed: false, write() { writes += 1; } }
+  });
+  observer.record("prompt-ready", { text: ">" });
+  observer.record("turn-settled", { sessionId: occupied.id, text: `session id: ${occupied.id}` });
+
+  await assert.rejects(session.task("do work"), /owned by another nonce/i);
+
+  assert.equal(writes, 0);
+  assert.equal(fs.existsSync(pending.root), true);
+  assert.deepEqual(snapshotTree(occupied.root), occupiedBefore);
+  assert.equal(JSON.parse(fs.readFileSync(pending.manifestPath, "utf8")).recovery.reason, "promotion-failed");
+});
+
+test("dry-run command matrix leaves state and output paths byte-unchanged", async (t) => {
   const wrapperPath = path.resolve("bin/quick-codex-wrap.js");
-  const runDry = (dir, extraArgs = []) => {
+  const runDry = (dir, commandArgs) => {
+    const outputPath = path.join(dir, "output", "last-message.txt");
     const env = {
       ...process.env,
       QUICK_CODEX_NO_UPDATE_CHECK: "1",
@@ -463,27 +565,41 @@ test("run dry-run leaves both an empty project and an existing source namespace 
     delete env.CODEX_SESSION_ID;
     return spawnSync(process.execPath, [
       wrapperPath,
-      "run",
-      "--task", "inspect only",
+      ...commandArgs,
       "--dry-run",
       "--json",
       "--dir", dir,
-      ...extraArgs
+      "--output-last-message", outputPath
     ], { cwd: path.dirname(wrapperPath), env, encoding: "utf8" });
   };
 
-  const emptyDir = makeProject();
-  const emptyResult = runDry(emptyDir);
-  assert.equal(emptyResult.status, 0, emptyResult.stderr);
-  assert.deepEqual(snapshotTree(emptyDir), {});
+  for (const commandArgs of [
+    ["run", "--task", "inspect only"],
+    ["auto", "--task", "inspect only"]
+  ]) {
+    await t.test(commandArgs[0], () => {
+      const dir = makeProject();
+      const result = runDry(dir, commandArgs);
+      assert.equal(result.status, 0, `${commandArgs[0]}: ${result.stderr}`);
+      assert.deepEqual(snapshotTree(dir), {}, commandArgs[0]);
+      assert.equal(fs.existsSync(path.join(dir, "output")), false, commandArgs[0]);
+    });
+  }
 
-  const sourceDir = makeProject();
-  const source = resolveSessionContext({ dir: sourceDir, sessionId: "thread-source" });
-  fs.writeFileSync(source.statePath, "source-state", "utf8");
-  const sourceBefore = snapshotTree(sourceDir);
-  const sourceResult = runDry(sourceDir, ["--session", source.id]);
-  assert.equal(sourceResult.status, 0, sourceResult.stderr);
-  assert.deepEqual(snapshotTree(sourceDir), sourceBefore);
+  for (const command of ["start", "continue"]) {
+    await t.test(command, () => {
+      const dir = makeProject();
+      const source = resolveSessionContext({ dir, sessionId: `thread-${command}` });
+      fs.mkdirSync(source.runsDir, { recursive: true });
+      const runPath = path.join(source.runsDir, "work.md");
+      fs.writeFileSync(runPath, baseRun, "utf8");
+      const before = snapshotTree(dir);
+      const result = runDry(dir, [command, "--session", source.id, "--run", runPath]);
+      assert.equal(result.status, 0, `${command}: ${result.stderr}`);
+      assert.deepEqual(snapshotTree(dir), before, command);
+      assert.equal(fs.existsSync(path.join(dir, "output")), false, command);
+    });
+  }
 });
 
 test("standalone native launch cannot auto-submit a prompt from a provisional owner", async () => {

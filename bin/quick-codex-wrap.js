@@ -428,7 +428,10 @@ function resolveWrapperDryRunContext(args) {
   return fs.existsSync(manifestPath) ? resolveWrapperContext(args) : null;
 }
 
-function executionContextFor({ dir, sourceContext, decision }) {
+function executionContextFor({ dir, sourceContext, decision, dryRun = false }) {
+  if (dryRun) {
+    return sourceContext;
+  }
   if (!sourceContext || sourceContext.kind === "provisional") {
     return sourceContext ?? createProvisionalContext({ dir });
   }
@@ -778,8 +781,15 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     };
   }
 
-  const sourceContext = args.context ?? resolveWrapperContext(args, { provisionalWhenMissing: true });
-  const context = executionContextFor({ dir: args.dir, sourceContext, decision: baseDecision });
+  const sourceContext = args.context ?? (args.dryRun
+    ? resolveWrapperDryRunContext(args)
+    : resolveWrapperContext(args, { provisionalWhenMissing: true }));
+  const context = executionContextFor({
+    dir: args.dir,
+    sourceContext,
+    decision: baseDecision,
+    dryRun: args.dryRun
+  });
   const bootstrapState = ensureProjectBootstrap({
     dir: args.dir,
     route: baseDecision.route,
@@ -803,7 +813,9 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     prompt
   };
   const state = loadWrapperState(args.dir, sourceContext);
-  ensureOutputPath(args.outputLastMessage);
+  if (!args.dryRun) {
+    ensureOutputPath(args.outputLastMessage);
+  }
   const wrapperConfig = loadWrapperConfig(args.dir);
   const policy = resolvePermissionPolicy({
     explicitPermissionProfile: args.permissionProfile,
@@ -820,7 +832,7 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     appServerSession: runtime?.appServerSession ?? null,
     onProgress,
     context,
-    sourceContext: sourceContext.kind === "provisional" ? null : sourceContext,
+    sourceContext: sourceContext?.kind === "provisional" ? null : sourceContext,
     reloadAfterPromotion: (ownerContext) => postTaskArtifact(args.dir, decision.activeRun ?? null, ownerContext)
   });
   const jsonlPath = args.outputLastMessage ? `${args.outputLastMessage}.jsonl` : null;
@@ -844,14 +856,16 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
   }
   const artifact = execution.reloaded ?? postTaskArtifact(args.dir, decision.activeRun ?? null, ownerContext);
   const artifactSnapshot = buildArtifactSnapshot(artifact);
-  const persisted = saveWrapperStateIfPossible({
-    dir: args.dir,
-    state,
-    artifact,
-    decision: routed.decision,
-    execution,
-    context: ownerContext
-  });
+  const persisted = args.dryRun
+    ? null
+    : saveWrapperStateIfPossible({
+        dir: args.dir,
+        state,
+        artifact,
+        decision: routed.decision,
+        execution,
+        context: ownerContext
+      });
   return {
     decision: routed.decision,
     bootstrapState,
@@ -869,7 +883,9 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
 }
 
 async function executeTaskAuto(args, runtime = null) {
-  const context = args.context ?? resolveWrapperContext(args, { provisionalWhenMissing: true });
+  const context = args.context ?? (args.dryRun
+    ? resolveWrapperDryRunContext(args)
+    : resolveWrapperContext(args, { provisionalWhenMissing: true }));
   const scopedArgs = { ...args, context };
   const baseDecision = await taskDecisionFromArgs(scopedArgs, context);
   return executePreparedTaskDecision(scopedArgs, baseDecision, runtime);
@@ -880,7 +896,9 @@ async function runAutoTask(args, runtime = null) {
 }
 
 async function executeArtifactAuto(args, artifactOverride = null, runtime = null, onProgress = null) {
-  const sourceContext = args.context ?? resolveWrapperContext(args);
+  const sourceContext = args.context ?? (args.dryRun
+    ? resolveWrapperDryRunContext(args)
+    : resolveWrapperContext(args));
   const artifact = artifactOverride ?? readRunArtifact({ dir: args.dir, context: sourceContext, run: args.run });
   const state = loadWrapperState(args.dir, sourceContext);
   const wrapperConfig = loadWrapperConfig(args.dir);
@@ -890,9 +908,11 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
     wrapperConfig
   });
   const decision = decideWrapperAction({ artifact, state, sameSession: true, preferBoundaryAction: true, context: sourceContext });
-  const context = executionContextFor({ dir: args.dir, sourceContext, decision });
+  const context = executionContextFor({ dir: args.dir, sourceContext, decision, dryRun: args.dryRun });
   onProgress?.(`continuation run=${artifact.relativeRunPath} | gate=${artifact.currentGate ?? "unknown"} | phase=${artifact.currentPhaseWave ?? "unknown"} | handoff=${decision.handoffAction ?? "launch-task"}`);
-  ensureOutputPath(args.outputLastMessage);
+  if (!args.dryRun) {
+    ensureOutputPath(args.outputLastMessage);
+  }
   const routed = await executeRoutedDecision({
     dir: args.dir,
     artifact,
@@ -930,12 +950,14 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
     runtime.context = ownerContext;
   }
   const ownedArtifact = execution.reloaded ?? artifact;
-  const nextState = saveWrapperState(args.dir, state, {
-    artifact: ownedArtifact,
-    decision: routed.decision,
-    execution,
-    context: ownerContext
-  });
+  const nextState = args.dryRun
+    ? null
+    : saveWrapperState(args.dir, state, {
+        artifact: ownedArtifact,
+        decision: routed.decision,
+        execution,
+        context: ownerContext
+      });
   const artifactSnapshot = buildArtifactSnapshot(artifact);
   return {
     artifact: ownedArtifact,
@@ -946,7 +968,7 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
       artifact,
       decision: routed.decision,
       execution,
-      wrapperStatePath: nextState.path,
+      wrapperStatePath: nextState?.path ?? null,
       artifactSnapshot
     })
   };
@@ -1268,11 +1290,8 @@ async function runNativeChatShell(args) {
       }
 
       const minIndex = session.observer.events.length;
-      const taskWillAwaitPromotion = session.ownerContext?.kind === "provisional";
       await session.task(decision.prompt);
-      if (!taskWillAwaitPromotion) {
-        await waitForTurnSettled(session.observer, minIndex, 60 * 60 * 1000);
-      }
+      await waitForTurnSettled(session.observer, minIndex, 60 * 60 * 1000);
       if (session.promotionError) {
         throw session.promotionError;
       }
@@ -2096,7 +2115,7 @@ async function main() {
         return;
       }
 
-      const context = resolveWrapperContext(args);
+      const context = args.dryRun ? resolveWrapperDryRunContext(args) : resolveWrapperContext(args);
       const execution = await executeArtifactAuto({ ...args, context }, null, runtime);
       const response = await maybeFollowAuto(args, {
         artifactBeforeTurn: execution.artifact,
@@ -2110,7 +2129,7 @@ async function main() {
     }
   }
 
-  const sourceContext = resolveWrapperContext(args);
+  const sourceContext = args.dryRun ? resolveWrapperDryRunContext(args) : resolveWrapperContext(args);
   const artifact = readRunArtifact({ dir: args.dir, context: sourceContext, run: args.run });
   const state = loadWrapperState(args.dir, sourceContext);
   const wrapperConfig = loadWrapperConfig(args.dir);
@@ -2133,8 +2152,10 @@ async function main() {
     }
     case "start":
     case "continue": {
-      const context = executionContextFor({ dir: args.dir, sourceContext, decision });
-      ensureOutputPath(args.outputLastMessage);
+      const context = executionContextFor({ dir: args.dir, sourceContext, decision, dryRun: args.dryRun });
+      if (!args.dryRun) {
+        ensureOutputPath(args.outputLastMessage);
+      }
       const routed = await executeRoutedDecision({
         dir: args.dir,
         artifact,
@@ -2154,12 +2175,14 @@ async function main() {
       const execution = routed.execution;
       const ownerContext = execution.context ?? context;
       const ownedArtifact = execution.reloaded ?? artifact;
-      const nextState = saveWrapperState(args.dir, state, {
-        artifact: ownedArtifact,
-        decision: routed.decision,
-        execution,
-        context: ownerContext
-      });
+      const nextState = args.dryRun
+        ? null
+        : saveWrapperState(args.dir, state, {
+            artifact: ownedArtifact,
+            decision: routed.decision,
+            execution,
+            context: ownerContext
+          });
       const response = {
         ...execution,
         run: artifact.relativeRunPath,
@@ -2172,7 +2195,7 @@ async function main() {
         sandboxMode: routed.decision.policy?.sandboxMode ?? execution.sandboxMode ?? null,
         bypassApprovalsAndSandbox: routed.decision.policy?.bypassApprovalsAndSandbox ?? execution.bypassApprovalsAndSandbox ?? false,
         decision: routed.decision.mode,
-        wrapperStatePath: nextState.path,
+        wrapperStatePath: nextState?.path ?? null,
         sessionStrategy: routed.decision.sessionStrategy,
         handoffAction: routed.decision.handoffAction,
         nativeThreadAction: routed.decision.nativeThreadAction,
