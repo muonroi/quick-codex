@@ -6,6 +6,7 @@ import {
   buildReviewerAssignments,
   parseReviewerPanels,
   renderReviewerPanelSection,
+  reviewedArtifactDigest,
   reviewerGateViolation
 } from "../lib/wrapper/reviewer-panel.js";
 
@@ -67,11 +68,17 @@ test("a parent disposition may resolve a non-pass verdict but unfinished reviewe
 });
 
 test("reviewer gate violation is strict for panel-aware artifacts and permissive for legacy artifacts", () => {
-  const reviewers = complete(buildReviewerAssignments({ gate: "plan-check" }));
   const metadata = {
     hasReviewerPanelSection: true,
-    reviewerPanels: [{ gate: "plan-check", reviewers }]
+    reviewerPanels: []
   };
+  const artifactDigest = reviewedArtifactDigest(metadata, "plan-check");
+  const reviewers = complete(buildReviewerAssignments({ gate: "plan-check" })).map((reviewer) => ({
+    ...reviewer,
+    artifactDigest,
+    resultDigest: artifactDigest
+  }));
+  metadata.reviewerPanels = [{ gate: "plan-check", artifactDigest, reviewers }];
   assert.equal(reviewerGateViolation(metadata, "plan-check"), null);
 
   metadata.reviewerPanels[0].reviewers[2] = {
@@ -83,6 +90,33 @@ test("reviewer gate violation is strict for panel-aware artifacts and permissive
   assert.equal(reviewerGateViolation({ hasReviewerPanelSection: false }, "plan-check"), null);
 });
 
+test("completed reviewer results become stale when the reviewed plan or evidence changes", () => {
+  const metadata = {
+    hasReviewerPanelSection: true,
+    verifiedPlan: "P1 / W1: implement the reviewed plan",
+    evidenceBasis: "repository evidence A",
+    verificationLedger: "verify-wave P1/W1 -> pass",
+    reviewerPanels: []
+  };
+  const artifactDigest = reviewedArtifactDigest(metadata, "plan-check", "plan");
+  const reviewers = complete(buildReviewerAssignments({ gate: "plan-check" })).map((reviewer) => ({
+    ...reviewer,
+    artifactDigest,
+    resultDigest: artifactDigest
+  }));
+  metadata.reviewerPanels = [{ gate: "plan-check", checkpoint: "plan", artifactDigest, reviewers }];
+
+  assert.equal(reviewerGateViolation(metadata, "plan-check", "plan"), null);
+  assert.match(
+    reviewerGateViolation({ ...metadata, verifiedPlan: "P1 / W1: changed after review" }, "plan-check", "plan"),
+    /reviewed artifact digest is stale/i
+  );
+  assert.match(
+    reviewerGateViolation({ ...metadata, evidenceBasis: "repository evidence B" }, "plan-check", "plan"),
+    /reviewed artifact digest is stale/i
+  );
+});
+
 test("reviewer count is explicit, unique, and never smaller than two", () => {
   assert.throws(() => buildReviewerAssignments({ gate: "plan-check", count: 1 }), /at least 2/i);
   const panel = buildReviewerAssignments({ gate: "plan-check", count: 4 });
@@ -92,9 +126,13 @@ test("reviewer count is explicit, unique, and never smaller than two", () => {
 test("reviewer panel markdown round-trips bounded scopes containing table separators", () => {
   const reviewers = buildReviewerAssignments({ gate: "plan-check" });
   reviewers[0] = { ...reviewers[0], scope: "inspect lib | tests" };
-  const text = `## Reviewer Panels\n${renderReviewerPanelSection([{ gate: "plan-check", reviewers }]).join("\n")}\n\n## Next\n`;
+  const artifactDigest = "sha256:reviewed-artifact";
+  reviewers[0] = { ...reviewers[0], resultDigest: artifactDigest };
+  const text = `## Reviewer Panels\n${renderReviewerPanelSection([{ gate: "plan-check", artifactDigest, reviewers }]).join("\n")}\n\n## Next\n`;
   const parsed = parseReviewerPanels(text);
   assert.equal(parsed.reviewerPanels[0].reviewers[0].scope, "inspect lib | tests");
+  assert.equal(parsed.reviewerPanels[0].artifactDigest, artifactDigest);
+  assert.equal(parsed.reviewerPanels[0].reviewers[0].resultDigest, artifactDigest);
   const crlf = parseReviewerPanels(text.replaceAll("\n", "\r\n"));
   assert.equal(crlf.hasReviewerPanelSection, true);
   assert.equal(crlf.reviewerPanels[0].reviewers.length, 3);

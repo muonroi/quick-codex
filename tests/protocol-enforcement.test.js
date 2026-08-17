@@ -9,7 +9,7 @@ import { resolveSessionContext } from "../lib/wrapper/session-context.js";
 import { loadWrapperState, saveWrapperState } from "../lib/wrapper/state.js";
 import { inspectProjectBootstrap } from "../lib/wrapper/bootstrap.js";
 import { readRunArtifact } from "../lib/wrapper/run-file.js";
-import { buildReviewerAssignments } from "../lib/wrapper/reviewer-panel.js";
+import { buildReviewerAssignments, reviewedArtifactDigest } from "../lib/wrapper/reviewer-panel.js";
 
 function makeDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qc-protocol-"));
@@ -92,8 +92,9 @@ test("flow bootstrap keeps identical task slugs inside their owner contexts", ()
 test("panel-aware flow cannot enter execute until every plan-check reviewer clears", () => {
   const dir = makeDir();
   const fresh = enforceQcFlowProtocol({ dir, task: "Plan storage" }).artifact;
+  const { text: _freshText, ...freshMetadata } = fresh;
   const executeReady = {
-    ...fresh,
+    ...freshMetadata,
     currentGate: "execute",
     deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |",
     verifiedPlan: "P1 / W1: implement storage with focused verification"
@@ -103,39 +104,58 @@ test("panel-aware flow cannot enter execute until every plan-check reviewer clea
   assert.equal(blocked.effectiveGate, "plan-check");
   assert.match(blocked.gateReason, /Reviewer panel for plan-check is required/);
 
+  const artifactDigest = reviewedArtifactDigest(executeReady, "plan-check");
   const reviewers = buildReviewerAssignments({ gate: "plan-check" }).map((reviewer) => ({
     ...reviewer,
     status: "completed",
     verdict: "pass",
     evidenceRef: `${reviewer.id}.md`,
-    disposition: "accepted"
+    disposition: "accepted",
+    artifactDigest,
+    resultDigest: artifactDigest
   }));
   const allowed = enforceQcFlowProtocol({
     dir,
     task: "Plan storage",
-    activeArtifact: { ...executeReady, reviewerPanels: [{ gate: "plan-check", reviewers }] }
+    activeArtifact: { ...executeReady, reviewerPanels: [{ gate: "plan-check", artifactDigest, reviewers }] }
   });
   assert.equal(allowed.effectiveGate, "execute");
+
+  const stale = enforceQcFlowProtocol({
+    dir,
+    task: "Plan storage",
+    activeArtifact: { ...executeReady, verifiedPlan: "P1 / W1: changed after review", reviewerPanels: [{ gate: "plan-check", artifactDigest, reviewers }] }
+  });
+  assert.equal(stale.effectiveGate, "plan-check");
+  assert.match(stale.gateReason, /reviewed artifact digest is stale/i);
 });
 
 test("session locks retain only their own session flow pointers and reject legacy handoffs", () => {
   const dir = makeDir();
   const context = resolveSessionContext({ dir, sessionId: "thread-a" });
   const flow = enforceQcFlowProtocol({ dir, context, task: "Plan storage" }).artifact;
-  const trustedFlow = {
-    ...flow,
+  const { text: _flowText, ...flowMetadata } = flow;
+  const trustedFlowWithoutPanel = {
+    ...flowMetadata,
     relativeRunPath: ".quick-codex-flow/legacy.md",
     currentGate: "execute",
     verifiedPlan: "P1 / W1: perform the planned change",
-    deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |",
+    deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |"
+  };
+  const artifactDigest = reviewedArtifactDigest(trustedFlowWithoutPanel, "plan-check");
+  const trustedFlow = {
+    ...trustedFlowWithoutPanel,
     reviewerPanels: [{
       gate: "plan-check",
+      artifactDigest,
       reviewers: buildReviewerAssignments({ gate: "plan-check" }).map((reviewer) => ({
         ...reviewer,
         status: "completed",
         verdict: "pass",
         evidenceRef: `${reviewer.id}.md`,
-        disposition: "accepted"
+        disposition: "accepted",
+        artifactDigest,
+        resultDigest: artifactDigest
       }))
     }]
   };

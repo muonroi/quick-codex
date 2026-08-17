@@ -20,6 +20,8 @@ import {
 } from "./test-helpers.js";
 
 import { resolveSessionContext } from "../lib/wrapper/session-context.js";
+import { readRunArtifact } from "../lib/wrapper/run-file.js";
+import { reviewerGateViolation } from "../lib/wrapper/reviewer-panel.js";
 
 const emptyReviewerPanels = `## Reviewer Panels
 Aggregate synthesis:
@@ -80,6 +82,25 @@ test("delegate-plan-check upgrades panel-aware artifacts to the default three-ro
   assert.match(fs.readFileSync(project.runPath, "utf8"), /\| plan-check \| plan \| plan-check-reviewer-3 \| adversarial-verification \|/);
 });
 
+test("delegate-goal-audit assigns phase-close and permits a reviewed nonfinal phase close", () => {
+  const project = makeProject(withReviewerPanels(independentPhaseRun));
+  const assigned = runCli(project.dir, "delegate-goal-audit", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md");
+  assert.equal(assigned.status, 0, assigned.stderr || assigned.stdout);
+  assert.match(assigned.stdout, /Assigned reviewer panel: phase-close/);
+  assert.doesNotMatch(fs.readFileSync(project.runPath, "utf8"), /\| feature-close \|/);
+
+  for (let index = 1; index <= 3; index += 1) {
+    const completed = runCli(project.dir, "complete-reviewer", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--gate", "phase-close", "--reviewer", `phase-close-reviewer-${index}`, "--status", "completed", "--verdict", "pass", "--evidence-ref", `phase-review-${index}.md`, "--disposition", "accepted");
+    assert.equal(completed.status, 0, completed.stderr || completed.stdout);
+  }
+
+  const closed = runCli(project.dir, "close-wave", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--phase-done");
+  assert.equal(closed.status, 0, closed.stderr || closed.stdout);
+  assert.match(fs.readFileSync(project.runPath, "utf8"), /Current gate:\n- phase-close/);
+  const closedArtifact = readRunArtifact({ dir: project.dir, run: ".quick-codex-flow/sample.md" });
+  assert.equal(reviewerGateViolation(closedArtifact, "phase-close", "P1/W1"), null);
+});
+
 test("a session-owned reviewer panel emits blind read-only prompts and records each result independently", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-reviewer-panel-"));
   const context = resolveSessionContext({ dir, sessionId: "thread-review" });
@@ -114,9 +135,23 @@ test("a session-owned reviewer panel emits blind read-only prompts and records e
   assert.match(status.stdout, /Reviewer panels: plan-check@plan: pass \(3\/3 completed\)/);
   const resume = runCli(dir, "resume", "--session", "thread-review", "--dir", dir, "--run", "runs/sample.md");
   assert.match(resume.stdout, /Reviewer panels: plan-check@plan: pass \(3\/3 completed\)/);
+  const protocolArtifact = readRunArtifact({ dir, context, run: "runs/sample.md" });
+  assert.equal(reviewerGateViolation(protocolArtifact, "plan-check", "plan"), null);
   const doctor = runCli(dir, "doctor-flow", "--session", "thread-review", "--dir", dir, "--run", "runs/sample.md");
   assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
   assert.match(doctor.stdout, /PASS: Required reviewer panels cleared/);
+});
+
+test("doctor fails at the plan-check gate when the required panel is missing", () => {
+  const planCheckRun = withReviewerPanels(baseRun)
+    .replace("Current gate:\n- execute", "Current gate:\n- plan-check")
+    .replaceAll("- Current gate: execute", "- Current gate: plan-check");
+  const project = makeProject(planCheckRun);
+  const doctor = runCli(project.dir, "doctor-flow", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md");
+
+  assert.notEqual(doctor.status, 0, doctor.stdout);
+  assert.match(doctor.stdout, /FAIL: Required reviewer panels cleared/);
+  assert.match(doctor.stdout, /Reviewer panel for plan-check is required/);
 });
 
 test("close-wave requires the gate-specific panel as well as deterministic verification", () => {
@@ -138,6 +173,12 @@ test("close-wave requires the gate-specific panel as well as deterministic verif
       const completed = runCli(project.dir, "complete-reviewer", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", "--gate", entry.gate, "--reviewer", `${entry.gate}-reviewer-${index}`, "--status", "completed", "--verdict", "pass", "--evidence-ref", `review-${index}.md`, "--disposition", "accepted");
       assert.equal(completed.status, 0, completed.stderr || completed.stdout);
     }
+    const reviewedText = fs.readFileSync(project.runPath, "utf8");
+    fs.writeFileSync(project.runPath, reviewedText.replace("first-check)", "first-check changed-after-review)"), "utf8");
+    const stale = runCli(project.dir, "close-wave", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", ...entry.args);
+    assert.notEqual(stale.status, 0);
+    assert.match(stale.stderr, /reviewed artifact digest is stale/i);
+    fs.writeFileSync(project.runPath, reviewedText, "utf8");
     const closed = runCli(project.dir, "close-wave", "--legacy", "--dir", project.dir, "--run", ".quick-codex-flow/sample.md", ...entry.args);
     assert.equal(closed.status, 0, closed.stderr || closed.stdout);
   }

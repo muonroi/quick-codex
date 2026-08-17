@@ -14,6 +14,7 @@ import {
   buildReviewerAssignments,
   parseReviewerPanels,
   renderReviewerPanelSection,
+  reviewedArtifactDigest,
   reviewerGateViolation,
   reviewerPanelForGate,
   reviewerPanelSummary
@@ -1512,7 +1513,7 @@ function delegationSummary(metadata) {
 function requiredReviewerPanelViolations(metadata) {
   if (!metadata?.hasReviewerPanelSection) return [];
   const gates = [];
-  if (gateRank(metadata.currentGate) > gateRank("plan-check")) gates.push("plan-check");
+  if (gateRank(metadata.currentGate) >= gateRank("plan-check")) gates.push("plan-check");
   if (String(metadata.currentGate ?? "").trim().toLowerCase() === "phase-close") gates.push("phase-close");
   if (String(metadata.currentGate ?? "").trim().toLowerCase() === "done") gates.push("feature-close");
   return gates
@@ -3096,7 +3097,7 @@ function assignDelegationCommand({ dir, run, context, type, question, scope, foc
       dir,
       run,
       context,
-      gate: type === "plan-check" ? "plan-check" : "feature-close",
+      gate: config.requiredGate,
       count: 3,
       focus,
       scope
@@ -3254,23 +3255,27 @@ function assignReviewerPanelCommand({ dir, run, context, gate, count, focus, sco
   }
 
   const boundedScope = normalizeWhitespace(scope ?? focus ?? metadata.goal ?? "the active gate and its deterministic evidence");
+  const artifactDigest = reviewedArtifactDigest(metadata, reviewerGate, checkpoint);
   const reviewers = buildReviewerAssignments({ gate: reviewerGate, count }).map((reviewer) => ({
     ...reviewer,
-    scope: `${reviewer.scope} Bounded source scope: ${boundedScope}`
+    scope: `${reviewer.scope} Bounded source scope: ${boundedScope}`,
+    artifactDigest,
+    resultDigest: "pending"
   }));
   const panels = [
     ...(metadata.reviewerPanels ?? []).filter((panel) => panel.legacy || panel.gate !== reviewerGate || panel.checkpoint !== checkpoint),
-    { gate: reviewerGate, checkpoint, legacy: false, reviewers }
+    { gate: reviewerGate, checkpoint, artifactDigest, legacy: false, reviewers }
   ];
   writeReviewerPanels(runPath, metadata.text, panels);
 
   const ownerSelector = ownerSelectorForPrompt(context);
   console.log(`Assigned reviewer panel: ${reviewerGate}`);
   console.log(`Checkpoint: ${checkpoint}`);
+  console.log(`Reviewed artifact digest: ${artifactDigest}`);
   console.log(`Reviewers: ${reviewers.length}`);
   for (const reviewer of reviewers) {
     const recordCommand = `quick-codex complete-reviewer --dir ${dir} --run ${relativeRunPath}${ownerSelector} --gate ${reviewerGate} --reviewer ${reviewer.id} --status completed --verdict pass --evidence-ref \"...\" --disposition accepted`;
-    console.log(`Reviewer prompt: Read-only independent reviewer ${reviewer.id} (${reviewer.role}). Owner artifact: --run ${relativeRunPath}${ownerSelector}. Scope: ${reviewer.scope} Use the same bounded artifact and source evidence as every panel member, but work blind and independently; you cannot see peer conclusions. Hard gates: every distinct reviewer must complete, majority is never sufficient, every block or partial must be resolved or explicitly waived by the parent, and deterministic verification evidence remains required. Do not edit the artifact and do not run its parent record command. Return verdict, evidence reference, blockers, and suggested disposition to the parent. Parent record command: ${recordCommand}`);
+    console.log(`Reviewer prompt: Read-only independent reviewer ${reviewer.id} (${reviewer.role}). Owner artifact: --run ${relativeRunPath}${ownerSelector}. Reviewed artifact digest: ${artifactDigest}. Scope: ${reviewer.scope} Use the same bounded artifact and source evidence as every panel member, but work blind and independently; you cannot see peer conclusions. Hard gates: every distinct reviewer must complete, majority is never sufficient, every block or partial must be resolved or explicitly waived by the parent, and deterministic verification evidence remains required. Do not edit the artifact and do not run its parent record command. Return verdict, evidence reference, blockers, and suggested disposition to the parent. Parent record command: ${recordCommand}`);
   }
 }
 
@@ -3294,6 +3299,10 @@ function completeReviewerCommand({ dir, run, context, gate, reviewer, delegation
   const checkpoint = reviewerCheckpointForMetadata(metadata, reviewerGate);
   const panel = reviewerPanelForGate(metadata, reviewerGate, checkpoint);
   if (!panel || panel.legacy) throw new Error(`No active multi-reviewer panel found for ${reviewerGate}`);
+  const currentDigest = reviewedArtifactDigest(metadata, reviewerGate, checkpoint);
+  if (!panel.artifactDigest || panel.artifactDigest !== currentDigest) {
+    throw new Error(`Reviewer panel for ${reviewerGate} reviewed artifact digest is stale; assign a new panel`);
+  }
   const rowIndex = panel.reviewers.findIndex((row) => row.id === reviewer);
   if (rowIndex === -1) throw new Error(`Reviewer ${reviewer} is not assigned to ${reviewerGate}`);
   const reviewers = [...panel.reviewers];
@@ -3302,7 +3311,9 @@ function completeReviewerCommand({ dir, run, context, gate, reviewer, delegation
     status,
     verdict: resultVerdict,
     evidenceRef: normalizeWhitespace(evidenceRef),
-    disposition: resultDisposition
+    disposition: resultDisposition,
+    artifactDigest: panel.artifactDigest,
+    resultDigest: currentDigest
   };
   const panels = metadata.reviewerPanels.map((entry) => (
     entry.gate === reviewerGate && entry.checkpoint === checkpoint ? { ...entry, reviewers } : entry
@@ -4672,7 +4683,7 @@ function runMetadataStruct(runPath, text) {
       scope: planCheckDelegation.assignment
     },
     {
-      gate: "feature-close",
+      gate: "phase-close",
       status: goalAuditDelegation.delegateStatus,
       verdict: goalAuditDelegation.resultVerdict,
       scope: goalAuditDelegation.assignment
