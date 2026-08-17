@@ -159,3 +159,43 @@ Result before the production fix: the regression failed because `capture-hooks` 
 ### Remaining boundaries
 
 - No Task 4 adapter lifecycle or Task 5 reviewer-panel behavior changed.
+
+## Review Fix Round 3
+
+### Implementation SHA
+
+- `78a0def5cce869293160e6d017b1a9a3d343299c` — `fix: bind normalized trusted session identity`
+
+### Critical issue closed
+
+- After CLI precedence selects and normalizes a trusted identity, the selected value is now passed to `resolveSessionContext` as an explicit `sessionId` with the inspected owner nonce. The lower layer no longer reinterprets the unnormalized process environment for this path.
+- With an existing `thread-b` namespace, `CODEX_THREAD_ID=""`, and `CODEX_SESSION_ID="thread-b"`, `status` now selects `thread-b` successfully.
+- The corresponding unknown-target case remains fail-closed and cannot fall through to a sole unrelated namespace.
+
+### RED evidence
+
+Command:
+
+```sh
+node --test --test-name-pattern="empty primary trusted identity selects an existing fallback namespace" tests/session-concurrency.test.js
+```
+
+Result before the production fix: the regression failed with status 1 and `No session identity is available`, proving the normalized identity was lost at the resolver boundary.
+
+### GREEN evidence
+
+- Existing-target, unknown-target, and prior unknown-ambient regressions: 3 passed, 0 failed.
+- Task 3 focused suite: 55 passed, 0 failed.
+- Full `npm test`: 83 passed, 0 failed.
+- `npm run lint:package`: passed.
+- `node --check bin/quick-codex.js`: passed.
+- `git diff --check`: passed.
+
+### Files changed
+
+- `bin/quick-codex.js`
+- `tests/session-concurrency.test.js`
+
+### Remaining boundaries
+
+- No Task 4 adapter lifecycle or Task 5 reviewer-panel behavior changed.
