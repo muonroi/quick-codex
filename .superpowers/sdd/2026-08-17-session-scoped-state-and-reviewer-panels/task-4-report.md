@@ -132,3 +132,56 @@ Results:
 
 - Changed only the wrapper run entry, native/app-server lifecycle code, and Task 4 regression tests.
 - Reviewer panels, docs, migration behavior, and unrelated state contracts remain unchanged.
+
+## Review Fix Round 2
+
+### Implementation SHA
+
+- `6a6d6058a16571ed76b79d1cac8b564e5014b865` — `fix: finalize session owners before wrapper work`
+
+### Defects Closed
+
+- The round-1 native submit-then-promote contract is superseded. `NativeRemoteSession.task()` now requires an observer-trusted session ID and successful promotion before `sendNativeTaskWithRetry` can write the task. Missing IDs mark the pending namespace recoverable and reject with zero controller writes; owner collisions also reject before submission while preserving both namespaces.
+- Resume and compact oversized fallbacks invoke a pending-owner allocator before their fresh `thread/start` request. When that request returns no ID, the child—not the final source—is marked recoverable.
+- Dry-run ownership is read-only across `run`, `auto --task`, `start`, and `continue`. Execution-context creation, output directory creation, and wrapper-state persistence are all skipped while source artifacts remain available for planning output.
+
+### RED Evidence
+
+- Native missing-ID regression rejected only after one controller write, proving Quick Codex work was submitted before ownership existed.
+- Direct resume and compact fallback regressions each observed zero pending children at the moment `thread/start` was requested.
+- The real CLI matrix showed `auto --task --dry-run` created a pending manifest, while `start --dry-run` and `continue --dry-run` created pending manifests plus wrapper state and output directories. `run --dry-run` was already clean from round 1.
+
+The pre-observed native owner and native collision tests were added as contract characterizations: current promotion/collision primitives already passed them, while the missing-ID test killed the unsafe submission path.
+
+### GREEN Evidence
+
+Focused verification:
+
+```sh
+node --test tests/wrapper-session-promotion.test.js tests/protocol-enforcement.test.js
+```
+
+Result: 36 passed, 0 failed (including four dry-run command subtests).
+
+Full verification:
+
+```sh
+node --check bin/quick-codex-wrap.js
+node --check lib/wrapper/app-server-client.js
+node --check lib/wrapper/native-session.js
+npm run lint:package
+npm test
+git diff --check
+```
+
+Results:
+
+- Syntax checks: passed.
+- Package lint: `PASS: skills package shape looks valid`.
+- Full suite: 108 passed, 0 failed (5.74 seconds).
+- Diff whitespace check: passed.
+
+### Scope
+
+- Changed only wrapper dry-run execution routing, native pre-task ownership, app-server fallback ownership, and targeted Task 4 tests.
+- Prior source-copy, promotion recovery, collision semantics, reviewer panels, docs, and migration behavior remain unchanged.
