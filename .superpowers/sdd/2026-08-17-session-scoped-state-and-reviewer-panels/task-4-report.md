@@ -185,3 +185,69 @@ Results:
 
 - Changed only wrapper dry-run execution routing, native pre-task ownership, app-server fallback ownership, and targeted Task 4 tests.
 - Prior source-copy, promotion recovery, collision semantics, reviewer panels, docs, and migration behavior remain unchanged.
+
+## Review Fix Round 3
+
+### Implementation SHA
+
+- `7e4cc68` — `fix: establish native owner before task submission`
+
+### Architecture Rationale
+
+- A native prompt-ready event proves only that the TUI can accept input; it does not prove which Codex thread owns wrapper state. The supported `/status` command is now an explicit identity handshake before a provisional native session may submit user work.
+- The observer recognizes the `Session ID:` and `Chat ID:` labels emitted by current Codex TUI status output, while retaining the existing `codex resume <id>` parser for compatibility. A `/status` handshake accepts only an identity-bearing event emitted after that command was injected; it does not reuse a stale observer snapshot.
+- Opportunistic promotion from arbitrary `turn-settled` events was removed. Promotion is performed only by the explicit ownership handshake, so neither an earlier task event nor `/clear` output can silently bind a pending namespace.
+- `/clear` is a thread boundary: the session snapshots the old final owner, allocates and switches to a provisional child before injecting `/clear`, waits for the fresh prompt, then runs `/status` and promotes/forks the child before subsequent user work. This orders wrapper ownership independently from native rendering timing.
+- Missing status identity marks the pending child `missing-final-id`; promotion collisions retain `promotion-failed`. Both paths stop before user-task submission and preserve source and occupied final namespaces.
+
+### RED Evidence
+
+The native-focused test run failed 5 regressions before implementation:
+
+- a fresh native task rejected without attempting `/status`;
+- missing-ID and collision paths made zero status-proof writes;
+- `/clear` was injected while `ownerContext` still pointed at the old final namespace;
+- `/clear` did not allocate/fork a child or reject a destination collision.
+
+A strengthened `/clear` timing test then failed because `/status` was injected immediately after the new ID appeared, before the fresh prompt became ready. The guarded clear path now requires that follow-up prompt before identity proof.
+
+### GREEN Evidence
+
+Native lifecycle verification:
+
+```sh
+node --test --test-name-pattern='native' tests/wrapper-session-promotion.test.js
+```
+
+Result: 7 passed, 0 failed.
+
+Focused Task 4 verification:
+
+```sh
+node --test tests/wrapper-session-promotion.test.js tests/protocol-enforcement.test.js
+```
+
+Result: 38 passed, 0 failed (including four dry-run command subtests).
+
+Full verification:
+
+```sh
+node --check lib/wrapper/native-session.js
+node --check tests/wrapper-session-promotion.test.js
+npm run lint:package
+npm test
+git diff --check
+```
+
+Results:
+
+- Syntax checks: passed.
+- Package lint: `PASS: skills package shape looks valid`.
+- Full suite: 110 passed, 0 failed (5.75 seconds).
+- Diff whitespace check: passed.
+
+### Scope
+
+- Changed only the native wrapper lifecycle and targeted Task 4 promotion tests.
+- Round-2 dry-run and app-server recovery behavior remained green.
+- Reviewer panels, migration behavior, and unrelated documentation were not changed.
