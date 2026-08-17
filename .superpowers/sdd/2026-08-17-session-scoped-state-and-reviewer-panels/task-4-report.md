@@ -317,3 +317,47 @@ Results:
 
 - Changed only native lifecycle/status parsing, one session-context resolver for observer-trusted resume targets, and targeted Task 4 regression tests.
 - Reviewer panels, skill docs, CLI migration, app-server behavior, and Task 5 onward were not changed.
+
+## Review Fix Round 5
+
+### Implementation SHA
+
+- `3caa4b1` — `fix: harden native status ownership proof`
+
+### Adjudication
+
+- Both remaining findings reproduced against `42315c3` and were valid.
+- A post-injection `turn-settled` event carrying `sessionId` could bypass the command-scoped status buffer and promote a stale owner before the real `/status` response arrived.
+- A labelled status identity completed proof immediately, so `sendNativeTaskWithRetry()` could reuse the stable prompt from before `/status` and submit user work before the status view restored a new prompt.
+
+### Defects Closed
+
+- Guarded `/status` no longer admits raw `turn-settled` events into its settlement predicate. Its identity is derived only from accumulated `native-output` after the `slash-injected` boundary and only from an explicit `Session ID:` or `Chat ID:` label.
+- Label parsing records an intermediate identity boundary instead of completing proof. The handshake settles only on a `prompt-ready` event whose event index is strictly newer than the identity-bearing output, preventing the next task from reusing a pre-status prompt.
+- Other guarded slash commands retain their existing `turn-settled` behavior; Task 5+ and non-native adapters are unchanged.
+
+### RED Evidence
+
+Targeted command:
+
+```sh
+node --test --test-name-pattern='stale post-injection turn-settled|prompt newer than its identity' tests/wrapper-session-promotion.test.js
+```
+
+Result before the production change: 0 passed, 2 failed.
+
+- The stale-event regression promoted `25252525-…` instead of the labelled status owner `26262626-…`.
+- The prompt-boundary regression observed `identity, task, fresh-prompt` instead of the required `identity, fresh-prompt, task` order.
+
+### GREEN Evidence
+
+- Exact regressions: 2 passed, 0 failed.
+- Native lifecycle subset: 16 passed, 0 failed.
+- Focused Task 4/protocol suite: 47 passed, 0 failed.
+- Full suite: 119 passed, 0 failed (5.76 seconds).
+- `node --check` for the implementation and test file, package lint, and `git diff --check`: passed.
+
+### Scope
+
+- Changed only `lib/wrapper/native-session.js`, `tests/wrapper-session-promotion.test.js`, and this Task 4 report.
+- Existing final-owner mismatch, collision recovery, `/clear`, `/resume`, app-server, dry-run, migration, and reviewer-panel behavior remain outside this fix.
