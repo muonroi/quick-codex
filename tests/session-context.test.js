@@ -240,3 +240,103 @@ test("path locks preserve a fresh recovery claim until metadata publication grac
   );
   assert.equal(fs.existsSync(recoveryPath), true);
 });
+
+test("recovery cleanup cannot race an unpublished claim into a live claim before deletion", async () => {
+  const dir = makeProject();
+  const filePath = path.join(dir, "state.json");
+  const lockPath = `${filePath}.lock`;
+  const recoveryPath = `${lockPath}.recovery`;
+  fs.writeFileSync(lockPath, `${JSON.stringify({ pid: 999999999, nonce: "abandoned" })}\n`, "utf8");
+
+  const [{ withPathLock: publishWithPathLock }, { withPathLock: cleanWithPathLock }] = await Promise.all([
+    import("../lib/wrapper/atomic-fs.js?publication-owner"),
+    import("../lib/wrapper/atomic-fs.js?publication-cleaner")
+  ]);
+  const open = fs.promises.open;
+  const link = fs.promises.link;
+  const unlink = fs.promises.unlink;
+  let pausePublication;
+  const publicationPaused = new Promise((resolve) => {
+    pausePublication = resolve;
+  });
+  let resumePublication;
+  const publicationMayContinue = new Promise((resolve) => {
+    resumePublication = resolve;
+  });
+  let markPublicationAttempted;
+  const publicationAttempted = new Promise((resolve) => {
+    markPublicationAttempted = resolve;
+  });
+  let publicationIsPaused = false;
+  let cleanupInterleaved = false;
+  let cleanupObservedLiveMetadata = false;
+  let cleanerEntered = false;
+
+  fs.promises.open = async (target, flags, ...args) => {
+    const handle = await open(target, flags, ...args);
+    if (target === recoveryPath && flags === "wx" && !publicationIsPaused) {
+      publicationIsPaused = true;
+      const writeFile = handle.writeFile.bind(handle);
+      handle.writeFile = async (...writeArgs) => {
+        pausePublication();
+        await publicationMayContinue;
+        try {
+          return await writeFile(...writeArgs);
+        } finally {
+          markPublicationAttempted();
+        }
+      };
+    }
+    return handle;
+  };
+  fs.promises.link = async (source, target) => {
+    if (target === recoveryPath && !publicationIsPaused) {
+      publicationIsPaused = true;
+      pausePublication();
+      await publicationMayContinue;
+      try {
+        return await link(source, target);
+      } finally {
+        markPublicationAttempted();
+      }
+    }
+    return link(source, target);
+  };
+  fs.promises.unlink = async (target, ...args) => {
+    if (target === recoveryPath && !cleanupInterleaved) {
+      cleanupInterleaved = true;
+      resumePublication();
+      await publicationAttempted;
+      try {
+        const metadata = JSON.parse(fs.readFileSync(recoveryPath, "utf8"));
+        cleanupObservedLiveMetadata = metadata.pid === process.pid && typeof metadata.nonce === "string";
+      } catch {
+        // A malformed claim is still safe to reclaim.
+      }
+    }
+    return unlink(target, ...args);
+  };
+
+  try {
+    const publisher = publishWithPathLock(filePath, async () => {}, { retries: 0 });
+    await publicationPaused;
+    if (!fs.existsSync(recoveryPath)) {
+      fs.writeFileSync(recoveryPath, "", "utf8");
+    }
+    const staleTime = new Date(Date.now() - 2_000);
+    fs.utimesSync(recoveryPath, staleTime, staleTime);
+
+    const cleaner = cleanWithPathLock(filePath, async () => {
+      cleanerEntered = true;
+    }, { retries: 0 });
+    await Promise.allSettled([publisher, cleaner]);
+  } finally {
+    resumePublication();
+    fs.promises.open = open;
+    fs.promises.link = link;
+    fs.promises.unlink = unlink;
+  }
+
+  assert.equal(cleanupObservedLiveMetadata, false);
+  assert.equal(cleanerEntered, true);
+});
