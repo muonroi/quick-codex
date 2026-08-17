@@ -251,3 +251,69 @@ Results:
 - Changed only the native wrapper lifecycle and targeted Task 4 promotion tests.
 - Round-2 dry-run and app-server recovery behavior remained green.
 - Reviewer panels, migration behavior, and unrelated documentation were not changed.
+
+## Review Fix Round 4
+
+### Implementation SHA
+
+- `509b002` — `fix: verify native thread ownership before work`
+
+### Mismatch and Transition Policy
+
+- A final `SessionContext` is now a strict expected owner. Native command construction explicitly launches `codex ... resume <owner-id>`, but command selection is not accepted as proof: the first user task is blocked until a post-injection `/status` reports the same ID.
+- If that status reports another ID, the session records a terminal ownership error and fails closed before user work or namespace mutation. This covers native continuation and an explicit `--session` context without silently rebinding or writing the selected source namespace.
+- Fresh native work continues to use a provisional context. Its post-injection status proof promotes/forks only after the observed ID is complete, preserving the existing provisional and `/clear` lifecycle.
+- `/resume` is a separate verified thread transition: it proves the current owner, executes the guarded resume, then issues a new `/status`. An explicit UUID must equal the observed target. Only then does the wrapper bind the existing target namespace (or materialize a new namespace for a previously unseen but observer-trusted resumed thread). A mismatch leaves both source and target bytes untouched and blocks later tasks.
+- Standalone session-owned native launches cannot auto-submit a CLI prompt; callers must use `NativeRemoteSession` so status proof precedes task submission.
+
+### Stream-Safe Status Proof
+
+- Each guarded `/status` owns an empty 8 KiB raw output buffer created after its `slash-injected` event.
+- Only `native-output` events newer than that boundary enter the buffer. The labelled `Session ID:` or `Chat ID:` plus UUID may span arbitrary PTY chunks, including a split UUID.
+- Pre-injection observer text and partial stale identities are never joined into the command-scoped proof buffer.
+
+### RED Evidence
+
+The first native-focused run reproduced five independent gaps:
+
+- an existing final owner submitted work without `/status`;
+- a final-owner mismatch submitted work instead of failing closed;
+- a split `Session ID:` and UUID timed out;
+- `/resume` neither verified nor rebound the target owner;
+- a final-owner native command did not include `resume <id>`.
+
+A self-review regression then proved that standalone final-owner launch still allowed a prompt to be submitted before status proof; that test failed with `Missing expected rejection` before the launch guard was added.
+
+### GREEN Evidence
+
+Focused Task 4 verification:
+
+```sh
+node --test tests/wrapper-session-promotion.test.js tests/protocol-enforcement.test.js
+```
+
+Result: 45 passed, 0 failed.
+
+Full verification:
+
+```sh
+node --check lib/wrapper/native-session.js
+node --check lib/wrapper/session-context.js
+node --check tests/wrapper-session-promotion.test.js
+npm run lint:package
+npm test
+git diff --check
+```
+
+Results:
+
+- Syntax checks: passed.
+- Package lint: `PASS: skills package shape looks valid`.
+- Full suite: 117 passed, 0 failed (5.72 seconds).
+- Diff whitespace check: passed.
+- The generated final-owner command shape was also accepted by the installed Codex CLI parser via `codex ... resume <id> --help`.
+
+### Scope
+
+- Changed only native lifecycle/status parsing, one session-context resolver for observer-trusted resume targets, and targeted Task 4 regression tests.
+- Reviewer panels, skill docs, CLI migration, app-server behavior, and Task 5 onward were not changed.
