@@ -105,6 +105,19 @@ test("an explicit run and session must name the same owner", () => {
   );
 });
 
+test("an explicit run binds the stored owner nonce when its session agrees", () => {
+  const dir = makeProject();
+  const context = resolveSessionContext({ dir, sessionId: "thread-a" });
+  const fromRun = resolveSessionContext({
+    dir,
+    run: path.join(context.root, "runs", "feature.md"),
+    sessionId: "thread-a"
+  });
+
+  assert.equal(fromRun.ownerNonce, context.ownerNonce);
+  assert.equal(fromRun.relativeRunPath, "runs/feature.md");
+});
+
 test("promotion refuses a final namespace owned by another nonce", () => {
   const dir = makeProject();
   const pending = createProvisionalContext({ dir });
@@ -173,10 +186,27 @@ test("path locks never reclaim a lock owned by a live process", async () => {
 test("path locks wait while another process holds the abandoned-lock recovery claim", async () => {
   const dir = makeProject();
   const filePath = path.join(dir, "state.json");
-  fs.writeFileSync(`${filePath}.lock.recovery`, "recovering\n", "utf8");
+  const recoveryPath = `${filePath}.lock.recovery`;
+  fs.writeFileSync(recoveryPath, `${JSON.stringify({ pid: process.pid, nonce: "live-recovery" })}\n`, "utf8");
 
   await assert.rejects(
     withPathLock(filePath, async () => {}, { retries: 0 }),
     { code: "EEXIST" }
   );
+  assert.equal(fs.existsSync(recoveryPath), true);
+});
+
+test("path locks reclaim an abandoned recovery claim", async () => {
+  const dir = makeProject();
+  const filePath = path.join(dir, "state.json");
+  const recoveryPath = `${filePath}.lock.recovery`;
+  fs.writeFileSync(recoveryPath, `${JSON.stringify({ pid: 999999999, nonce: "dead-recovery" })}\n`, "utf8");
+  let entered = false;
+
+  await withPathLock(filePath, async () => {
+    entered = true;
+  }, { retries: 0 });
+
+  assert.equal(entered, true);
+  assert.equal(fs.existsSync(recoveryPath), false);
 });
