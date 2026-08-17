@@ -77,3 +77,58 @@ Results:
 - Reviewer-panel behavior and documentation were not changed.
 - No live external Codex smoke was run; adapter behavior is covered by deterministic fakes plus the full repository suite.
 - The relocated worktree had no installed dependencies and `npm ci` could not rebuild `node-pty` because the host lacks `g++`. Tests temporarily used the already-built dependency tree from the main checkout via a symlink; that symlink was removed before staging and committing.
+
+## Review Fix Round 1
+
+### Implementation SHA
+
+- `d68af68` — `fix: close wrapper session lifecycle gaps`
+
+### Defects Closed
+
+- A first native `--task` may now submit while its owner is provisional, but `NativeRemoteSession.task()` does not complete that first call until a trusted `turn-settled` ID has promoted the owner. The follow loop recognizes this first-turn wait and does not wait for the same settlement twice.
+- A fresh app-server start derives the source from its incoming final context, creates its provisional child before `thread/start`, copies `STATE.md`, wrapper state, and run artifacts once, and records both `parent` and `forkSnapshot.sourceId` without mutating the source.
+- A missing app-server thread ID marks the already-created provisional child recoverable and leaves the source final manifest untouched.
+- `run --dry-run` resolves only already-materialized owners, does not allocate provisional or absent final namespaces, and does not create output directories.
+
+### RED Evidence
+
+Each regression failed independently before its production fix:
+
+- Native first task: failed with `Native task submission is waiting for an observed trusted thread id.`; after allowing submission, the strengthened choreography assertion still failed because `ownerPromotedBy` was undefined when `task()` returned before settlement.
+- Fresh app-server source fork: failed because `manifest.forkSnapshot` was absent.
+- Missing app-server ID: failed because zero pending child namespaces existed and the final source was the attempted recovery target.
+- Dry-run: failed because an empty project gained `.quick-codex-flow/sessions/pending-*/.session.json`.
+
+### GREEN Evidence
+
+Focused verification:
+
+```sh
+node --test tests/wrapper-session-promotion.test.js tests/protocol-enforcement.test.js
+```
+
+Result: 28 passed, 0 failed.
+
+Full verification:
+
+```sh
+node --check bin/quick-codex-wrap.js
+node --check lib/wrapper/app-server-client.js
+node --check lib/wrapper/native-session.js
+npm run lint:package
+npm test
+git diff --check
+```
+
+Results:
+
+- Syntax checks: passed.
+- Package lint: `PASS: skills package shape looks valid`.
+- Full suite: 100 passed, 0 failed (8.71 seconds).
+- Diff whitespace check: passed.
+
+### Scope
+
+- Changed only the wrapper run entry, native/app-server lifecycle code, and Task 4 regression tests.
+- Reviewer panels, docs, migration behavior, and unrelated state contracts remain unchanged.
