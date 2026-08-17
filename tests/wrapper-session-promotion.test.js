@@ -467,49 +467,53 @@ test("native context waits for an observed trusted id", () => {
   assert.equal(promoted.id, "thread-native");
 });
 
-test("native first task promotes a trusted observed owner before any in-turn state write", async () => {
+test("native first task establishes a trusted owner with /status before user work", async () => {
   const dir = makeProject();
   const pending = createProvisionalContext({ dir });
   const observer = new NativeSessionObserver();
+  const threadId = "11111111-1111-4111-8111-111111111111";
   const events = [];
   let session;
   const stdin = {
     destroyed: false,
     write(value) {
-      events.push(`write:${value}`);
-      events.push(`owner:${session.ownerContext.kind}:${session.ownerContext.id}`);
+      if (value === "/status\n") {
+        events.push(`status:${session.ownerContext.kind}`);
+        queueMicrotask(() => observer.ingestChunk("stdout", `Session ID: ${threadId}\n›`));
+        return;
+      }
+      events.push(`task:${session.ownerContext.kind}:${session.ownerContext.id}:${value}`);
       fs.writeFileSync(session.ownerContext.statePath, "in-turn-final-write", "utf8");
-      queueMicrotask(() => {
-        events.push("busy");
-        observer.record("native-busy", { text: "working" });
-      });
+      queueMicrotask(() => observer.record("native-busy", { text: "working" }));
     }
   };
   session = new NativeRemoteSession({ dir, context: pending, observer });
   session.started = true;
   session.controller = new NativeSessionController({ stdin, mode: "pipe" });
   observer.record("prompt-ready", { text: ">" });
-  observer.record("turn-settled", { sessionId: "thread-native-first", text: "session id: thread-native-first" });
 
   const submitted = await session.task("do work", { timeoutMs: 1000 });
 
   assert.equal(submitted.startedBy, "native-busy");
-  assert.deepEqual(events, ["write:do work\n", "owner:session:thread-native-first", "busy"]);
-  assert.equal(session.ownerContext.id, "thread-native-first");
+  assert.deepEqual(events, [
+    "status:provisional",
+    `task:session:${threadId}:do work\n`
+  ]);
+  assert.equal(session.ownerContext.id, threadId);
   assert.equal(fs.readFileSync(session.ownerContext.statePath, "utf8"), "in-turn-final-write");
   assert.equal(fs.existsSync(pending.root), false);
 });
 
-test("native first task without a trusted startup id marks recovery and never submits", async () => {
+test("native first task missing /status identity marks recovery and never submits user work", async () => {
   const dir = makeProject();
   const pending = createProvisionalContext({ dir });
   const observer = new NativeSessionObserver();
-  let writes = 0;
+  const writes = [];
   const stdin = {
     destroyed: false,
-    write() {
-      writes += 1;
-      queueMicrotask(() => observer.record("native-busy", { text: "working" }));
+    write(value) {
+      writes.push(value);
+      queueMicrotask(() => observer.record("prompt-ready", { text: ">" }));
     }
   };
   const session = new NativeRemoteSession({ dir, context: pending, observer });
@@ -519,36 +523,142 @@ test("native first task without a trusted startup id marks recovery and never su
 
   await assert.rejects(
     session.task("do work", { timeoutMs: 20 }),
-    /trusted.*thread id/i
+    /status.*thread id|thread id.*status/i
   );
 
-  assert.equal(writes, 0);
+  assert.deepEqual(writes, ["/status\n"]);
   const manifest = JSON.parse(fs.readFileSync(pending.manifestPath, "utf8"));
   assert.equal(manifest.recovery.reason, "missing-final-id");
 });
 
-test("native observed owner collision fails before submission and preserves both owners", async () => {
+test("native /status owner collision fails before user work and preserves both owners", async () => {
   const dir = makeProject();
-  const occupied = resolveSessionContext({ dir, sessionId: "thread-occupied" });
+  const occupied = resolveSessionContext({ dir, sessionId: "22222222-2222-4222-8222-222222222222" });
   const occupiedBefore = snapshotTree(occupied.root);
   const pending = createProvisionalContext({ dir });
   const observer = new NativeSessionObserver();
-  let writes = 0;
+  const writes = [];
   const session = new NativeRemoteSession({ dir, context: pending, observer });
   session.started = true;
   session.controller = new NativeSessionController({
     mode: "pipe",
-    stdin: { destroyed: false, write() { writes += 1; } }
+    stdin: {
+      destroyed: false,
+      write(value) {
+        writes.push(value);
+        if (value === "/status\n") {
+          queueMicrotask(() => observer.ingestChunk("stdout", `Session ID: ${occupied.id}\n›`));
+        }
+      }
+    }
   });
   observer.record("prompt-ready", { text: ">" });
-  observer.record("turn-settled", { sessionId: occupied.id, text: `session id: ${occupied.id}` });
 
   await assert.rejects(session.task("do work"), /owned by another nonce/i);
 
-  assert.equal(writes, 0);
+  assert.deepEqual(writes, ["/status\n"]);
   assert.equal(fs.existsSync(pending.root), true);
   assert.deepEqual(snapshotTree(occupied.root), occupiedBefore);
   assert.equal(JSON.parse(fs.readFileSync(pending.manifestPath, "utf8")).recovery.reason, "promotion-failed");
+});
+
+test("native /clear forks into a newly established owner before subsequent work", async () => {
+  const dir = makeProject();
+  const source = resolveSessionContext({ dir, sessionId: "33333333-3333-4333-8333-333333333333" });
+  fs.mkdirSync(source.runsDir, { recursive: true });
+  fs.writeFileSync(source.statePath, "source-state", "utf8");
+  fs.writeFileSync(source.wrapperStatePath, "source-wrapper", "utf8");
+  fs.writeFileSync(path.join(source.runsDir, "work.md"), "source-run", "utf8");
+  const sourceBefore = snapshotTree(source.root);
+  const nextThreadId = "44444444-4444-4444-8444-444444444444";
+  const observer = new NativeSessionObserver();
+  const writes = [];
+  let pendingRoot = null;
+  let session;
+  session = new NativeRemoteSession({ dir, context: source, observer });
+  session.started = true;
+  session.controller = new NativeSessionController({
+    mode: "pipe",
+    stdin: {
+      destroyed: false,
+      write(value) {
+        writes.push(`${session.ownerContext.kind}:${session.ownerContext.id}:${value}`);
+        if (value === "/clear\n") {
+          pendingRoot = session.ownerContext.root;
+          queueMicrotask(() => observer.ingestChunk("stdout", `Session ID: ${nextThreadId}`));
+          setTimeout(() => {
+            writes.push("clear-ready");
+            observer.record("prompt-ready", { text: ">" });
+          }, 5);
+          return;
+        }
+        if (value === "/status\n") {
+          queueMicrotask(() => observer.ingestChunk("stdout", `Chat ID: ${nextThreadId}\n›`));
+          return;
+        }
+        fs.writeFileSync(session.ownerContext.statePath, "new-owner-work", "utf8");
+        queueMicrotask(() => observer.record("native-busy", { text: "working" }));
+      }
+    }
+  });
+  observer.record("prompt-ready", { text: ">" });
+
+  await session.slash("/clear", { timeoutMs: 1000 });
+  await session.task("continue work", { timeoutMs: 1000 });
+
+  assert.match(writes[0], /^provisional:pending-.*:\/clear\n$/);
+  assert.equal(writes[1], "clear-ready");
+  assert.match(writes[2], /^provisional:pending-.*:\/status\n$/);
+  assert.equal(writes[3], `session:${nextThreadId}:continue work\n`);
+  assert.equal(session.ownerContext.id, nextThreadId);
+  assert.equal(fs.existsSync(pendingRoot), false);
+  const manifest = JSON.parse(fs.readFileSync(session.ownerContext.manifestPath, "utf8"));
+  assert.equal(manifest.parent, source.id);
+  assert.equal(manifest.forkSnapshot.sourceId, source.id);
+  assert.equal(fs.readFileSync(session.ownerContext.wrapperStatePath, "utf8"), "source-wrapper");
+  assert.equal(fs.readFileSync(path.join(session.ownerContext.runsDir, "work.md"), "utf8"), "source-run");
+  assert.equal(fs.readFileSync(session.ownerContext.statePath, "utf8"), "new-owner-work");
+  assert.deepEqual(snapshotTree(source.root), sourceBefore);
+});
+
+test("native /clear collision keeps the source and occupied owner unchanged", async () => {
+  const dir = makeProject();
+  const source = resolveSessionContext({ dir, sessionId: "55555555-5555-4555-8555-555555555555" });
+  fs.writeFileSync(source.statePath, "source-state", "utf8");
+  const occupied = resolveSessionContext({ dir, sessionId: "66666666-6666-4666-8666-666666666666" });
+  fs.writeFileSync(occupied.statePath, "occupied-state", "utf8");
+  const sourceBefore = snapshotTree(source.root);
+  const occupiedBefore = snapshotTree(occupied.root);
+  const observer = new NativeSessionObserver();
+  const writes = [];
+  let session;
+  session = new NativeRemoteSession({ dir, context: source, observer });
+  session.started = true;
+  session.controller = new NativeSessionController({
+    mode: "pipe",
+    stdin: {
+      destroyed: false,
+      write(value) {
+        writes.push(value);
+        if (value === "/clear\n") {
+          queueMicrotask(() => observer.record("prompt-ready", { text: ">" }));
+        } else if (value === "/status\n") {
+          queueMicrotask(() => observer.ingestChunk("stdout", `Session ID: ${occupied.id}\n›`));
+        }
+      }
+    }
+  });
+  observer.record("prompt-ready", { text: ">" });
+
+  await assert.rejects(session.slash("/clear", { timeoutMs: 1000 }), /owned by another nonce/i);
+
+  assert.deepEqual(writes, ["/clear\n", "/status\n"]);
+  assert.equal(session.ownerContext.kind, "provisional");
+  const recovery = JSON.parse(fs.readFileSync(session.ownerContext.manifestPath, "utf8"));
+  assert.equal(recovery.parent, source.id);
+  assert.equal(recovery.recovery.reason, "promotion-failed");
+  assert.deepEqual(snapshotTree(source.root), sourceBefore);
+  assert.deepEqual(snapshotTree(occupied.root), occupiedBefore);
 });
 
 test("dry-run command matrix leaves state and output paths byte-unchanged", async (t) => {
