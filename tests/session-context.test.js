@@ -6,10 +6,11 @@ import test from "node:test";
 
 import {
   createProvisionalContext,
+  forkSessionContext,
   promoteSessionContext,
   resolveSessionContext
 } from "../lib/wrapper/session-context.js";
-import { writeFileAtomic } from "../lib/wrapper/atomic-fs.js";
+import { withPathLock, writeFileAtomic } from "../lib/wrapper/atomic-fs.js";
 
 function makeProject() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-session-context-"));
@@ -64,6 +65,46 @@ test("an explicit session ID takes precedence over an injected thread ID and rec
   assert.equal(manifest.parent, null);
 });
 
+test("a final namespace only resolves again with its bound owner nonce", () => {
+  const dir = makeProject();
+  const first = resolveSessionContext({ dir, sessionId: "thread-a" });
+
+  assert.throws(
+    () => resolveSessionContext({ dir, sessionId: "thread-a" }),
+    /owned by another nonce/i
+  );
+  const rebound = resolveSessionContext({
+    dir,
+    sessionId: "thread-a",
+    ownerNonce: first.ownerNonce
+  });
+  assert.equal(rebound.ownerNonce, first.ownerNonce);
+});
+
+test("a fork race cannot adopt an existing child namespace", () => {
+  const dir = makeProject();
+  forkSessionContext({ dir, parent: "thread-a", threadId: "thread-b" });
+
+  assert.throws(
+    () => forkSessionContext({ dir, parent: "thread-a", threadId: "thread-b" }),
+    /owned by another nonce/i
+  );
+});
+
+test("an explicit run and session must name the same owner", () => {
+  const dir = makeProject();
+  const context = resolveSessionContext({ dir, sessionId: "thread-a" });
+
+  assert.throws(
+    () => resolveSessionContext({
+      dir,
+      run: path.join(context.root, "runs", "feature.md"),
+      sessionId: "thread-b"
+    }),
+    /--run and --session must agree/i
+  );
+});
+
 test("promotion refuses a final namespace owned by another nonce", () => {
   const dir = makeProject();
   const pending = createProvisionalContext({ dir });
@@ -99,4 +140,43 @@ test("atomic writes retry a transient rename failure without leaving a temp file
 
   assert.equal(fs.readFileSync(filePath, "utf8"), "fresh");
   assert.deepEqual(fs.readdirSync(dir), ["state.json"]);
+});
+
+test("path locks recover a lock whose recorded owner process is gone", async () => {
+  const dir = makeProject();
+  const filePath = path.join(dir, "state.json");
+  const lockPath = `${filePath}.lock`;
+  fs.writeFileSync(lockPath, `${JSON.stringify({ pid: 999999999, nonce: "abandoned" })}\n`, "utf8");
+  let entered = false;
+
+  await withPathLock(filePath, async () => {
+    entered = true;
+  }, { retries: 0 });
+
+  assert.equal(entered, true);
+  assert.equal(fs.existsSync(lockPath), false);
+});
+
+test("path locks never reclaim a lock owned by a live process", async () => {
+  const dir = makeProject();
+  const filePath = path.join(dir, "state.json");
+  const lockPath = `${filePath}.lock`;
+  fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid, nonce: "live" })}\n`, "utf8");
+
+  await assert.rejects(
+    withPathLock(filePath, async () => {}, { retries: 0 }),
+    { code: "EEXIST" }
+  );
+  assert.equal(fs.existsSync(lockPath), true);
+});
+
+test("path locks wait while another process holds the abandoned-lock recovery claim", async () => {
+  const dir = makeProject();
+  const filePath = path.join(dir, "state.json");
+  fs.writeFileSync(`${filePath}.lock.recovery`, "recovering\n", "utf8");
+
+  await assert.rejects(
+    withPathLock(filePath, async () => {}, { retries: 0 }),
+    { code: "EEXIST" }
+  );
 });
