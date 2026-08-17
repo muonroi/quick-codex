@@ -170,6 +170,15 @@ test("an unknown trusted ambient identity never mutates the sole unrelated names
   assert.deepEqual(snapshotTree(a.root), beforeA);
 });
 
+test("an empty primary trusted identity selects an existing fallback namespace", () => {
+  const dir = makeDir();
+  createSession(dir, "thread-b");
+
+  const result = runCliWithEnv(dir, { CODEX_THREAD_ID: "", CODEX_SESSION_ID: "thread-b" }, "status", "--dir", dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /thread-b|runs\/sample\.md/);
+});
+
 test("an empty primary trusted identity does not mask a non-empty fallback identity", () => {
   const dir = makeDir();
   const a = createSession(dir, "thread-a");

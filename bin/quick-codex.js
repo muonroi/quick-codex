@@ -5141,7 +5141,7 @@ function resolveCliContext(args) {
     if (byId.has(trustedId)) {
       return resolveSessionContext({
         dir: args.dir,
-        env: process.env,
+        sessionId: trustedId,
         ownerNonce: byId.get(trustedId).ownerNonce
       });
     }
