@@ -157,6 +157,19 @@ test("explicit run ownership outranks ambient session and mismatched selectors f
   assert.match(mismatch.stderr, /must agree/);
 });
 
+test("an unknown trusted ambient identity never mutates the sole unrelated namespace", () => {
+  const dir = makeDir();
+  const a = createSession(dir, "thread-a");
+  const beforeA = snapshotTree(a.root);
+  const hookPath = path.join(dir, "ambient-owner-hook.txt");
+  fs.writeFileSync(hookPath, "⚠️ [Experience] ambient owner check [id:ambient1 col:test]\nWhy: trusted identity must not fall through to another owner\n", "utf8");
+
+  const result = runCliWithEnv(dir, { CODEX_THREAD_ID: "thread-b", CODEX_SESSION_ID: "" }, "capture-hooks", "--dir", dir, "--input", hookPath);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /thread-b|--session|identity|namespace/i);
+  assert.deepEqual(snapshotTree(a.root), beforeA);
+});
+
 test("a session state pointer cannot escape into another session namespace", () => {
   const dir = makeDir();
   const a = createSession(dir, "thread-a");

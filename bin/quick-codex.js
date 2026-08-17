@@ -3066,7 +3066,8 @@ function assignDelegationCommand({ dir, run, context, type, question, scope, foc
   console.log(`Assigned ${type} delegation on ${relativeRunPath}`);
   console.log(`Gate locked to: ${config.requiredGate}`);
   console.log(`Worker prompt: ${workerPrompt}`);
-  console.log(`Complete with: quick-codex complete-delegation --dir ${dir} --run ${relativeRunPath} --type ${type} --status completed --summary \"...\" --verdict \"...\" --recommended-transition \"${config.defaultRecommendedTransition}\"`);
+  const ownerSelector = context && context.kind !== "legacy" ? ` --session ${context.id}` : "";
+  console.log(`Complete with: quick-codex complete-delegation --dir ${dir} --run ${relativeRunPath}${ownerSelector} --type ${type} --status completed --summary \"...\" --verdict \"...\" --recommended-transition \"${config.defaultRecommendedTransition}\"`);
 }
 
 function completeDelegationCommand({ dir, run, context, type, delegationStatus, summary, verdict, recommendedTransition }) {
@@ -5134,12 +5135,15 @@ function resolveCliContext(args) {
       ownerNonce: byId.get(args.sessionId)?.ownerNonce ?? null
     });
   }
-  if (trustedId && byId.has(trustedId)) {
-    return resolveSessionContext({
-      dir: args.dir,
-      env: process.env,
-      ownerNonce: byId.get(trustedId).ownerNonce
-    });
+  if (trustedId) {
+    if (byId.has(trustedId)) {
+      return resolveSessionContext({
+        dir: args.dir,
+        env: process.env,
+        ownerNonce: byId.get(trustedId).ownerNonce
+      });
+    }
+    throw new Error(`Trusted session identity ${trustedId} has no canonical namespace; use --session ${trustedId} to materialize it or select an explicit --run/--legacy owner.`);
   }
   if (inspection.invalid.length > 0) {
     throw new Error(`Session namespace ownership is unresolved (${inspection.invalid.join(", ")}); repair it or use an explicit --session, --run, or --legacy selector.`);

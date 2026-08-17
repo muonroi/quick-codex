@@ -3,12 +3,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 import {
   baseRun,
   finalRoadmapRun,
+  cliPath,
   independentPhaseRun,
   makeProject,
+  repoRoot,
   routedWaveRun,
   runCli,
   runCliWithEnv,
@@ -30,6 +33,32 @@ test("session-aware flow mutation writes companion state and project files insid
   assert.equal(fs.existsSync(context.projectRoadmapPath), true);
   assert.equal(fs.existsSync(context.backlogPath), true);
   assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "PROJECT-ROADMAP.md")), false);
+});
+
+test("session delegation prints an owner-bearing completion command that executes successfully", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-delegation-command-"));
+  const context = resolveSessionContext({ dir, sessionId: "thread-flow" });
+  fs.mkdirSync(context.runsDir, { recursive: true });
+  const runPath = path.join(context.runsDir, "sample.md");
+  fs.writeFileSync(runPath, baseRun, "utf8");
+  fs.writeFileSync(context.statePath, `# Quick Codex Flow State\n\nActive run:\n- runs/sample.md\n\nActive lock:\n- none\n\nStatus:\n- active\n`, "utf8");
+
+  const assigned = runCli(dir, "delegate-plan-check", "--session", "thread-flow", "--dir", dir, "--focus", "audit the active plan", "--scope", "P1 only");
+  assert.equal(assigned.status, 0, assigned.stderr || assigned.stdout);
+  const completionCommand = assigned.stdout.match(/^Complete with: (.+)$/m)?.[1];
+  assert.ok(completionCommand, assigned.stdout);
+  assert.match(completionCommand, /--session thread-flow/);
+
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shim-"));
+  const shimPath = path.join(shimDir, "quick-codex");
+  fs.writeFileSync(shimPath, `#!/bin/sh\nexec "${process.execPath}" "${cliPath}" "$@"\n`, "utf8");
+  fs.chmodSync(shimPath, 0o755);
+  const env = { ...process.env, PATH: `${shimDir}${path.delimiter}${process.env.PATH ?? ""}`, QUICK_CODEX_NO_UPDATE_CHECK: "1" };
+  delete env.CODEX_THREAD_ID;
+  delete env.CODEX_SESSION_ID;
+  const completed = spawnSync(completionCommand, { cwd: repoRoot, env, encoding: "utf8", shell: true });
+  assert.equal(completed.status, 0, completed.stderr || completed.stdout);
+  assert.match(fs.readFileSync(runPath, "utf8"), /Delegate status:\n- completed/);
 });
 
 test("lock-check passes when affected area, exclusions, evidence, and verify path are explicit", () => {
