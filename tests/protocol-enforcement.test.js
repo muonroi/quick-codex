@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { enforceQcFlowProtocol, enforceQcLockProtocol } from "../lib/wrapper/protocol.js";
+import { resolveSessionContext } from "../lib/wrapper/session-context.js";
+import { loadWrapperState, saveWrapperState } from "../lib/wrapper/state.js";
+import { inspectProjectBootstrap } from "../lib/wrapper/bootstrap.js";
+import { readRunArtifact } from "../lib/wrapper/run-file.js";
+import { buildReviewerAssignments, reviewedArtifactDigest } from "../lib/wrapper/reviewer-panel.js";
 
 function makeDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qc-protocol-"));
@@ -57,10 +62,162 @@ test("enforceQcFlowProtocol bootstraps a task-specific clarify artifact for a fr
   assert.match(result.prompt, /Do not implement code, do not edit product files/);
   assert.match(result.prompt, /present at least 3 options for each gray area/);
   assert.match(result.prompt, /Current enforced gate: clarify/);
+  assert.equal(result.artifact.hasReviewerPanelSection, true);
+  assert.deepEqual(result.artifact.reviewerPanels, []);
+
+  const reparsed = readRunArtifact({ dir, run: result.artifact.relativeRunPath });
+  assert.equal(reparsed.hasReviewerPanelSection, true);
+  assert.deepEqual(reparsed.reviewerPanels, []);
 
   const state = fs.readFileSync(path.join(dir, ".quick-codex-flow", "STATE.md"), "utf8");
   assert.match(state, /Current gate:\n- clarify/);
   assert.match(state, /Execution mode:\n- auto/);
+});
+
+test("flow bootstrap keeps identical task slugs inside their owner contexts", () => {
+  const dir = makeDir();
+  const a = resolveSessionContext({ dir, sessionId: "thread-a" });
+  const b = resolveSessionContext({ dir, sessionId: "thread-b" });
+
+  const first = enforceQcFlowProtocol({ dir, context: a, task: "Plan storage" });
+  const second = enforceQcFlowProtocol({ dir, context: b, task: "Plan storage" });
+
+  assert.notEqual(first.artifact.absoluteRunPath, second.artifact.absoluteRunPath);
+  assert.equal(first.artifact.absoluteRunPath, path.join(a.runsDir, "plan-storage.md"));
+  assert.equal(second.artifact.absoluteRunPath, path.join(b.runsDir, "plan-storage.md"));
+  assert.equal(fs.existsSync(a.statePath), true);
+  assert.equal(fs.existsSync(b.statePath), true);
+});
+
+test("panel-aware flow cannot enter execute until every plan-check reviewer clears", () => {
+  const dir = makeDir();
+  const fresh = enforceQcFlowProtocol({ dir, task: "Plan storage" }).artifact;
+  const { text: _freshText, ...freshMetadata } = fresh;
+  const executeReady = {
+    ...freshMetadata,
+    currentGate: "execute",
+    deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |",
+    verifiedPlan: "P1 / W1: implement storage with focused verification"
+  };
+
+  const blocked = enforceQcFlowProtocol({ dir, task: "Plan storage", activeArtifact: executeReady });
+  assert.equal(blocked.effectiveGate, "plan-check");
+  assert.match(blocked.gateReason, /Reviewer panel for plan-check is required/);
+
+  const artifactDigest = reviewedArtifactDigest(executeReady, "plan-check");
+  const reviewers = buildReviewerAssignments({ gate: "plan-check" }).map((reviewer) => ({
+    ...reviewer,
+    status: "completed",
+    verdict: "pass",
+    evidenceRef: `${reviewer.id}.md`,
+    disposition: "accepted",
+    artifactDigest,
+    resultDigest: artifactDigest
+  }));
+  const allowed = enforceQcFlowProtocol({
+    dir,
+    task: "Plan storage",
+    activeArtifact: { ...executeReady, reviewerPanels: [{ gate: "plan-check", artifactDigest, reviewers }] }
+  });
+  assert.equal(allowed.effectiveGate, "execute");
+
+  const stale = enforceQcFlowProtocol({
+    dir,
+    task: "Plan storage",
+    activeArtifact: { ...executeReady, verifiedPlan: "P1 / W1: changed after review", reviewerPanels: [{ gate: "plan-check", artifactDigest, reviewers }] }
+  });
+  assert.equal(stale.effectiveGate, "plan-check");
+  assert.match(stale.gateReason, /reviewed artifact digest is stale/i);
+});
+
+test("session locks retain only their own session flow pointers and reject legacy handoffs", () => {
+  const dir = makeDir();
+  const context = resolveSessionContext({ dir, sessionId: "thread-a" });
+  const flow = enforceQcFlowProtocol({ dir, context, task: "Plan storage" }).artifact;
+  const { text: _flowText, ...flowMetadata } = flow;
+  const trustedFlowWithoutPanel = {
+    ...flowMetadata,
+    relativeRunPath: ".quick-codex-flow/legacy.md",
+    currentGate: "execute",
+    verifiedPlan: "P1 / W1: perform the planned change",
+    deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |"
+  };
+  const artifactDigest = reviewedArtifactDigest(trustedFlowWithoutPanel, "plan-check");
+  const trustedFlow = {
+    ...trustedFlowWithoutPanel,
+    reviewerPanels: [{
+      gate: "plan-check",
+      artifactDigest,
+      reviewers: buildReviewerAssignments({ gate: "plan-check" }).map((reviewer) => ({
+        ...reviewer,
+        status: "completed",
+        verdict: "pass",
+        evidenceRef: `${reviewer.id}.md`,
+        disposition: "accepted",
+        artifactDigest,
+        resultDigest: artifactDigest
+      }))
+    }]
+  };
+
+  const lock = enforceQcLockProtocol({
+    dir,
+    context,
+    task: "Plan storage",
+    activeFlowArtifact: trustedFlow
+  });
+  const state = fs.readFileSync(context.statePath, "utf8");
+  assert.match(state, /Active run:\n- runs\/plan-storage\.md/);
+  assert.match(state, /Active lock:\n- locks\/plan-storage\.md/);
+  assert.equal(lock.artifact.relativeRunPath, "locks/plan-storage.md");
+
+  const otherContext = resolveSessionContext({ dir, sessionId: "thread-b" });
+  const legacyPath = path.join(dir, ".quick-codex-flow", "legacy.md");
+  fs.writeFileSync(legacyPath, "# Run: legacy\n", "utf8");
+  assert.throws(() => enforceQcLockProtocol({
+    dir,
+    context: otherContext,
+    task: "Plan storage",
+    activeFlowArtifact: {
+      ...trustedFlow,
+      absoluteRunPath: legacyPath,
+      relativeRunPath: ".quick-codex-flow/legacy.md"
+    }
+  }), /session-owned flow artifact/i);
+});
+
+test("wrapper state writes use the supplied session context instead of a loaded legacy path", () => {
+  const dir = makeDir();
+  const legacyPath = path.join(dir, ".quick-codex-flow", "wrapper-state.json");
+  const legacyState = { version: 1, runs: { ".quick-codex-flow/legacy.md": { lastMode: "legacy" } } };
+  fs.writeFileSync(legacyPath, `${JSON.stringify(legacyState, null, 2)}\n`, "utf8");
+  const loadedLegacyState = loadWrapperState(dir);
+  const context = resolveSessionContext({ dir, sessionId: "thread-a" });
+
+  const saved = saveWrapperState(dir, loadedLegacyState, {
+    context,
+    artifact: { relativeRunPath: "runs/plan-storage.md" },
+    decision: { mode: "new", prompt: "Plan storage" },
+    execution: {}
+  });
+
+  assert.equal(saved.path, context.wrapperStatePath);
+  assert.deepEqual(JSON.parse(fs.readFileSync(legacyPath, "utf8")), legacyState);
+  assert.equal(fs.existsSync(context.wrapperStatePath), true);
+  assert.equal(JSON.parse(fs.readFileSync(context.wrapperStatePath, "utf8")).runs["runs/plan-storage.md"].lastMode, "new");
+});
+
+test("bootstrap treats legacy state as compatibility data while shared config initializes a session", () => {
+  const dir = makeDir();
+  const context = resolveSessionContext({ dir, sessionId: "thread-a" });
+
+  assert.equal(inspectProjectBootstrap({ dir, route: "qc-flow", context }).bootstrapRequired, true);
+  fs.writeFileSync(path.join(dir, ".quick-codex-flow", "wrapper-config.json"), "{}\n", "utf8");
+
+  const inspection = inspectProjectBootstrap({ dir, route: "qc-flow", context });
+  assert.equal(inspection.scaffoldPresent, true);
+  assert.equal(inspection.bootstrapRequired, false);
+  assert.equal(fs.existsSync(context.statePath), false);
 });
 
 test("enforceQcFlowProtocol keeps front-half runs in research without allowing execution", () => {

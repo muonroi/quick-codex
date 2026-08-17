@@ -119,6 +119,13 @@ per-path in-process mutex plus cross-process protection. Reads/writes retry
 boundedly for transient `EBUSY`/`EPERM`/mid-write parse errors. No operation
 may merge namespace directories automatically.
 
+Recovery claims use an ABA-safe quarantine protocol. A cleaner atomically
+renames the observed canonical claim to a unique same-directory quarantine
+path before inspecting or removing it. Any publisher that arrives afterward
+creates a new canonical claim and cannot be removed by that cleaner. The
+cleaner only deletes its quarantine path after validating that it is stale;
+live claims are never reclaimed by age alone.
+
 ## Reviewer Panel Contract
 
 Execution remains sequential. At every judgement-bearing plan-check,

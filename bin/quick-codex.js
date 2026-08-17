@@ -1,10 +1,24 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+
+import { resolveSessionContext } from "../lib/wrapper/session-context.js";
+import { writeFileAtomic } from "../lib/wrapper/atomic-fs.js";
+import {
+  aggregateReviewerResults,
+  buildReviewerAssignments,
+  parseReviewerPanels,
+  renderReviewerPanelSection,
+  reviewedArtifactDigest,
+  reviewerGateViolation,
+  reviewerPanelForGate,
+  reviewerPanelSummary
+} from "../lib/wrapper/reviewer-panel.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,14 +49,16 @@ function usage() {
   quick-codex install-codex-shim [--target <dir>] [--real-codex <path>] [--force]
   quick-codex doctor [--target <dir>]
   quick-codex init [--dir <project-dir>] [--force]
-  quick-codex status [--dir <project-dir>] [--run <path>]
-  quick-codex resume [--dir <project-dir>] [--run <path>]
-  quick-codex project-status [--dir <project-dir>]
+  quick-codex status [--dir <project-dir>] [--run <path>] [--session <id> | --legacy]
+  quick-codex resume [--dir <project-dir>] [--run <path>] [--session <id> | --legacy]
+  quick-codex project-status [--dir <project-dir>] [--session <id> | --legacy]
   quick-codex sync-project [--dir <project-dir>] [--run <path>]
   quick-codex delegate-research [--dir <project-dir>] [--run <path>] [--question <text>] [--scope <text>]
   quick-codex delegate-plan-check [--dir <project-dir>] [--run <path>] [--focus <text>] [--scope <text>]
   quick-codex delegate-goal-audit [--dir <project-dir>] [--run <path>] [--focus <text>] [--scope <text>]
   quick-codex complete-delegation [--dir <project-dir>] [--run <path>] --type <research|plan-check|goal-audit> [--status <completed|blocked>] [--summary <text>] [--verdict <text>] [--recommended-transition <text>]
+  quick-codex assign-reviewer-panel [--dir <project-dir>] [--run <path>] --gate <plan-check|wave-close|phase-close|feature-close> [--count <n>] [--focus <text>] [--scope <text>]
+  quick-codex complete-reviewer [--dir <project-dir>] [--run <path>] --gate <gate> --reviewer <id> --status completed --verdict <pass|block|partial> --evidence-ref <ref> [--disposition <accepted|resolved|waived|pending>]
   quick-codex lock-check [--dir <project-dir>] [--run <path>]
   quick-codex verify-wave [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
   quick-codex regression-check [--dir <project-dir>] [--run <path>] [--phase <id>] [--wave <id>] [--allow-shell-verify]
@@ -55,6 +71,7 @@ function usage() {
   quick-codex doctor-run [--dir <project-dir>] [--run <path>]
   quick-codex doctor-flow [--dir <project-dir>] [--run <path>]
   quick-codex doctor-project [--dir <project-dir>]
+  quick-codex migrate-state --to-session <id> [--dry-run] [--dir <project-dir>]
   quick-codex upgrade [--copy] [--target <dir>]
   quick-codex uninstall [--target <dir>] [--dir <project-dir>]
   quick-codex --help
@@ -72,6 +89,8 @@ Commands:
   delegate-plan-check  Assign a blocking plan-check checkpoint and record the worker prompt in the run artifact
   delegate-goal-audit  Assign a blocking goal-audit checkpoint and record the worker prompt in the run artifact
   complete-delegation  Merge a delegated checkpoint result back into the run artifact so the main flow can advance
+  assign-reviewer-panel  Assign distinct read-only reviewers for a judgement-bearing gate
+  complete-reviewer  Parent-only recording of one reviewer result and its disposition
   lock-check Validate that a flow or lock artifact is explicit enough for locked execution
   verify-wave Run the active wave verification commands and append bounded evidence to the run artifact
   regression-check Run protected-boundary verification commands and append bounded evidence to the run artifact
@@ -84,6 +103,7 @@ Commands:
   doctor-run Validate a run artifact, Experience Snapshot, and STATE.md handoff
   doctor-flow Validate flow-only workflow state, gray-area discipline, and delivery-roadmap rules
   doctor-project Validate project-level roadmap, active-run register, backlog parking lot, and future-seed scaffolds
+  migrate-state  Copy legacy state into a new session namespace without modifying the source
   upgrade    Reinstall the skills into the target directory
   uninstall  Remove installed skills and optionally remove project scaffolds when --dir is provided
 `);
@@ -99,6 +119,10 @@ function parseArgs(argv) {
     dir: process.cwd(),
     dirExplicit: false,
     run: null,
+    sessionId: null,
+    legacy: false,
+    toSession: null,
+    dryRun: false,
     phase: null,
     wave: null,
     phaseDone: false,
@@ -118,7 +142,12 @@ function parseArgs(argv) {
     delegationStatus: null,
     summary: null,
     verdict: null,
-    recommendedTransition: null
+    recommendedTransition: null,
+    gate: null,
+    count: 3,
+    reviewer: null,
+    evidenceRef: null,
+    disposition: null
   };
 
   if (argv.length === 0 || ["-h", "--help", "help"].includes(argv[0])) {
@@ -152,6 +181,30 @@ function parseArgs(argv) {
       }
       result.dir = path.resolve(argv[i]);
       result.dirExplicit = true;
+      continue;
+    }
+    if (arg === "--legacy") {
+      result.legacy = true;
+      continue;
+    }
+    if (arg === "--dry-run") {
+      result.dryRun = true;
+      continue;
+    }
+    if (arg === "--session") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--session requires an id");
+      }
+      result.sessionId = argv[i];
+      continue;
+    }
+    if (arg === "--to-session") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--to-session requires an id");
+      }
+      result.toSession = argv[i];
       continue;
     }
     if (arg === "--real-codex") {
@@ -224,6 +277,37 @@ function parseArgs(argv) {
         throw new Error("--recommended-transition requires a value");
       }
       result.recommendedTransition = argv[i];
+      continue;
+    }
+    if (arg === "--gate") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--gate requires a value");
+      result.gate = argv[i];
+      continue;
+    }
+    if (arg === "--count") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--count requires a number");
+      result.count = Number(argv[i]);
+      if (!Number.isInteger(result.count)) throw new Error("--count must be an integer");
+      continue;
+    }
+    if (arg === "--reviewer") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--reviewer requires an id");
+      result.reviewer = argv[i];
+      continue;
+    }
+    if (arg === "--evidence-ref") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--evidence-ref requires a value");
+      result.evidenceRef = argv[i];
+      continue;
+    }
+    if (arg === "--disposition") {
+      i += 1;
+      if (i >= argv.length) throw new Error("--disposition requires a value");
+      result.disposition = argv[i];
       continue;
     }
     if (arg === "--run") {
@@ -312,6 +396,9 @@ function parseArgs(argv) {
     throw new Error(`Unknown option: ${arg}`);
   }
 
+  if (result.sessionId && result.legacy) {
+    throw new Error("--session and --legacy are mutually exclusive");
+  }
   return result;
 }
 
@@ -660,11 +747,11 @@ function readTextIfExists(filePath) {
   return fs.readFileSync(filePath, "utf8");
 }
 
-function ensureProjectArtifacts(projectDir) {
-  const flowDir = flowDirFor(projectDir);
-  ensureDir(flowDir);
-  const roadmapPath = projectRoadmapFileFor(projectDir);
-  const backlogPath = backlogFileFor(projectDir);
+function ensureProjectArtifacts(projectDir, context = null) {
+  const artifactRoot = context && context.kind !== "legacy" ? context.root : flowDirFor(projectDir);
+  ensureDir(artifactRoot);
+  const roadmapPath = projectRoadmapFileFor(projectDir, context);
+  const backlogPath = backlogFileFor(projectDir, context);
   if (!fs.existsSync(roadmapPath)) {
     fs.writeFileSync(
       roadmapPath,
@@ -682,9 +769,9 @@ function ensureProjectArtifacts(projectDir) {
   return { roadmapPath, backlogPath };
 }
 
-function loadProjectMetadata(projectDir) {
-  const roadmapPath = projectRoadmapFileFor(projectDir);
-  const backlogPath = backlogFileFor(projectDir);
+function loadProjectMetadata(projectDir, context = null) {
+  const roadmapPath = projectRoadmapFileFor(projectDir, context);
+  const backlogPath = backlogFileFor(projectDir, context);
   const roadmapText = readTextIfExists(roadmapPath);
   const backlogText = readTextIfExists(backlogPath);
   return {
@@ -1138,8 +1225,8 @@ function milestoneStatusFromRun(metadata) {
   return "active";
 }
 
-function syncProjectFromRun(projectDir, metadata, relativeRunPath) {
-  const { roadmapPath, backlogPath } = ensureProjectArtifacts(projectDir);
+function syncProjectFromRun(projectDir, metadata, relativeRunPath, context = null) {
+  const { roadmapPath, backlogPath } = ensureProjectArtifacts(projectDir, context);
   const roadmapText = fs.readFileSync(roadmapPath, "utf8");
   const roadmapMeta = parseProjectRoadmapMetadata(roadmapText);
   const milestone = metadata.projectMilestone ?? roadmapMeta.currentMilestone ?? "M1";
@@ -1206,7 +1293,7 @@ function syncProjectFromRun(projectDir, metadata, relativeRunPath) {
   fs.writeFileSync(roadmapPath, nextRoadmapText, "utf8");
 
   if (!fs.existsSync(backlogPath)) {
-    ensureProjectArtifacts(projectDir);
+    ensureProjectArtifacts(projectDir, context);
   }
 }
 
@@ -1302,6 +1389,7 @@ const DELEGATION_CONFIG = {
 };
 
 const GATE_ORDER = ["clarify", "explore", "research", "roadmap", "plan", "plan-check", "execute", "phase-close", "done"];
+const REVIEWER_GATES = new Set(["plan-check", "wave-close", "phase-close", "feature-close"]);
 
 function gateRank(gate) {
   const normalized = String(gate ?? "").trim().toLowerCase();
@@ -1400,7 +1488,11 @@ function requiredDelegationViolations(metadata) {
   if (currentGateRank > gateRank("research") && delegationPendingForType(metadata, "research")) {
     violations.push("research");
   }
-  if (currentGateRank > gateRank("plan-check") && effectiveDelegationStatus(metadata, "plan-check") !== "completed") {
+  if (
+    currentGateRank > gateRank("plan-check")
+    && !metadata.hasReviewerPanelSection
+    && effectiveDelegationStatus(metadata, "plan-check") !== "completed"
+  ) {
     violations.push("plan-check");
   }
   if (currentGateRank > gateRank("phase-close") && delegationPendingForType(metadata, "goal-audit")) {
@@ -1416,6 +1508,17 @@ function delegationSummary(metadata) {
     return "none";
   }
   return `${current.type} (${current.status})`;
+}
+
+function requiredReviewerPanelViolations(metadata) {
+  if (!metadata?.hasReviewerPanelSection) return [];
+  const gates = [];
+  if (gateRank(metadata.currentGate) >= gateRank("plan-check")) gates.push("plan-check");
+  if (String(metadata.currentGate ?? "").trim().toLowerCase() === "phase-close") gates.push("phase-close");
+  if (String(metadata.currentGate ?? "").trim().toLowerCase() === "done") gates.push("feature-close");
+  return gates
+    .map((gate) => ({ gate, violation: reviewerGateViolation(metadata, gate) }))
+    .filter((entry) => entry.violation);
 }
 
 function workflowStageFromMetadata(metadata) {
@@ -2223,9 +2326,9 @@ function mergeExperienceSnapshot(metadata, parsedWarnings, sourceLabel = "quick-
   };
 }
 
-function applyParsedWarningsToRun({ dir, run, parsedWarnings, sourceLabel }) {
-  const runPath = resolveRunPath(dir, run);
-  const relativeRunPath = relPathFrom(dir, runPath);
+function applyParsedWarningsToRun({ dir, run, context, parsedWarnings, sourceLabel }) {
+  const runPath = resolveRunPath(dir, run, context);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const metadata = runMetadata(runPath);
   const mergedSnapshot = mergeExperienceSnapshot(metadata, parsedWarnings, sourceLabel);
   let nextText = metadata.text;
@@ -2237,7 +2340,7 @@ function applyParsedWarningsToRun({ dir, run, parsedWarnings, sourceLabel }) {
   fs.writeFileSync(runPath, nextText, "utf8");
 
   const refreshedMetadata = runMetadata(runPath);
-  const statePath = stateFileFor(dir);
+  const statePath = stateFileFor(dir, context);
   ensureDir(path.dirname(statePath));
   fs.writeFileSync(statePath, renderStateFile(relativeRunPath, refreshedMetadata), "utf8");
 
@@ -2688,16 +2791,43 @@ function flowDirFor(projectDir) {
   return path.join(projectDir, FLOW_DIRNAME);
 }
 
-function stateFileFor(projectDir) {
-  return path.join(flowDirFor(projectDir), "STATE.md");
+function stateFileFor(projectDir, context = null) {
+  return context?.statePath ?? path.join(flowDirFor(projectDir), "STATE.md");
 }
 
-function projectRoadmapFileFor(projectDir) {
-  return path.join(flowDirFor(projectDir), PROJECT_ROADMAP_FILENAME);
+function projectRoadmapFileFor(projectDir, context = null) {
+  return context?.projectRoadmapPath ?? path.join(flowDirFor(projectDir), PROJECT_ROADMAP_FILENAME);
 }
 
-function backlogFileFor(projectDir) {
-  return path.join(flowDirFor(projectDir), BACKLOG_FILENAME);
+function backlogFileFor(projectDir, context = null) {
+  return context?.backlogPath ?? path.join(flowDirFor(projectDir), BACKLOG_FILENAME);
+}
+
+function isContained(parent, target) {
+  const relative = path.relative(parent, target);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function artifactPointerFor(projectDir, context, artifactPath) {
+  const base = context && context.kind !== "legacy" && isContained(context.root, artifactPath)
+    ? context.root
+    : projectDir;
+  return relPathFrom(base, artifactPath);
+}
+
+function resolveStatePointer(projectDir, context, pointer) {
+  if (context && context.kind !== "legacy") {
+    const resolved = path.isAbsolute(pointer)
+      ? pointer
+      : /^(runs|locks)(?:\/|\\)/.test(pointer)
+        ? path.resolve(context.root, pointer)
+        : path.resolve(projectDir, pointer);
+    if (!isContained(context.root, resolved)) {
+      throw new Error(`State pointer escapes session namespace: ${pointer}`);
+    }
+    return resolved;
+  }
+  return path.isAbsolute(pointer) ? pointer : path.resolve(projectDir, pointer);
 }
 
 function runMetadata(runPath) {
@@ -2715,17 +2845,17 @@ function isRunDone(metadata) {
   return gate === "done" || status === "done" || executionState === "done";
 }
 
-function resolveRunPath(projectDir, explicitRun) {
+function resolveRunPath(projectDir, explicitRun, context = null) {
   if (explicitRun) {
-    return path.resolve(projectDir, explicitRun);
+    return resolveStatePointer(projectDir, context, explicitRun);
   }
 
-  const statePath = stateFileFor(projectDir);
+  const statePath = stateFileFor(projectDir, context);
   const stateText = readTextIfExists(statePath);
   if (stateText) {
     const activeLock = normalizeStatePointer(findLabelValue(stateText, "Active lock"));
     if (activeLock) {
-      const activeLockPath = path.resolve(projectDir, activeLock);
+      const activeLockPath = resolveStatePointer(projectDir, context, activeLock);
       if (fs.existsSync(activeLockPath)) {
         const metadata = runMetadata(activeLockPath);
         if (!isRunDone(metadata)) {
@@ -2735,7 +2865,7 @@ function resolveRunPath(projectDir, explicitRun) {
     }
     const activeRun = findLabelValue(stateText, "Active run");
     if (activeRun) {
-      const activeRunPath = path.resolve(projectDir, activeRun);
+      const activeRunPath = resolveStatePointer(projectDir, context, activeRun);
       if (fs.existsSync(activeRunPath)) {
         const metadata = runMetadata(activeRunPath);
         if (!isRunDone(metadata)) {
@@ -2745,15 +2875,17 @@ function resolveRunPath(projectDir, explicitRun) {
     }
   }
 
-  const flowDir = flowDirFor(projectDir);
-  if (!fs.existsSync(flowDir)) {
-    throw new Error(`Flow directory not found: ${flowDir}`);
+  const artifactDirs = context && context.kind !== "legacy"
+    ? [context.runsDir, context.locksDir]
+    : [flowDirFor(projectDir), path.join(projectDir, ".quick-codex-lock")];
+  if (!artifactDirs.some((dirPath) => fs.existsSync(dirPath))) {
+    throw new Error(`No artifact directory found for ${context?.id ?? "legacy"}`);
   }
 
-  const candidates = fs
-    .readdirSync(flowDir)
-    .filter((name) => name.endsWith(".md") && name !== "STATE.md")
-    .map((name) => path.join(flowDir, name))
+  const candidates = artifactDirs
+    .flatMap((dirPath) => fs.existsSync(dirPath)
+      ? fs.readdirSync(dirPath).filter((name) => name.endsWith(".md") && name !== "STATE.md").map((name) => path.join(dirPath, name))
+      : [])
     .filter((candidatePath) => {
       try {
         return !isRunDone(runMetadata(candidatePath));
@@ -2767,18 +2899,18 @@ function resolveRunPath(projectDir, explicitRun) {
   }
 
   if (candidates.length === 0) {
-    throw new Error(`No active run found under ${flowDir}`);
+    throw new Error(`No active run found for session ${context?.id ?? "legacy"}`);
   }
 
-  throw new Error(`Multiple active runs found under ${flowDir}; use --run to choose one explicitly.`);
+  throw new Error(`Multiple active runs found for session ${context?.id ?? "legacy"}; use --run to choose one explicitly.`);
 }
 
-function statusCommand({ dir, run }) {
-  const runPath = resolveRunPath(dir, run);
+function statusCommand({ dir, run, context }) {
+  const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
   const phaseWave = phaseWaveFromMetadata(metadata);
   const autoCommands = preferredAutoContinueCommands(dir, relPathFrom(dir, runPath), metadata.artifactType);
-  const projectMeta = loadProjectMetadata(dir);
+  const projectMeta = loadProjectMetadata(dir, context);
 
   console.log(`Project: ${dir}`);
   console.log(`Active run: ${relPathFrom(dir, runPath)}`);
@@ -2788,6 +2920,7 @@ function statusCommand({ dir, run }) {
     console.log(`Roadmap phase status: ${metadata.workflowCurrentRoadmapPhaseStatus ?? "unknown"}`);
     console.log(`Unresolved gray areas: ${unresolvedGrayAreaSummary(metadata)}`);
     console.log(`Delegation state: ${delegationSummary(metadata)}`);
+    console.log(`Reviewer panels: ${reviewerPanelSummary(metadata)}`);
     console.log(`Milestone / track: ${(metadata.projectMilestone ?? "unknown")} / ${(metadata.projectTrack ?? "default")}`);
   }
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
@@ -2836,8 +2969,8 @@ function statusCommand({ dir, run }) {
   }
 }
 
-function projectStatusCommand({ dir }) {
-  const projectMeta = loadProjectMetadata(dir);
+function projectStatusCommand({ dir, context }) {
+  const projectMeta = loadProjectMetadata(dir, context);
   console.log(`Project: ${dir}`);
   console.log(`Project roadmap: ${fs.existsSync(projectMeta.roadmapPath) ? relPathFrom(dir, projectMeta.roadmapPath) : "missing"}`);
   console.log(`Backlog: ${fs.existsSync(projectMeta.backlogPath) ? relPathFrom(dir, projectMeta.backlogPath) : "missing"}`);
@@ -2861,17 +2994,17 @@ function projectStatusCommand({ dir }) {
   }
 }
 
-function syncProjectCommand({ dir, run }) {
-  const runPath = resolveRunPath(dir, run);
+function syncProjectCommand({ dir, run, context }) {
+  const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
   if (metadata.artifactType !== "flow") {
     throw new Error("sync-project only supports qc-flow run artifacts");
   }
-  const relativeRunPath = relPathFrom(dir, runPath);
-  syncProjectFromRun(dir, metadata, relativeRunPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
+  syncProjectFromRun(dir, metadata, relativeRunPath, context);
   console.log(`Synced project board from ${relativeRunPath}`);
-  console.log(`- ${relPathFrom(dir, projectRoadmapFileFor(dir))}`);
-  console.log(`- ${relPathFrom(dir, backlogFileFor(dir))}`);
+  console.log(`- ${relPathFrom(dir, projectRoadmapFileFor(dir, context))}`);
+  console.log(`- ${relPathFrom(dir, backlogFileFor(dir, context))}`);
 }
 
 function defaultDelegationAssignment(type, metadata) {
@@ -2949,17 +3082,29 @@ function applyDelegationGate(type, metadata, nextText) {
   return replaceOrInsertSection(nextText, "Workflow State", workflowStateLines, "Project Alignment");
 }
 
-function assignDelegationCommand({ dir, run, type, question, scope, focus }) {
+function assignDelegationCommand({ dir, run, context, type, question, scope, focus }) {
   const config = DELEGATION_CONFIG[type];
   if (!config) {
     throw new Error(`Unsupported delegation type: ${type}`);
   }
-  const runPath = resolveRunPath(dir, run);
+  const runPath = resolveRunPath(dir, run, context);
   let metadata = runMetadata(runPath);
   if (metadata.artifactType !== "flow") {
     throw new Error(`${type} delegation only supports qc-flow run artifacts`);
   }
-  const relativeRunPath = relPathFrom(dir, runPath);
+  if (metadata.hasReviewerPanelSection && (type === "plan-check" || type === "goal-audit")) {
+    assignReviewerPanelCommand({
+      dir,
+      run,
+      context,
+      gate: config.requiredGate,
+      count: 3,
+      focus,
+      scope
+    });
+    return;
+  }
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const assignment = normalizeWhitespace(question ?? focus ?? defaultDelegationAssignment(type, metadata));
   const delegatedScope = normalizeWhitespace(scope ?? metadata.goal ?? "the active roadmap phase and its bounded affected area");
   const workerPrompt = defaultDelegationPrompt(type, metadata, relativeRunPath, assignment, delegatedScope);
@@ -2995,26 +3140,38 @@ function assignDelegationCommand({ dir, run, type, question, scope, focus }) {
   );
   fs.writeFileSync(runPath, nextText, "utf8");
   metadata = runMetadata(runPath);
-  fs.writeFileSync(stateFileFor(dir), renderStateFile(relativeRunPath, metadata), "utf8");
-  syncProjectFromRun(dir, metadata, relativeRunPath);
+  fs.writeFileSync(stateFileFor(dir, context), renderStateFile(relativeRunPath, metadata), "utf8");
+  syncProjectFromRun(dir, metadata, relativeRunPath, context);
 
   console.log(`Assigned ${type} delegation on ${relativeRunPath}`);
   console.log(`Gate locked to: ${config.requiredGate}`);
   console.log(`Worker prompt: ${workerPrompt}`);
-  console.log(`Complete with: quick-codex complete-delegation --dir ${dir} --run ${relativeRunPath} --type ${type} --status completed --summary \"...\" --verdict \"...\" --recommended-transition \"${config.defaultRecommendedTransition}\"`);
+  const ownerSelector = context && context.kind !== "legacy" ? ` --session ${context.id}` : "";
+  console.log(`Complete with: quick-codex complete-delegation --dir ${dir} --run ${relativeRunPath}${ownerSelector} --type ${type} --status completed --summary \"...\" --verdict \"...\" --recommended-transition \"${config.defaultRecommendedTransition}\"`);
 }
 
-function completeDelegationCommand({ dir, run, type, delegationStatus, summary, verdict, recommendedTransition }) {
+function completeDelegationCommand({ dir, run, context, type, delegationStatus, summary, verdict, recommendedTransition }) {
   const config = DELEGATION_CONFIG[type];
   if (!config) {
     throw new Error(`Unsupported delegation type: ${type}`);
   }
-  const runPath = resolveRunPath(dir, run);
+  const runPath = resolveRunPath(dir, run, context);
   let metadata = runMetadata(runPath);
   if (metadata.artifactType !== "flow") {
     throw new Error("complete-delegation only supports qc-flow run artifacts");
   }
-  const relativeRunPath = relPathFrom(dir, runPath);
+  const panelGates = type === "plan-check"
+    ? ["plan-check"]
+    : type === "goal-audit"
+      ? ["phase-close", "feature-close"]
+      : [];
+  const activePanel = panelGates
+    .map((gate) => reviewerPanelForGate(metadata, gate))
+    .find((panel) => panel && !panel.legacy && panel.reviewers.length > 1 && aggregateReviewerResults(panel.reviewers).status !== "pass");
+  if (activePanel) {
+    throw new Error(`complete-delegation cannot close active multi-reviewer panel ${activePanel.gate}; record each reviewer with complete-reviewer`);
+  }
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const nextStatus = delegationStatusValue(delegationStatus ?? "completed");
   if (!["completed", "blocked"].includes(nextStatus)) {
     throw new Error("--status must be completed or blocked");
@@ -3050,12 +3207,123 @@ function completeDelegationCommand({ dir, run, type, delegationStatus, summary, 
   );
   fs.writeFileSync(runPath, nextText, "utf8");
   metadata = runMetadata(runPath);
-  fs.writeFileSync(stateFileFor(dir), renderStateFile(relativeRunPath, metadata), "utf8");
-  syncProjectFromRun(dir, metadata, relativeRunPath);
+  fs.writeFileSync(stateFileFor(dir, context), renderStateFile(relativeRunPath, metadata), "utf8");
+  syncProjectFromRun(dir, metadata, relativeRunPath, context);
 
   console.log(`Recorded ${type} delegation result on ${relativeRunPath}`);
   console.log(`Status: ${nextStatus}`);
   console.log(`Result summary: ${summary ?? existing.resultSummary ?? "delegated result recorded"}`);
+}
+
+function normalizedReviewerGate(gate) {
+  const value = String(gate ?? "").trim().toLowerCase();
+  if (!REVIEWER_GATES.has(value)) {
+    throw new Error(`--gate must be one of ${[...REVIEWER_GATES].join(", ")}`);
+  }
+  return value;
+}
+
+function ownerSelectorForPrompt(context) {
+  return context && context.kind !== "legacy" ? ` --session ${context.id}` : " --legacy";
+}
+
+function reviewerCheckpointForMetadata(metadata, gate) {
+  if (gate === "plan-check") return "plan";
+  const phaseWave = phaseWaveFromMetadata(metadata);
+  return `${phaseWave.phase}/${phaseWave.wave}`;
+}
+
+function writeReviewerPanels(runPath, text, panels) {
+  const nextText = replaceOrInsertSection(
+    text,
+    "Reviewer Panels",
+    renderReviewerPanelSection(panels),
+    "Delegation State"
+  );
+  writeFileAtomic(runPath, nextText);
+}
+
+function assignReviewerPanelCommand({ dir, run, context, gate, count, focus, scope }) {
+  const reviewerGate = normalizedReviewerGate(gate);
+  const runPath = resolveRunPath(dir, run, context);
+  const metadata = runMetadata(runPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
+  const checkpoint = reviewerCheckpointForMetadata(metadata, reviewerGate);
+  const existing = reviewerPanelForGate(metadata, reviewerGate, checkpoint);
+  if (existing && !existing.legacy && aggregateReviewerResults(existing.reviewers).status !== "pass") {
+    throw new Error(`Reviewer panel for ${reviewerGate} is already active`);
+  }
+
+  const boundedScope = normalizeWhitespace(scope ?? focus ?? metadata.goal ?? "the active gate and its deterministic evidence");
+  const artifactDigest = reviewedArtifactDigest(metadata, reviewerGate, checkpoint);
+  const reviewers = buildReviewerAssignments({ gate: reviewerGate, count }).map((reviewer) => ({
+    ...reviewer,
+    scope: `${reviewer.scope} Bounded source scope: ${boundedScope}`,
+    artifactDigest,
+    resultDigest: "pending"
+  }));
+  const panels = [
+    ...(metadata.reviewerPanels ?? []).filter((panel) => panel.legacy || panel.gate !== reviewerGate || panel.checkpoint !== checkpoint),
+    { gate: reviewerGate, checkpoint, artifactDigest, legacy: false, reviewers }
+  ];
+  writeReviewerPanels(runPath, metadata.text, panels);
+
+  const ownerSelector = ownerSelectorForPrompt(context);
+  console.log(`Assigned reviewer panel: ${reviewerGate}`);
+  console.log(`Checkpoint: ${checkpoint}`);
+  console.log(`Reviewed artifact digest: ${artifactDigest}`);
+  console.log(`Reviewers: ${reviewers.length}`);
+  for (const reviewer of reviewers) {
+    const recordCommand = `quick-codex complete-reviewer --dir ${dir} --run ${relativeRunPath}${ownerSelector} --gate ${reviewerGate} --reviewer ${reviewer.id} --status completed --verdict pass --evidence-ref \"...\" --disposition accepted`;
+    console.log(`Reviewer prompt: Read-only independent reviewer ${reviewer.id} (${reviewer.role}). Owner artifact: --run ${relativeRunPath}${ownerSelector}. Reviewed artifact digest: ${artifactDigest}. Scope: ${reviewer.scope} Use the same bounded artifact and source evidence as every panel member, but work blind and independently; you cannot see peer conclusions. Hard gates: every distinct reviewer must complete, majority is never sufficient, every block or partial must be resolved or explicitly waived by the parent, and deterministic verification evidence remains required. Do not edit the artifact and do not run its parent record command. Return verdict, evidence reference, blockers, and suggested disposition to the parent. Parent record command: ${recordCommand}`);
+  }
+}
+
+function completeReviewerCommand({ dir, run, context, gate, reviewer, delegationStatus, verdict, evidenceRef, disposition }) {
+  const reviewerGate = normalizedReviewerGate(gate);
+  if (!reviewer) throw new Error("--reviewer is required");
+  const status = String(delegationStatus ?? "completed").trim().toLowerCase();
+  if (status !== "completed") throw new Error("--status must be completed for reviewer results");
+  const resultVerdict = String(verdict ?? "").trim().toLowerCase();
+  if (!new Set(["pass", "block", "partial"]).has(resultVerdict)) {
+    throw new Error("--verdict must be pass, block, or partial");
+  }
+  if (!normalizeWhitespace(evidenceRef)) throw new Error("--evidence-ref is required");
+  const resultDisposition = String(disposition ?? (resultVerdict === "pass" ? "accepted" : "pending")).trim().toLowerCase();
+  if (!new Set(["accepted", "resolved", "waived", "pending"]).has(resultDisposition)) {
+    throw new Error("--disposition must be accepted, resolved, waived, or pending");
+  }
+
+  const runPath = resolveRunPath(dir, run, context);
+  const metadata = runMetadata(runPath);
+  const checkpoint = reviewerCheckpointForMetadata(metadata, reviewerGate);
+  const panel = reviewerPanelForGate(metadata, reviewerGate, checkpoint);
+  if (!panel || panel.legacy) throw new Error(`No active multi-reviewer panel found for ${reviewerGate}`);
+  const currentDigest = reviewedArtifactDigest(metadata, reviewerGate, checkpoint);
+  if (!panel.artifactDigest || panel.artifactDigest !== currentDigest) {
+    throw new Error(`Reviewer panel for ${reviewerGate} reviewed artifact digest is stale; assign a new panel`);
+  }
+  const rowIndex = panel.reviewers.findIndex((row) => row.id === reviewer);
+  if (rowIndex === -1) throw new Error(`Reviewer ${reviewer} is not assigned to ${reviewerGate}`);
+  const reviewers = [...panel.reviewers];
+  reviewers[rowIndex] = {
+    ...reviewers[rowIndex],
+    status,
+    verdict: resultVerdict,
+    evidenceRef: normalizeWhitespace(evidenceRef),
+    disposition: resultDisposition,
+    artifactDigest: panel.artifactDigest,
+    resultDigest: currentDigest
+  };
+  const panels = metadata.reviewerPanels.map((entry) => (
+    entry.gate === reviewerGate && entry.checkpoint === checkpoint ? { ...entry, reviewers } : entry
+  ));
+  writeReviewerPanels(runPath, metadata.text, panels);
+  const aggregate = aggregateReviewerResults(reviewers);
+  console.log(`Recorded reviewer: ${reviewer}`);
+  console.log(`Reviewer panel: ${reviewerGate}`);
+  console.log(`Aggregate status: ${aggregate.status}`);
+  for (const blocker of aggregate.blockers) console.log(`- ${blocker}`);
 }
 
 function firstMeaningfulLine(text) {
@@ -3232,10 +3500,10 @@ function lockCheckResultLines(metadata) {
   return { checks, verifyCommands, grayAreaTriggers };
 }
 
-function lockCheckCommand({ dir, run }) {
-  const runPath = resolveRunPath(dir, run);
+function lockCheckCommand({ dir, run, context }) {
+  const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
-  const relativeRunPath = relPathFrom(dir, runPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const { checks, verifyCommands, grayAreaTriggers } = lockCheckResultLines(metadata);
   let failed = false;
 
@@ -3291,11 +3559,11 @@ function commandSetForVerification(metadata, mode) {
 }
 
 function executeVerificationCommands(args) {
-  const { dir, run, phase, wave, mode } = args;
-  const runPath = resolveRunPath(dir, run);
+  const { dir, run, context, phase, wave, mode } = args;
+  const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
   validateRequestedPhaseWave(metadata, phase, wave);
-  const relativeRunPath = relPathFrom(dir, runPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const commands = commandSetForVerification(metadata, mode);
   if (commands.length === 0) {
     throw new Error(`${mode} could not find any verification commands in the active artifact`);
@@ -3623,12 +3891,12 @@ function closeWavePhaseCloseLines(metadata, phase, requirementsCovered, requirem
   ];
 }
 
-async function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
-  const runPath = resolveRunPath(dir, run);
+async function closeWaveCommand({ dir, run, context, phase, wave, phaseDone }) {
+  const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
   validateRequestedPhaseWave(metadata, phase, wave);
   const phaseWave = phaseWaveFromMetadata(metadata);
-  const relativeRunPath = relPathFrom(dir, runPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const verificationEntries = verificationLedgerEntries(metadata.text)
     .filter((entry) => entry.phase === phaseWave.phase && entry.wave === phaseWave.wave);
   const passingEntries = verificationEntries.filter((entry) => entry.outcome === "pass");
@@ -3648,6 +3916,11 @@ async function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
   ]);
   const nextWaveRoute = plannedNextWaveRoute(metadata, phaseWave.phase, phaseWave.wave, phaseDone);
   const featureComplete = featureRoadmapComplete(metadata, phaseDone, phaseWave.phase);
+  const requiredPanelGate = featureComplete ? "feature-close" : (phaseDone ? "phase-close" : "wave-close");
+  const panelViolation = reviewerGateViolation(metadata, requiredPanelGate, `${phaseWave.phase}/${phaseWave.wave}`);
+  if (panelViolation) {
+    throw new Error(panelViolation);
+  }
   const phaseRelation = closeWavePhaseRelation(metadata, phaseWave.phase, phaseDone, nextWaveRoute);
   const compactionAction = compactionActionForRelation(phaseRelation);
   const nextGate = featureComplete ? "done" : (phaseDone ? "phase-close" : "execute");
@@ -3815,7 +4088,7 @@ async function closeWaveCommand({ dir, run, phase, wave, phaseDone }) {
   fs.writeFileSync(runPath, nextText, "utf8");
 
   const refreshedMetadata = runMetadata(runPath);
-  const statePath = stateFileFor(dir);
+  const statePath = stateFileFor(dir, context);
   ensureDir(path.dirname(statePath));
   fs.writeFileSync(statePath, renderStateFile(relativeRunPath, refreshedMetadata), "utf8");
 
@@ -3991,10 +4264,10 @@ function printUpdateNotice(latestVersion) {
   console.log("If you run from a local checkout, pull the latest repo changes first.");
 }
 
-function resumeCommand({ dir, run }) {
-  const runPath = resolveRunPath(dir, run);
+function resumeCommand({ dir, run, context }) {
+  const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
-  const relativeRunPath = relPathFrom(dir, runPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const commands = metadata.recommendedCommands.length > 0
     ? metadata.recommendedCommands
     : [defaultResumeCommand(relativeRunPath, metadata.artifactType)];
@@ -4012,6 +4285,7 @@ function resumeCommand({ dir, run }) {
     console.log(`Roadmap phase status: ${metadata.workflowCurrentRoadmapPhaseStatus ?? "unknown"}`);
     console.log(`Unresolved gray areas: ${unresolvedGrayAreaSummary(metadata)}`);
     console.log(`Delegation state: ${delegationSummary(metadata)}`);
+    console.log(`Reviewer panels: ${reviewerPanelSummary(metadata)}`);
     console.log(`Milestone / track: ${(metadata.projectMilestone ?? "unknown")} / ${(metadata.projectTrack ?? "default")}`);
   }
   console.log(`Current gate: ${metadata.currentGate ?? "unknown"}`);
@@ -4287,10 +4561,10 @@ Status:
 `;
 }
 
-function checkpointDigestCommand({ dir, run }) {
-  const runPath = resolveRunPath(dir, run);
+function checkpointDigestCommand({ dir, run, context }) {
+  const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
-  const relativeRunPath = relPathFrom(dir, runPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const lines = checkpointDigestLines(metadata, relativeRunPath);
   const autoCommands = preferredAutoContinueCommands(dir, relativeRunPath, metadata.artifactType);
   const carryForward = carryForwardState(metadata);
@@ -4341,20 +4615,20 @@ function checkpointDigestCommand({ dir, run }) {
   }
 }
 
-function captureHooksCommand({ dir, run, input }) {
+function captureHooksCommand({ dir, run, context, input }) {
   const captureText = readCaptureText(input);
   const parsedWarnings = parseHookWarnings(captureText);
   if (parsedWarnings.length === 0) {
     throw new Error("capture-hooks did not find any hook warnings in the provided input");
   }
-  const { relativeRunPath } = applyParsedWarningsToRun({ dir, run, parsedWarnings, sourceLabel: "quick-codex capture-hooks" });
+  const { relativeRunPath } = applyParsedWarningsToRun({ dir, run, context, parsedWarnings, sourceLabel: "quick-codex capture-hooks" });
   console.log(`Captured ${parsedWarnings.length} hook warning(s) into ${relativeRunPath}`);
   for (const warning of parsedWarnings) {
     console.log(`- ${warning.headline}`);
   }
 }
 
-async function syncExperienceCommand({ dir, run, tool, toolInput, toolInputFile, engineUrl, timeoutMs }) {
+async function syncExperienceCommand({ dir, run, context, tool, toolInput, toolInputFile, engineUrl, timeoutMs }) {
   const parsedToolInput = parseToolInputArgs({ toolInput, toolInputFile });
   const result = await fetchExperienceSuggestions({
     tool,
@@ -4374,7 +4648,7 @@ async function syncExperienceCommand({ dir, run, tool, toolInput, toolInputFile,
     throw new Error("sync-experience received suggestions, but could not parse any warning blocks");
   }
 
-  const { relativeRunPath } = applyParsedWarningsToRun({ dir, run, parsedWarnings, sourceLabel: "quick-codex sync-experience" });
+  const { relativeRunPath } = applyParsedWarningsToRun({ dir, run, context, parsedWarnings, sourceLabel: "quick-codex sync-experience" });
   console.log(`Synced ${parsedWarnings.length} Experience Engine warning(s) into ${relativeRunPath}`);
   console.log(`Source: ${result.baseUrl}/api/intercept`);
   for (const warning of parsedWarnings) {
@@ -4401,6 +4675,20 @@ function runMetadataStruct(runPath, text) {
   const researchDelegation = parseDelegationSection(text, "Research Delegation");
   const planCheckDelegation = parseDelegationSection(text, "Plan-Check Delegation");
   const goalAuditDelegation = parseDelegationSection(text, "Goal-Audit Delegation");
+  const reviewerPanelState = parseReviewerPanels(text, [
+    {
+      gate: "plan-check",
+      status: planCheckDelegation.delegateStatus,
+      verdict: planCheckDelegation.resultVerdict,
+      scope: planCheckDelegation.assignment
+    },
+    {
+      gate: "phase-close",
+      status: goalAuditDelegation.delegateStatus,
+      verdict: goalAuditDelegation.resultVerdict,
+      scope: goalAuditDelegation.assignment
+    }
+  ]);
 
   return {
     path: runPath,
@@ -4484,6 +4772,7 @@ function runMetadataStruct(runPath, text) {
     researchDelegation,
     planCheckDelegation,
     goalAuditDelegation,
+    ...reviewerPanelState,
     discussRegisterRows: parseDiscussRegisterRows(text),
     decisionRegisterRows: parseDecisionRegisterRows(text),
     dependencyRegisterRows: parseDependencyRegisterRows(text),
@@ -4566,11 +4855,11 @@ function runMetadataStruct(runPath, text) {
   };
 }
 
-async function repairRunCommand({ dir, run }) {
-  const runPath = resolveRunPath(dir, run);
-  const relativeRunPath = relPathFrom(dir, runPath);
+async function repairRunCommand({ dir, run, context }) {
+  const runPath = resolveRunPath(dir, run, context);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const metadata = runMetadata(runPath);
-  const statePath = stateFileFor(dir);
+  const statePath = stateFileFor(dir, context);
   ensureDir(path.dirname(statePath));
 
   if (metadata.artifactType === "lock") {
@@ -4665,7 +4954,7 @@ Status:
 
   const refreshedMetadata = runMetadata(runPath);
   fs.writeFileSync(statePath, renderStateFile(relativeRunPath, refreshedMetadata), "utf8");
-  syncProjectFromRun(dir, refreshedMetadata, relativeRunPath);
+  syncProjectFromRun(dir, refreshedMetadata, relativeRunPath, context);
 
   console.log(`Repaired run: ${relativeRunPath}`);
   console.log("Refreshed:");
@@ -4688,15 +4977,15 @@ Status:
     console.log("- Next Wave Pack");
   }
   console.log("- Experience Snapshot");
-  console.log(`- ${relPathFrom(dir, projectRoadmapFileFor(dir))}`);
-  console.log(`- ${relPathFrom(dir, backlogFileFor(dir))}`);
+  console.log(`- ${relPathFrom(dir, projectRoadmapFileFor(dir, context))}`);
+  console.log(`- ${relPathFrom(dir, backlogFileFor(dir, context))}`);
   console.log(`- ${relPathFrom(dir, statePath)}`);
 }
 
-function doctorRunCommand({ dir, run }) {
-  const runPath = resolveRunPath(dir, run);
+function doctorRunCommand({ dir, run, context }) {
+  const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
-  const relativeRunPath = relPathFrom(dir, runPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const text = metadata.text;
   const lockHeadings = ["Locked Plan", "Current Locked Plan"];
   const handoffScore = metadata.artifactType === "flow"
@@ -4757,6 +5046,10 @@ function doctorRunCommand({ dir, run }) {
     [
       "Delegated checkpoints cleared before advancing past their gate",
       requiredDelegationViolations(metadata).length === 0
+    ],
+    [
+      "Required reviewer panels cleared",
+      requiredReviewerPanelViolations(metadata).length === 0
     ],
     [
       "Handoff sufficiency score",
@@ -4834,12 +5127,16 @@ function doctorRunCommand({ dir, run }) {
       console.log(`- ${row.id || row.type || "gray-area"} [${row.status}] ${row.question}`);
     }
     console.log(`Delegation state: ${delegationSummary(metadata)}`);
+    console.log(`Reviewer panels: ${reviewerPanelSummary(metadata)}`);
     for (const violation of delegationViolations) {
       console.log(`- delegation gate violation: ${violation} result is not complete for current gate ${metadata.currentGate ?? "unknown"}`);
     }
+    for (const { gate, violation } of requiredReviewerPanelViolations(metadata)) {
+      console.log(`- reviewer panel gate violation: ${gate}: ${violation}`);
+    }
   }
 
-  const stateText = readTextIfExists(stateFileFor(dir));
+  const stateText = readTextIfExists(stateFileFor(dir, context));
   if (stateText) {
     const activeRun = normalizeStatePointer(findLabelValue(stateText, "Active run"));
     const activeLock = normalizeStatePointer(findLabelValue(stateText, "Active lock"));
@@ -4847,7 +5144,7 @@ function doctorRunCommand({ dir, run }) {
     const expectedPointer = metadata.artifactType === "lock"
       ? (completedInactiveLock ? runPath : (activeLock ?? activeRun))
       : activeRun;
-    const expectedPath = expectedPointer ? path.resolve(dir, expectedPointer) : null;
+    const expectedPath = expectedPointer ? resolveStatePointer(dir, context, expectedPointer) : null;
     const stateMatches = expectedPath === runPath;
     const pointerLabel = metadata.artifactType === "lock" ? "lock pointer" : "active run";
     if (completedInactiveLock) {
@@ -4892,14 +5189,15 @@ function doctorFlowChecks(metadata, text) {
     ["Delivery roadmap rows", hasRoadmapRows],
     ["Goal-backward checks", metadata.goalBackwardChecks.length > 0],
     ["Gray areas cleared before roadmap/plan/execute", !gateRequiresClearedGrayAreas(metadata) || unresolvedGrayAreas.length === 0],
-    ["Delegated checkpoints cleared before advancing past their gate", requiredDelegationViolations(metadata).length === 0]
+    ["Delegated checkpoints cleared before advancing past their gate", requiredDelegationViolations(metadata).length === 0],
+    ["Required reviewer panels cleared", requiredReviewerPanelViolations(metadata).length === 0]
   ];
 }
 
-function doctorFlowCommand({ dir, run }) {
-  const runPath = resolveRunPath(dir, run);
+function doctorFlowCommand({ dir, run, context }) {
+  const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
-  const relativeRunPath = relPathFrom(dir, runPath);
+  const relativeRunPath = artifactPointerFor(dir, context, runPath);
   if (metadata.artifactType !== "flow") {
     throw new Error("doctor-flow only supports qc-flow run artifacts");
   }
@@ -4919,11 +5217,15 @@ function doctorFlowCommand({ dir, run }) {
   console.log(`Current roadmap phase: ${metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase ?? "unknown"}`);
   console.log(`Unresolved gray areas: ${unresolved.length}`);
   console.log(`Delegation state: ${delegationSummary(metadata)}`);
+  console.log(`Reviewer panels: ${reviewerPanelSummary(metadata)}`);
   for (const row of unresolved) {
     console.log(`- ${row.id || row.type || "gray-area"} [${row.status}] ${row.question}`);
   }
   for (const violation of requiredDelegationViolations(metadata)) {
     console.log(`- delegation gate violation: ${violation} result is not complete for current gate ${metadata.currentGate ?? "unknown"}`);
+  }
+  for (const { gate, violation } of requiredReviewerPanelViolations(metadata)) {
+    console.log(`- reviewer panel gate violation: ${gate}: ${violation}`);
   }
   if (failed) {
     throw new Error("doctor-flow found one or more issues");
@@ -4931,8 +5233,8 @@ function doctorFlowCommand({ dir, run }) {
   console.log("Doctor-flow passed.");
 }
 
-function doctorProjectCommand({ dir }) {
-  const { roadmapPath, backlogPath, roadmapText, backlogText, roadmap, backlog } = loadProjectMetadata(dir);
+function doctorProjectCommand({ dir, context }) {
+  const { roadmapPath, backlogPath, roadmapText, backlogText, roadmap, backlog } = loadProjectMetadata(dir, context);
   const checks = [
     ["Project roadmap file", roadmapText !== null],
     ["Backlog file", backlogText !== null],
@@ -4972,6 +5274,286 @@ function doctorProjectCommand({ dir }) {
   console.log("Doctor-project passed.");
 }
 
+const SESSION_COMMANDS = new Set([
+  "status", "resume", "project-status", "sync-project",
+  "delegate-research", "delegate-plan-check", "delegate-goal-audit", "complete-delegation",
+  "assign-reviewer-panel", "complete-reviewer",
+  "lock-check", "verify-wave", "regression-check", "close-wave", "capture-hooks", "sync-experience",
+  "checkpoint-digest", "snapshot", "repair-run", "doctor-run", "doctor-flow", "doctor-project"
+]);
+
+const READ_ONLY_RUN_COMMANDS = new Set([
+  "status", "resume", "lock-check", "checkpoint-digest", "snapshot", "doctor-run", "doctor-flow"
+]);
+
+function inspectSessionNamespaces(dir) {
+  const sessionsRoot = path.join(flowDirFor(dir), "sessions");
+  if (!fs.existsSync(sessionsRoot)) {
+    return { entries: [], invalid: [] };
+  }
+  const entries = [];
+  const invalid = [];
+  for (const entry of fs.readdirSync(sessionsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name.startsWith(".")) continue;
+    const manifestPath = path.join(sessionsRoot, entry.name, ".session.json");
+    const manifestText = readTextIfExists(manifestPath);
+    if (!manifestText) {
+      invalid.push(`${entry.name}: missing .session.json`);
+      continue;
+    }
+    try {
+      const manifest = JSON.parse(manifestText);
+      if (manifest.kind === "session" && manifest.id === entry.name && typeof manifest.ownerNonce === "string" && manifest.ownerNonce) {
+        entries.push({ id: entry.name, ownerNonce: manifest.ownerNonce });
+      } else if (!(manifest.kind === "provisional" && manifest.id === entry.name && typeof manifest.ownerNonce === "string" && manifest.ownerNonce)) {
+        invalid.push(`${entry.name}: unresolved owner manifest`);
+      }
+    } catch {
+      invalid.push(`${entry.name}: malformed .session.json`);
+    }
+  }
+  return { entries: entries.sort((a, b) => a.id.localeCompare(b.id)), invalid };
+}
+
+function hasLegacyState(dir) {
+  const flowRoot = flowDirFor(dir);
+  const lockRoot = path.join(dir, ".quick-codex-lock");
+  const flowEntries = fs.existsSync(flowRoot)
+    ? fs.readdirSync(flowRoot, { withFileTypes: true }).some((entry) => entry.isFile() && entry.name !== "wrapper-config.json")
+    : false;
+  const lockEntries = fs.existsSync(lockRoot)
+    ? fs.readdirSync(lockRoot, { withFileTypes: true }).some((entry) => entry.isFile())
+    : false;
+  return flowEntries || lockEntries || fs.existsSync(path.join(dir, "STATE.md"));
+}
+
+function resolveCliContext(args) {
+  if (!SESSION_COMMANDS.has(args.command)) {
+    return null;
+  }
+  if (args.legacy && !args.run) {
+    return resolveSessionContext({ dir: args.dir, legacy: true, env: {} });
+  }
+  const inspection = inspectSessionNamespaces(args.dir);
+  const sessions = inspection.entries;
+  const byId = new Map(sessions.map((entry) => [entry.id, entry]));
+  const trustedId = [process.env.CODEX_THREAD_ID, process.env.CODEX_SESSION_ID]
+    .map((value) => value?.trim())
+    .find(Boolean) ?? null;
+
+  if (args.run) {
+    if (args.sessionId && /^(runs|locks)(?:\/|\\)/.test(args.run) && !path.isAbsolute(args.run)) {
+      return resolveSessionContext({
+        dir: args.dir,
+        sessionId: args.sessionId,
+        ownerNonce: byId.get(args.sessionId)?.ownerNonce ?? null
+      });
+    }
+    try {
+      return resolveSessionContext({
+        dir: args.dir,
+        run: args.run,
+        sessionId: args.sessionId,
+        legacy: args.legacy,
+        ownerNonce: args.sessionId ? byId.get(args.sessionId)?.ownerNonce ?? null : null
+      });
+    } catch (error) {
+      if (READ_ONLY_RUN_COMMANDS.has(args.command) && path.isAbsolute(args.run) && /known session or legacy namespace/.test(error.message)) {
+        if (args.sessionId || args.legacy) throw error;
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  if (args.sessionId) {
+    return resolveSessionContext({
+      dir: args.dir,
+      sessionId: args.sessionId,
+      ownerNonce: byId.get(args.sessionId)?.ownerNonce ?? null
+    });
+  }
+  if (trustedId) {
+    if (byId.has(trustedId)) {
+      return resolveSessionContext({
+        dir: args.dir,
+        sessionId: trustedId,
+        ownerNonce: byId.get(trustedId).ownerNonce
+      });
+    }
+    throw new Error(`Trusted session identity ${trustedId} has no canonical namespace; use --session ${trustedId} to materialize it or select an explicit --run/--legacy owner.`);
+  }
+  if (inspection.invalid.length > 0) {
+    throw new Error(`Session namespace ownership is unresolved (${inspection.invalid.join(", ")}); repair it or use an explicit --session, --run, or --legacy selector.`);
+  }
+  if (sessions.length === 1) {
+    return resolveSessionContext({
+      dir: args.dir,
+      sessionId: sessions[0].id,
+      ownerNonce: sessions[0].ownerNonce
+    });
+  }
+  if (sessions.length > 1) {
+    throw new Error(`Multiple session namespaces exist (${sessions.map((entry) => entry.id).join(", ")}); use --session <id> or --run <path>.`);
+  }
+  if (hasLegacyState(args.dir)) {
+    return resolveSessionContext({ dir: args.dir, legacy: true, env: {} });
+  }
+  throw new Error("No session namespace is available; use --session <id>, --run <path>, or --legacy.");
+}
+
+function migrationContext(dir, id, root, ownerNonce) {
+  return Object.freeze({
+    kind: "session",
+    id,
+    root,
+    statePath: path.join(root, "STATE.md"),
+    runsDir: path.join(root, "runs"),
+    locksDir: path.join(root, "locks"),
+    wrapperStatePath: path.join(root, "wrapper-state.json"),
+    projectRoadmapPath: path.join(root, PROJECT_ROADMAP_FILENAME),
+    backlogPath: path.join(root, BACKLOG_FILENAME),
+    manifestPath: path.join(root, ".session.json"),
+    relativeRunPath: null,
+    source: "migration",
+    ownerNonce,
+    parent: null
+  });
+}
+
+function sha256(content) {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function rewriteLegacyPointers(content) {
+  return content
+    .replace(/\.quick-codex-flow\/((?!STATE\.md|PROJECT-ROADMAP\.md|BACKLOG\.md)[^\s`|"']+\.md)/g, "runs/$1")
+    .replace(/\.quick-codex-lock\/([^\s`|"']+\.md)/g, "locks/$1");
+}
+
+function discoverLegacyMigrationFiles(dir) {
+  const flowRoot = flowDirFor(dir);
+  const lockRoot = path.join(dir, ".quick-codex-lock");
+  const files = [];
+  const add = (source, destination, rewrite = false) => {
+    if (fs.existsSync(source) && fs.statSync(source).isFile()) {
+      files.push({ source, destination, rewrite });
+    }
+  };
+
+  const flowState = path.join(flowRoot, "STATE.md");
+  add(fs.existsSync(flowState) ? flowState : path.join(dir, "STATE.md"), "STATE.md", true);
+  add(path.join(flowRoot, PROJECT_ROADMAP_FILENAME), PROJECT_ROADMAP_FILENAME, true);
+  add(path.join(flowRoot, BACKLOG_FILENAME), BACKLOG_FILENAME, true);
+  add(path.join(flowRoot, "wrapper-state.json"), "wrapper-state.json", true);
+  if (fs.existsSync(flowRoot)) {
+    for (const entry of fs.readdirSync(flowRoot, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith(".md") && !["STATE.md", PROJECT_ROADMAP_FILENAME, BACKLOG_FILENAME].includes(entry.name)) {
+        add(path.join(flowRoot, entry.name), path.join("runs", entry.name), true);
+      }
+    }
+  }
+  if (fs.existsSync(lockRoot)) {
+    for (const entry of fs.readdirSync(lockRoot, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith(".md")) {
+        add(path.join(lockRoot, entry.name), path.join("locks", entry.name), true);
+      }
+    }
+  }
+  return files;
+}
+
+function validateMigratedContext(dir, context) {
+  statusCommand({ dir, context, run: null });
+  resumeCommand({ dir, context, run: null });
+  doctorRunCommand({ dir, context, run: null });
+  if (fs.existsSync(context.projectRoadmapPath) && fs.existsSync(context.backlogPath)) {
+    doctorProjectCommand({ dir, context });
+  }
+}
+
+function migrateStateCommand({ dir, toSession, dryRun }) {
+  if (!toSession) {
+    throw new Error("migrate-state requires --to-session <id>");
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(toSession) || toSession === "." || toSession === "..") {
+    throw new Error(`Unsafe session identity: ${toSession}`);
+  }
+  const sessionsRoot = path.join(flowDirFor(dir), "sessions");
+  const targetRoot = path.join(sessionsRoot, toSession);
+  const completedManifestPath = path.join(targetRoot, ".migration.json");
+  if (fs.existsSync(targetRoot)) {
+    const completed = readJsonIfExists(completedManifestPath);
+    if (completed?.status === "complete" && completed?.toSession === toSession) {
+      console.log(`Migration to ${toSession} is already complete; no-op.`);
+      return;
+    }
+    throw new Error(`Migration target already exists; refusing to overwrite ${targetRoot}`);
+  }
+
+  const files = discoverLegacyMigrationFiles(dir);
+  if (!files.some((entry) => entry.destination === "STATE.md") || !files.some((entry) => entry.destination.startsWith("runs/") || entry.destination.startsWith("locks/"))) {
+    throw new Error("Legacy state graph is incomplete: an active STATE.md and at least one run or lock artifact are required");
+  }
+  console.log(`Migration plan for legacy state -> session ${toSession}:`);
+  for (const entry of files) {
+    console.log(`- ${relPathFrom(dir, entry.source)} -> ${entry.destination}`);
+  }
+  if (dryRun) {
+    console.log("Dry run complete; no files were written.");
+    return;
+  }
+
+  ensureDir(sessionsRoot);
+  const stageRoot = path.join(sessionsRoot, `.migrate-${toSession}-${randomUUID()}`);
+  const ownerNonce = randomUUID();
+  const context = migrationContext(dir, toSession, stageRoot, ownerNonce);
+  try {
+    fs.mkdirSync(stageRoot, { recursive: false });
+    const manifestFiles = [];
+    for (const entry of files) {
+      const sourceBytes = fs.readFileSync(entry.source);
+      const destinationBytes = entry.rewrite
+        ? Buffer.from(rewriteLegacyPointers(sourceBytes.toString("utf8")), "utf8")
+        : sourceBytes;
+      const destinationPath = path.join(stageRoot, entry.destination);
+      ensureDir(path.dirname(destinationPath));
+      fs.writeFileSync(destinationPath, destinationBytes, { flag: "wx" });
+      manifestFiles.push({
+        source: relPathFrom(dir, entry.source),
+        destination: entry.destination.split(path.sep).join("/"),
+        sourceSha256: sha256(sourceBytes),
+        destinationSha256: sha256(destinationBytes)
+      });
+    }
+    fs.writeFileSync(context.manifestPath, `${JSON.stringify({
+      id: toSession,
+      kind: "session",
+      source: "migration",
+      ownerNonce,
+      parent: null
+    }, null, 2)}\n`, { flag: "wx" });
+
+    validateMigratedContext(dir, context);
+    fs.writeFileSync(completedManifestPath.replace(targetRoot, stageRoot), `${JSON.stringify({
+      version: 1,
+      status: "complete",
+      toSession,
+      sourceLayout: "legacy",
+      completedAt: new Date().toISOString(),
+      files: manifestFiles
+    }, null, 2)}\n`, { flag: "wx" });
+    fs.renameSync(stageRoot, targetRoot);
+    console.log(`Migration complete: ${targetRoot}`);
+  } catch (error) {
+    if (fs.existsSync(stageRoot)) {
+      fs.rmSync(stageRoot, { recursive: true, force: true });
+    }
+    throw error;
+  }
+}
+
 async function maybeShowUpdateNotice(command) {
   if (!shouldCheckForUpdates(command)) {
     return;
@@ -4995,6 +5577,7 @@ async function main() {
 
   let succeeded = false;
   try {
+    args = { ...args, context: resolveCliContext(args) };
     switch (args.command) {
       case "help":
         usage();
@@ -5041,6 +5624,12 @@ async function main() {
       case "complete-delegation":
         completeDelegationCommand(args);
         break;
+      case "assign-reviewer-panel":
+        assignReviewerPanelCommand(args);
+        break;
+      case "complete-reviewer":
+        completeReviewerCommand(args);
+        break;
       case "lock-check":
         lockCheckCommand(args);
         break;
@@ -5074,6 +5663,9 @@ async function main() {
         break;
       case "doctor-project":
         doctorProjectCommand(args);
+        break;
+      case "migrate-state":
+        migrateStateCommand(args);
         break;
       default:
         throw new Error(`Unknown command: ${args.command}`);

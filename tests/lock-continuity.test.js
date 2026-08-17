@@ -16,6 +16,20 @@ import {
   writeStateFile
 } from "./test-helpers.js";
 
+import { resolveSessionContext } from "../lib/wrapper/session-context.js";
+
+test("session-aware doctor resolves an active lock from the selected namespace", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-lock-session-owner-"));
+  const context = resolveSessionContext({ dir, sessionId: "thread-lock" });
+  fs.mkdirSync(context.locksDir, { recursive: true });
+  fs.writeFileSync(path.join(context.locksDir, "sample-lock.md"), baseLockRun, "utf8");
+  fs.writeFileSync(context.statePath, `# Quick Codex Flow State\n\nActive run:\n- none\n\nActive lock:\n- locks/sample-lock.md\n\nCurrent gate:\n- execute\n\nCurrent phase / wave:\n- P1 / S1\n\nExecution mode:\n- manual\n\nStatus:\n- active\n`, "utf8");
+
+  const result = runCli(dir, "doctor-run", "--session", "thread-lock", "--dir", dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /sample-lock\.md/);
+});
+
 test("doctor-run passes for the canonical qc-lock artifact shape", () => {
   const project = makeLockProject(baseLockRun);
   const result = runCli(project.dir, "doctor-run", "--run", ".quick-codex-lock/sample-lock.md", "--dir", project.dir);

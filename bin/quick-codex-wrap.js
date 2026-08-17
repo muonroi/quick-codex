@@ -32,19 +32,21 @@ import {
   launchNativeCodexSession,
   NativeRemoteSession,
   runCodexCommand,
-  saveWrapperState
+  saveWrapperState,
+  createProvisionalContext,
+  resolveSessionContext
 } from "../lib/wrapper/index.js";
 
 function usage() {
   console.log(`Usage:
   quick-codex-wrap prompt --task <text> [--route-override <auto|qc-flow|qc-lock|direct>] [--json]
-  quick-codex-wrap run --task <text> [--dir <project-dir>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--output-last-message <file>]
+  quick-codex-wrap run --task <text> [--dir <project-dir>] [--session <id>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--output-last-message <file>]
   quick-codex-wrap chat [--dir <project-dir>] [--task <text>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--ui <auto|plain|rich|native>] [--native-guarded-slash </status|/compact|/clear|/resume <session-id-or-name|--last>>] [--follow] [--max-turns <n>] [--json]
-  quick-codex-wrap auto [--dir <project-dir>] [--run <path>] [--task <text>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--follow] [--max-turns <n>] [--output-last-message <file>]
+  quick-codex-wrap auto [--dir <project-dir>] [--run <path>] [--session <id>] [--task <text>] [--route-override <auto|qc-flow|qc-lock|direct>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--follow] [--max-turns <n>] [--output-last-message <file>]
   quick-codex-wrap decide [--dir <project-dir>] [--run <path>] [--json]
   quick-codex-wrap checkpoint [--dir <project-dir>] [--run <path>] [--json]
-  quick-codex-wrap start [--dir <project-dir>] [--run <path>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--output-last-message <file>]
-  quick-codex-wrap continue [--dir <project-dir>] [--run <path>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--same-session] [--output-last-message <file>]
+  quick-codex-wrap start [--dir <project-dir>] [--run <path>] [--session <id>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--output-last-message <file>]
+  quick-codex-wrap continue [--dir <project-dir>] [--run <path>] [--session <id>] [--permission-profile <safe|full|yolo|readonly>] [--approval-mode <manual|autonomous|untrusted>] [--dry-run] [--json] [--same-session] [--output-last-message <file>]
   quick-codex-wrap --help
 
 Commands:
@@ -124,6 +126,7 @@ function parseArgs(argv) {
     command: null,
     dir: process.cwd(),
     run: null,
+    sessionId: null,
     json: false,
     dryRun: false,
     follow: false,
@@ -162,6 +165,14 @@ function parseArgs(argv) {
         throw new Error("--run requires a path");
       }
       result.run = argv[i];
+      continue;
+    }
+    if (arg === "--session") {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error("--session requires an id");
+      }
+      result.sessionId = argv[i];
       continue;
     }
     if (arg === "--json") {
@@ -268,15 +279,15 @@ function print(value, asJson) {
   console.log(value.summary);
 }
 
-function shellStatus({ args, runtime, turnCount, shellState, wrapperConfig }) {
-  const flowState = readFlowState(args.dir);
+function shellStatus({ args, runtime, turnCount, shellState, wrapperConfig, context = null }) {
+  const flowState = readFlowState(args.dir, context);
   const activeRun = flowState?.activeRun && flowState.activeRun !== "none"
     ? flowState.activeRun
     : null;
   let artifact = null;
   if (activeRun) {
     try {
-      artifact = readRunArtifact({ dir: args.dir, run: activeRun });
+      artifact = readRunArtifact({ dir: args.dir, context, run: activeRun });
     } catch {
       artifact = null;
     }
@@ -354,22 +365,81 @@ function summarizeRouteSelection(decision) {
   return parts.join(" | ");
 }
 
-function saveWrapperStateIfPossible({ dir, state, artifact, decision, execution }) {
+function saveWrapperStateIfPossible({ dir, state, artifact, decision, execution, context = null }) {
   if (!artifact) {
     return null;
   }
   return saveWrapperState(dir, state, {
     artifact,
     decision,
-    execution
+    execution,
+    context
   });
 }
 
-function postTaskArtifact(dir, explicitRun = null) {
+function postTaskArtifact(dir, explicitRun = null, context = null) {
   if (explicitRun) {
-    return readRunArtifact({ dir, run: explicitRun });
+    return readRunArtifact({ dir, context, run: explicitRun });
   }
-  return readActiveRunArtifact(dir)?.artifact ?? null;
+  return readActiveRunArtifact(dir, context)?.artifact ?? null;
+}
+
+function storedOwnerNonce(dir, sessionId) {
+  if (!sessionId || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId)) {
+    return null;
+  }
+  const manifestPath = path.join(dir, ".quick-codex-flow", "sessions", sessionId, ".session.json");
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    return manifest.id === sessionId && manifest.kind === "session" ? manifest.ownerNonce ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveWrapperContext(args, { provisionalWhenMissing = false } = {}) {
+  const ambientThreadId = String(process.env.CODEX_THREAD_ID ?? "").trim();
+  const ambientSessionId = String(process.env.CODEX_SESSION_ID ?? "").trim();
+  const trustedId = args.sessionId ?? (ambientThreadId || ambientSessionId || null);
+  return resolveSessionContext({
+    dir: args.dir,
+    run: args.run,
+    sessionId: args.sessionId,
+    createProvisional: provisionalWhenMissing,
+    ownerNonce: storedOwnerNonce(args.dir, trustedId),
+    env: trustedId ? { CODEX_THREAD_ID: trustedId } : {}
+  });
+}
+
+function resolveWrapperDryRunContext(args) {
+  if (args.run) {
+    return resolveWrapperContext(args);
+  }
+  const ambientThreadId = String(process.env.CODEX_THREAD_ID ?? "").trim();
+  const ambientSessionId = String(process.env.CODEX_SESSION_ID ?? "").trim();
+  const trustedId = args.sessionId ?? (ambientThreadId || ambientSessionId || null);
+  if (!trustedId) {
+    return null;
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(trustedId)) {
+    return resolveWrapperContext(args);
+  }
+  const manifestPath = path.join(args.dir, ".quick-codex-flow", "sessions", trustedId, ".session.json");
+  return fs.existsSync(manifestPath) ? resolveWrapperContext(args) : null;
+}
+
+function executionContextFor({ dir, sourceContext, decision, dryRun = false }) {
+  if (dryRun) {
+    return sourceContext;
+  }
+  if (!sourceContext || sourceContext.kind === "provisional") {
+    return sourceContext ?? createProvisionalContext({ dir });
+  }
+  const resumeId = decision.resumableThreadId ?? decision.resumableSessionId ?? null;
+  if (decision.mode === "resume-session" && sourceContext.kind === "session" && resumeId === sourceContext.id) {
+    return sourceContext;
+  }
+  return createProvisionalContext({ dir, parent: sourceContext });
 }
 
 function readTextFileIfPresent(filePath) {
@@ -627,7 +697,10 @@ async function executeRoutedDecision({
   outputLastMessage = null,
   preferredMode = null,
   appServerSession = null,
-  onProgress = null
+  onProgress = null,
+  context = null,
+  sourceContext = null,
+  reloadAfterPromotion = null
 }) {
   const modelRoute = await resolveExperienceModelRoute({
     dir,
@@ -653,7 +726,10 @@ async function executeRoutedDecision({
       dryRun,
       outputLastMessage,
       preferredMode,
-      appServerSession
+      appServerSession,
+      context,
+      sourceContext,
+      reloadAfterPromotion
     });
     const routeFeedback = dryRun
       ? {
@@ -705,10 +781,20 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     };
   }
 
+  const sourceContext = args.context ?? (args.dryRun
+    ? resolveWrapperDryRunContext(args)
+    : resolveWrapperContext(args, { provisionalWhenMissing: true }));
+  const context = executionContextFor({
+    dir: args.dir,
+    sourceContext,
+    decision: baseDecision,
+    dryRun: args.dryRun
+  });
   const bootstrapState = ensureProjectBootstrap({
     dir: args.dir,
     route: baseDecision.route,
-    dryRun: args.dryRun
+    dryRun: args.dryRun,
+    context
   });
   onProgress?.(summarizeRouteSelection(baseDecision));
   onProgress?.(`reason=${baseDecision.reason}`);
@@ -726,8 +812,10 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     projectState: bootstrapState,
     prompt
   };
-  const state = loadWrapperState(args.dir);
-  ensureOutputPath(args.outputLastMessage);
+  const state = loadWrapperState(args.dir, sourceContext);
+  if (!args.dryRun) {
+    ensureOutputPath(args.outputLastMessage);
+  }
   const wrapperConfig = loadWrapperConfig(args.dir);
   const policy = resolvePermissionPolicy({
     explicitPermissionProfile: args.permissionProfile,
@@ -742,7 +830,10 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     dryRun: args.dryRun,
     outputLastMessage: args.outputLastMessage,
     appServerSession: runtime?.appServerSession ?? null,
-    onProgress
+    onProgress,
+    context,
+    sourceContext: sourceContext?.kind === "provisional" ? null : sourceContext,
+    reloadAfterPromotion: (ownerContext) => postTaskArtifact(args.dir, decision.activeRun ?? null, ownerContext)
   });
   const jsonlPath = args.outputLastMessage ? `${args.outputLastMessage}.jsonl` : null;
   const transcriptPath = args.outputLastMessage ? `${args.outputLastMessage}.transcript.txt` : null;
@@ -759,20 +850,28 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
     outputJsonlPath: jsonlPath,
     outputTranscriptPath: transcriptPath
   };
-  const artifact = postTaskArtifact(args.dir, decision.activeRun ?? null);
+  const ownerContext = execution.context ?? context;
+  if (runtime) {
+    runtime.context = ownerContext;
+  }
+  const artifact = execution.reloaded ?? postTaskArtifact(args.dir, decision.activeRun ?? null, ownerContext);
   const artifactSnapshot = buildArtifactSnapshot(artifact);
-  const persisted = saveWrapperStateIfPossible({
-    dir: args.dir,
-    state,
-    artifact,
-    decision: routed.decision,
-    execution
-  });
+  const persisted = args.dryRun
+    ? null
+    : saveWrapperStateIfPossible({
+        dir: args.dir,
+        state,
+        artifact,
+        decision: routed.decision,
+        execution,
+        context: ownerContext
+      });
   return {
     decision: routed.decision,
     bootstrapState,
     execution,
-    artifactBeforeTurn: decision.activeRun ? readRunArtifact({ dir: args.dir, run: decision.activeRun }) : null,
+    artifactBeforeTurn: decision.activeRun ? readRunArtifact({ dir: args.dir, context: ownerContext, run: decision.activeRun }) : null,
+    context: ownerContext,
     response: buildTaskAutoResponse({
       decision: routed.decision,
       bootstrapState,
@@ -784,8 +883,12 @@ async function executePreparedTaskDecision(args, baseDecision, runtime = null, o
 }
 
 async function executeTaskAuto(args, runtime = null) {
-  const baseDecision = await taskDecisionFromArgs(args);
-  return executePreparedTaskDecision(args, baseDecision, runtime);
+  const context = args.context ?? (args.dryRun
+    ? resolveWrapperDryRunContext(args)
+    : resolveWrapperContext(args, { provisionalWhenMissing: true }));
+  const scopedArgs = { ...args, context };
+  const baseDecision = await taskDecisionFromArgs(scopedArgs, context);
+  return executePreparedTaskDecision(scopedArgs, baseDecision, runtime);
 }
 
 async function runAutoTask(args, runtime = null) {
@@ -793,17 +896,23 @@ async function runAutoTask(args, runtime = null) {
 }
 
 async function executeArtifactAuto(args, artifactOverride = null, runtime = null, onProgress = null) {
-  const artifact = artifactOverride ?? readRunArtifact({ dir: args.dir, run: args.run });
-  const state = loadWrapperState(args.dir);
+  const sourceContext = args.context ?? (args.dryRun
+    ? resolveWrapperDryRunContext(args)
+    : resolveWrapperContext(args));
+  const artifact = artifactOverride ?? readRunArtifact({ dir: args.dir, context: sourceContext, run: args.run });
+  const state = loadWrapperState(args.dir, sourceContext);
   const wrapperConfig = loadWrapperConfig(args.dir);
   const policy = resolvePermissionPolicy({
     explicitPermissionProfile: args.permissionProfile,
     explicitApprovalMode: args.approvalMode,
     wrapperConfig
   });
-  const decision = decideWrapperAction({ artifact, state, sameSession: true, preferBoundaryAction: true });
+  const decision = decideWrapperAction({ artifact, state, sameSession: true, preferBoundaryAction: true, context: sourceContext });
+  const context = executionContextFor({ dir: args.dir, sourceContext, decision, dryRun: args.dryRun });
   onProgress?.(`continuation run=${artifact.relativeRunPath} | gate=${artifact.currentGate ?? "unknown"} | phase=${artifact.currentPhaseWave ?? "unknown"} | handoff=${decision.handoffAction ?? "launch-task"}`);
-  ensureOutputPath(args.outputLastMessage);
+  if (!args.dryRun) {
+    ensureOutputPath(args.outputLastMessage);
+  }
   const routed = await executeRoutedDecision({
     dir: args.dir,
     artifact,
@@ -812,7 +921,14 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
     dryRun: args.dryRun,
     outputLastMessage: args.outputLastMessage,
     appServerSession: runtime?.appServerSession ?? null,
-    onProgress
+    onProgress,
+    context,
+    sourceContext,
+    reloadAfterPromotion: (ownerContext) => readRunArtifact({
+      dir: args.dir,
+      context: ownerContext,
+      run: artifact.relativeRunPath
+    })
   });
   const jsonlPath = args.outputLastMessage ? `${args.outputLastMessage}.jsonl` : null;
   const transcriptPath = args.outputLastMessage ? `${args.outputLastMessage}.transcript.txt` : null;
@@ -829,21 +945,30 @@ async function executeArtifactAuto(args, artifactOverride = null, runtime = null
     outputJsonlPath: jsonlPath,
     outputTranscriptPath: transcriptPath
   };
-  const nextState = saveWrapperState(args.dir, state, {
-    artifact,
-    decision: routed.decision,
-    execution
-  });
+  const ownerContext = execution.context ?? context;
+  if (runtime) {
+    runtime.context = ownerContext;
+  }
+  const ownedArtifact = execution.reloaded ?? artifact;
+  const nextState = args.dryRun
+    ? null
+    : saveWrapperState(args.dir, state, {
+        artifact: ownedArtifact,
+        decision: routed.decision,
+        execution,
+        context: ownerContext
+      });
   const artifactSnapshot = buildArtifactSnapshot(artifact);
   return {
-    artifact,
+    artifact: ownedArtifact,
+    context: ownerContext,
     decision: routed.decision,
     execution,
     response: buildArtifactAutoResponse({
       artifact,
       decision: routed.decision,
       execution,
-      wrapperStatePath: nextState.path,
+      wrapperStatePath: nextState?.path ?? null,
       artifactSnapshot
     })
   };
@@ -886,13 +1011,15 @@ async function maybeFollowAuto(args, seed, runtime = null, onProgress = null) {
 
   let previousArtifact = seed.artifactBeforeTurn ?? null;
   let lastResponse = seed.response;
+  let ownerContext = seed.context ?? args.context ?? runtime?.context ?? null;
 
   for (let turn = 2; turn <= args.maxTurns; turn += 1) {
-    const state = loadWrapperState(args.dir);
+    const state = loadWrapperState(args.dir, ownerContext);
     const continuation = resolveAutoContinuation({
       dir: args.dir,
       run: seed.response.run ?? seed.response.activeRun ?? null,
-      state
+      state,
+      context: ownerContext
     });
 
     const stop = classifyAutoFollowStop({
@@ -919,8 +1046,10 @@ async function maybeFollowAuto(args, seed, runtime = null, onProgress = null) {
     onProgress?.(`follow-turn=${turn}/${args.maxTurns} | nextRun=${continuation.artifact.relativeRunPath} | checkpoint-advanced=true`);
     const continued = await executeArtifactAuto({
       ...args,
-      run: continuation.artifact.relativeRunPath
+      run: continuation.artifact.relativeRunPath,
+      context: ownerContext
     }, continuation.artifact, runtime, onProgress);
+    ownerContext = continued.context;
     previousArtifact = continuation.artifact;
     lastResponse = continued.response;
     turns.push({
@@ -1050,7 +1179,11 @@ async function runNativeChatShell(args) {
     console.log("[wrapper] launching native Codex follow loop");
     console.log("[wrapper] note: native TUI is preserved, but operator keystrokes are not forwarded in follow mode.");
 
-    const state = loadWrapperState(args.dir);
+    let ownerContext = args.task
+      ? createProvisionalContext({ dir: args.dir })
+      : resolveWrapperContext(args);
+    let sourceContext = ownerContext.kind === "provisional" ? null : ownerContext;
+    const state = loadWrapperState(args.dir, ownerContext);
     const maxTurns = Math.max(1, args.maxTurns ?? 3);
     let run = args.run ?? null;
     let task = args.task ?? null;
@@ -1061,7 +1194,8 @@ async function runNativeChatShell(args) {
     let bootstrapState = null;
 
     if (task) {
-      const baseDecision = await taskDecisionFromArgs(args);
+      const scopedArgs = { ...args, context: ownerContext };
+      const baseDecision = await taskDecisionFromArgs(scopedArgs, ownerContext);
       if (baseDecision.needsDisambiguation) {
         console.log(baseDecision.summary);
         throw new Error("Native follow loop cannot accept disambiguation interactively yet. Re-run with --route-override or a clearer task.");
@@ -1069,7 +1203,8 @@ async function runNativeChatShell(args) {
       bootstrapState = ensureProjectBootstrap({
         dir: args.dir,
         route: baseDecision.route,
-        dryRun: args.dryRun
+        dryRun: args.dryRun,
+        context: ownerContext
       });
       const prompt = baseDecision.promptSource === "active-run"
         ? baseDecision.prompt
@@ -1084,16 +1219,16 @@ async function runNativeChatShell(args) {
         projectState: bootstrapState,
         prompt
       };
-      seedArtifact = postTaskArtifact(args.dir, baseDecision.activeRun ?? null);
+      seedArtifact = postTaskArtifact(args.dir, baseDecision.activeRun ?? null, ownerContext);
       run = seedArtifact?.relativeRunPath ?? decision.activeRun ?? run;
     } else {
-      const active = readActiveRunArtifact(args.dir);
+      const active = readActiveRunArtifact(args.dir, ownerContext);
       if (!active?.artifact) {
         throw new Error("Native follow loop requires --task or an active run artifact in .quick-codex-flow/STATE.md.");
       }
       seedArtifact = active.artifact;
       run = seedArtifact.relativeRunPath;
-      decision = decideWrapperAction({ artifact: seedArtifact, state, sameSession: true, preferBoundaryAction: true });
+      decision = decideWrapperAction({ artifact: seedArtifact, state, sameSession: true, preferBoundaryAction: true, context: ownerContext });
     }
 
     const modelRoute = await resolveExperienceModelRoute({
@@ -1113,7 +1248,9 @@ async function runNativeChatShell(args) {
       model: selectedModel,
       reasoningEffort: selectedReasoning,
       stdioMode: "pty",
-      forwardOutput: true
+      forwardOutput: true,
+      context: ownerContext,
+      sourceContext
     });
     await session.start();
 
@@ -1155,11 +1292,16 @@ async function runNativeChatShell(args) {
       const minIndex = session.observer.events.length;
       await session.task(decision.prompt);
       await waitForTurnSettled(session.observer, minIndex, 60 * 60 * 1000);
+      if (session.promotionError) {
+        throw session.promotionError;
+      }
+      ownerContext = session.ownerContext ?? ownerContext;
 
       const continuation = resolveAutoContinuation({
         dir: args.dir,
         run,
-        state: loadWrapperState(args.dir)
+        state: loadWrapperState(args.dir, ownerContext),
+        context: ownerContext
       });
       const artifact = continuation.artifact;
       const nextDecision = continuation.decision ?? {
@@ -1197,13 +1339,17 @@ async function runNativeChatShell(args) {
       if (nextModelKey !== lastModel || nextReasoningKey !== lastReasoning) {
         // Restart the native bridge when the routed model changes.
         await session.stop();
+        sourceContext = ownerContext;
+        ownerContext = executionContextFor({ dir: args.dir, sourceContext, decision });
         session = new NativeRemoteSession({
           dir: args.dir,
           policy,
           model: nextModel,
           reasoningEffort: nextReasoning,
           stdioMode: "pty",
-          forwardOutput: true
+          forwardOutput: true,
+          context: ownerContext,
+          sourceContext
         });
         await session.start();
         lastModel = nextModelKey;
@@ -1217,10 +1363,30 @@ async function runNativeChatShell(args) {
 
   console.log("[wrapper] launching experimental native Codex bridge");
   console.log("[wrapper] note: this keeps the stock Codex TUI and slash commands, but per-message wrapper mediation is not enabled in this mode.");
+  if (args.task) {
+    const context = resolveWrapperContext(args, { provisionalWhenMissing: true });
+    const session = new NativeRemoteSession({
+      dir: args.dir,
+      policy,
+      stdioMode: "pty",
+      forwardOutput: true,
+      context
+    });
+    try {
+      await session.start({ onProgress: (entry) => console.log(`[wrapper] ${entry}`) });
+      await session.task(args.task, { onProgress: (entry) => console.log(`[wrapper] ${entry}`) });
+      if (session.promotionError) {
+        throw session.promotionError;
+      }
+    } finally {
+      await session.stop();
+    }
+    return;
+  }
   const result = await launchNativeCodexSession({
     dir: args.dir,
     policy,
-    prompt: args.task ?? null,
+    prompt: null,
     stdioMode: args.nativeGuardedSlash ? "pty" : "inherit",
     forwardOutput: args.nativeGuardedSlash ? true : null,
     guardedSlashCommand: args.nativeGuardedSlash,
@@ -1464,7 +1630,8 @@ function createChatSession(args) {
   const wrapperConfig = loadWrapperConfig(args.dir);
   const shellState = resolveShellState({ args, wrapperConfig });
   const runtime = {
-    appServerSession: new CodexAppServerSession({ dir: args.dir })
+    appServerSession: new CodexAppServerSession({ dir: args.dir }),
+    context: null
   };
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-chat-"));
   let turnCount = 0;
@@ -1479,7 +1646,7 @@ function createChatSession(args) {
       "Type /help for shell commands, /exit to quit."
     ],
     getStatus() {
-      return shellStatus({ args, runtime, turnCount, shellState, wrapperConfig });
+      return shellStatus({ args, runtime, turnCount, shellState, wrapperConfig, context: runtime.context });
     },
     async submit(line, onEntry = () => {}) {
       const emit = (entry) => onEntry(entry);
@@ -1529,7 +1696,8 @@ function createChatSession(args) {
             routeOverride: shellState.routeOverride,
             permissionProfile: shellState.permissionProfile,
             approvalMode: shellState.approvalMode,
-            outputLastMessage: path.join(tempDir, `turn-${turnCount}.txt`)
+            outputLastMessage: path.join(tempDir, `turn-${turnCount}.txt`),
+            context: pending.context
           };
           const response = await maybeFollowAuto(
             turnArgs,
@@ -1549,12 +1717,13 @@ function createChatSession(args) {
         return { exit: false };
       }
       if (trimmed === "/status") {
-        const status = shellStatus({ args, runtime, turnCount, shellState, wrapperConfig });
+        const status = shellStatus({ args, runtime, turnCount, shellState, wrapperConfig, context: runtime.context });
         emit({ type: "status", text: formatShellStatus(status, args.json), data: status });
         return { exit: false };
       }
       if (trimmed === "/continue") {
-        const flowState = readFlowState(args.dir);
+        const sourceContext = runtime.context ?? resolveWrapperContext(args);
+        const flowState = readFlowState(args.dir, sourceContext);
         const activeRun = flowState?.activeRun && flowState.activeRun !== "none"
           ? flowState.activeRun
           : null;
@@ -1564,7 +1733,7 @@ function createChatSession(args) {
         }
         let artifact;
         try {
-          artifact = readRunArtifact({ dir: args.dir, run: activeRun });
+          artifact = readRunArtifact({ dir: args.dir, context: sourceContext, run: activeRun });
         } catch (error) {
           emit({ type: "text", text: `Active run artifact is unreadable: ${error.message}` });
           return { exit: false };
@@ -1585,7 +1754,8 @@ function createChatSession(args) {
           routeOverride: shellState.routeOverride,
           permissionProfile: shellState.permissionProfile,
           approvalMode: shellState.approvalMode,
-          outputLastMessage: path.join(tempDir, `turn-${turnCount}.txt`)
+          outputLastMessage: path.join(tempDir, `turn-${turnCount}.txt`),
+          context: sourceContext
         };
         const response = await maybeFollowAuto(
           turnArgs,
@@ -1601,15 +1771,18 @@ function createChatSession(args) {
       const progress = shellProgressLogger(emit);
       progress(`turn=${turnCount + 1} | profile=${shellState.executionProfile} | follow=${shellState.follow ? "on" : "off"} | maxTurns=${shellState.maxTurns}`);
       progress(`analyzing task="${taskText.slice(0, 120)}${taskText.length > 120 ? "..." : ""}"`);
+      const context = createProvisionalContext({ dir: args.dir });
       const decisionProbe = await taskDecisionFromArgs({
         ...args,
         task: taskText,
-        routeOverride: shellState.routeOverride
-      });
+        routeOverride: shellState.routeOverride,
+        context
+      }, context);
       if (decisionProbe.needsDisambiguation) {
         pendingDisambiguation = {
           ...decisionProbe,
-          awaitingFreeText: false
+          awaitingFreeText: false,
+          context
         };
         emit({
           type: "disambiguation",
@@ -1628,7 +1801,8 @@ function createChatSession(args) {
         routeOverride: shellState.routeOverride,
         permissionProfile: shellState.permissionProfile,
         approvalMode: shellState.approvalMode,
-        outputLastMessage: path.join(tempDir, `turn-${turnCount}.txt`)
+        outputLastMessage: path.join(tempDir, `turn-${turnCount}.txt`),
+        context
       };
       const response = await maybeFollowAuto(
         turnArgs,
@@ -1722,7 +1896,7 @@ async function runChatShell(args) {
   await runPlainChatShell(args, session);
 }
 
-async function taskDecisionFromArgs(args) {
+async function taskDecisionFromArgs(args, context = args.context ?? null) {
   if (args.routeOverride) {
     return buildTaskDecision({
       args,
@@ -1739,13 +1913,14 @@ async function taskDecisionFromArgs(args) {
     });
   }
   const heuristic = routeTask({ task: args.task });
-  const wrapperState = loadWrapperState(args.dir);
-  const activeRun = readActiveRunArtifact(args.dir);
+  const wrapperState = loadWrapperState(args.dir, context);
+  const activeRun = readActiveRunArtifact(args.dir, context);
   const activeRunPreference = inspectActiveRunPreference({
     dir: args.dir,
     task: args.task,
     initialRoute: heuristic.route,
-    wrapperState
+    wrapperState,
+    context
   });
   const taskRouting = await resolveExperienceTaskRoute({
     dir: args.dir,
@@ -1829,7 +2004,11 @@ async function main() {
   }
 
   if (args.command === "run") {
-    const baseDecision = await taskDecisionFromArgs(args);
+    const context = args.dryRun
+      ? resolveWrapperDryRunContext(args)
+      : resolveWrapperContext(args, { provisionalWhenMissing: true });
+    const scopedArgs = { ...args, context };
+    const baseDecision = await taskDecisionFromArgs(scopedArgs, context);
     if (baseDecision.needsDisambiguation) {
       print(baseDecision, args.json);
       return;
@@ -1837,7 +2016,8 @@ async function main() {
     const bootstrapState = ensureProjectBootstrap({
       dir: args.dir,
       route: baseDecision.route,
-      dryRun: args.dryRun
+      dryRun: args.dryRun,
+      context
     });
     const prompt = baseDecision.promptSource === "active-run"
       ? baseDecision.prompt
@@ -1852,7 +2032,9 @@ async function main() {
       projectState: bootstrapState,
       prompt
     };
-    ensureOutputPath(args.outputLastMessage);
+    if (!args.dryRun) {
+      ensureOutputPath(args.outputLastMessage);
+    }
     const wrapperConfig = loadWrapperConfig(args.dir);
     const policy = resolvePermissionPolicy({
       explicitPermissionProfile: args.permissionProfile,
@@ -1865,7 +2047,9 @@ async function main() {
       decision,
       policy,
       dryRun: args.dryRun,
-      outputLastMessage: args.outputLastMessage
+      outputLastMessage: args.outputLastMessage,
+      context,
+      sourceContext: context?.kind === "provisional" ? null : context
     });
     const execution = routed.execution;
     const response = {
@@ -1921,7 +2105,8 @@ async function main() {
 
   if (args.command === "auto") {
     const runtime = {
-      appServerSession: args.follow ? new CodexAppServerSession({ dir: args.dir }) : null
+      appServerSession: args.follow ? new CodexAppServerSession({ dir: args.dir }) : null,
+      context: null
     };
     try {
       if (args.task) {
@@ -1930,7 +2115,8 @@ async function main() {
         return;
       }
 
-      const execution = await executeArtifactAuto(args, null, runtime);
+      const context = args.dryRun ? resolveWrapperDryRunContext(args) : resolveWrapperContext(args);
+      const execution = await executeArtifactAuto({ ...args, context }, null, runtime);
       const response = await maybeFollowAuto(args, {
         artifactBeforeTurn: execution.artifact,
         decision: execution.decision,
@@ -1943,15 +2129,16 @@ async function main() {
     }
   }
 
-  const artifact = readRunArtifact({ dir: args.dir, run: args.run });
-  const state = loadWrapperState(args.dir);
+  const sourceContext = args.dryRun ? resolveWrapperDryRunContext(args) : resolveWrapperContext(args);
+  const artifact = readRunArtifact({ dir: args.dir, context: sourceContext, run: args.run });
+  const state = loadWrapperState(args.dir, sourceContext);
   const wrapperConfig = loadWrapperConfig(args.dir);
   const policy = resolvePermissionPolicy({
     explicitPermissionProfile: args.permissionProfile,
     explicitApprovalMode: args.approvalMode,
     wrapperConfig
   });
-  const decision = decideWrapperAction({ artifact, state, sameSession: args.sameSession });
+  const decision = decideWrapperAction({ artifact, state, sameSession: args.sameSession, context: sourceContext });
 
   switch (args.command) {
     case "decide": {
@@ -1965,7 +2152,10 @@ async function main() {
     }
     case "start":
     case "continue": {
-      ensureOutputPath(args.outputLastMessage);
+      const context = executionContextFor({ dir: args.dir, sourceContext, decision, dryRun: args.dryRun });
+      if (!args.dryRun) {
+        ensureOutputPath(args.outputLastMessage);
+      }
       const routed = await executeRoutedDecision({
         dir: args.dir,
         artifact,
@@ -1973,14 +2163,26 @@ async function main() {
         policy,
         dryRun: args.dryRun,
         outputLastMessage: args.outputLastMessage,
-        preferredMode: args.command === "start" ? "fresh" : null
+        preferredMode: args.command === "start" ? "fresh" : null,
+        context,
+        sourceContext,
+        reloadAfterPromotion: (ownerContext) => readRunArtifact({
+          dir: args.dir,
+          context: ownerContext,
+          run: artifact.relativeRunPath
+        })
       });
       const execution = routed.execution;
-      const nextState = saveWrapperState(args.dir, state, {
-        artifact,
-        decision: routed.decision,
-        execution
-      });
+      const ownerContext = execution.context ?? context;
+      const ownedArtifact = execution.reloaded ?? artifact;
+      const nextState = args.dryRun
+        ? null
+        : saveWrapperState(args.dir, state, {
+            artifact: ownedArtifact,
+            decision: routed.decision,
+            execution,
+            context: ownerContext
+          });
       const response = {
         ...execution,
         run: artifact.relativeRunPath,
@@ -1993,7 +2195,7 @@ async function main() {
         sandboxMode: routed.decision.policy?.sandboxMode ?? execution.sandboxMode ?? null,
         bypassApprovalsAndSandbox: routed.decision.policy?.bypassApprovalsAndSandbox ?? execution.bypassApprovalsAndSandbox ?? false,
         decision: routed.decision.mode,
-        wrapperStatePath: nextState.path,
+        wrapperStatePath: nextState?.path ?? null,
         sessionStrategy: routed.decision.sessionStrategy,
         handoffAction: routed.decision.handoffAction,
         nativeThreadAction: routed.decision.nativeThreadAction,

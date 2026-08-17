@@ -16,6 +16,12 @@ function mergedTestEnv(envExtra = {}) {
     QUICK_CODEX_NO_UPDATE_CHECK: "1",
     ...envExtra
   };
+  if (!Object.prototype.hasOwnProperty.call(envExtra, "CODEX_THREAD_ID")) {
+    delete env.CODEX_THREAD_ID;
+  }
+  if (!Object.prototype.hasOwnProperty.call(envExtra, "CODEX_SESSION_ID")) {
+    delete env.CODEX_SESSION_ID;
+  }
   let hasConfiguredEngine = false;
   if (Object.prototype.hasOwnProperty.call(envExtra, "HOME")) {
     const experienceConfigPath = path.join(envExtra.HOME, ".experience", "config.json");
