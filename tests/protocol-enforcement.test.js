@@ -6,6 +6,8 @@ import path from "node:path";
 
 import { enforceQcFlowProtocol, enforceQcLockProtocol } from "../lib/wrapper/protocol.js";
 import { resolveSessionContext } from "../lib/wrapper/session-context.js";
+import { loadWrapperState, saveWrapperState } from "../lib/wrapper/state.js";
+import { inspectProjectBootstrap } from "../lib/wrapper/bootstrap.js";
 
 function makeDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qc-protocol-"));
@@ -77,6 +79,78 @@ test("flow bootstrap keeps identical task slugs inside their owner contexts", ()
   assert.equal(second.artifact.absoluteRunPath, path.join(b.runsDir, "plan-storage.md"));
   assert.equal(fs.existsSync(a.statePath), true);
   assert.equal(fs.existsSync(b.statePath), true);
+});
+
+test("session locks retain only their own session flow pointers and reject legacy handoffs", () => {
+  const dir = makeDir();
+  const context = resolveSessionContext({ dir, sessionId: "thread-a" });
+  const flow = enforceQcFlowProtocol({ dir, context, task: "Plan storage" }).artifact;
+  const trustedFlow = {
+    ...flow,
+    relativeRunPath: ".quick-codex-flow/legacy.md",
+    currentGate: "execute",
+    verifiedPlan: "P1 / W1: perform the planned change",
+    deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |"
+  };
+
+  const lock = enforceQcLockProtocol({
+    dir,
+    context,
+    task: "Plan storage",
+    activeFlowArtifact: trustedFlow
+  });
+  const state = fs.readFileSync(context.statePath, "utf8");
+  assert.match(state, /Active run:\n- runs\/plan-storage\.md/);
+  assert.match(state, /Active lock:\n- locks\/plan-storage\.md/);
+  assert.equal(lock.artifact.relativeRunPath, "locks/plan-storage.md");
+
+  const otherContext = resolveSessionContext({ dir, sessionId: "thread-b" });
+  const legacyPath = path.join(dir, ".quick-codex-flow", "legacy.md");
+  fs.writeFileSync(legacyPath, "# Run: legacy\n", "utf8");
+  assert.throws(() => enforceQcLockProtocol({
+    dir,
+    context: otherContext,
+    task: "Plan storage",
+    activeFlowArtifact: {
+      ...trustedFlow,
+      absoluteRunPath: legacyPath,
+      relativeRunPath: ".quick-codex-flow/legacy.md"
+    }
+  }), /session-owned flow artifact/i);
+});
+
+test("wrapper state writes use the supplied session context instead of a loaded legacy path", () => {
+  const dir = makeDir();
+  const legacyPath = path.join(dir, ".quick-codex-flow", "wrapper-state.json");
+  const legacyState = { version: 1, runs: { ".quick-codex-flow/legacy.md": { lastMode: "legacy" } } };
+  fs.writeFileSync(legacyPath, `${JSON.stringify(legacyState, null, 2)}\n`, "utf8");
+  const loadedLegacyState = loadWrapperState(dir);
+  const context = resolveSessionContext({ dir, sessionId: "thread-a" });
+
+  const saved = saveWrapperState(dir, loadedLegacyState, {
+    context,
+    artifact: { relativeRunPath: "runs/plan-storage.md" },
+    decision: { mode: "new", prompt: "Plan storage" },
+    execution: {}
+  });
+
+  assert.equal(saved.path, context.wrapperStatePath);
+  assert.deepEqual(JSON.parse(fs.readFileSync(legacyPath, "utf8")), legacyState);
+  assert.equal(fs.existsSync(context.wrapperStatePath), true);
+  assert.equal(JSON.parse(fs.readFileSync(context.wrapperStatePath, "utf8")).runs["runs/plan-storage.md"].lastMode, "new");
+});
+
+test("bootstrap treats legacy state as compatibility data while shared config initializes a session", () => {
+  const dir = makeDir();
+  const context = resolveSessionContext({ dir, sessionId: "thread-a" });
+
+  assert.equal(inspectProjectBootstrap({ dir, route: "qc-flow", context }).bootstrapRequired, true);
+  fs.writeFileSync(path.join(dir, ".quick-codex-flow", "wrapper-config.json"), "{}\n", "utf8");
+
+  const inspection = inspectProjectBootstrap({ dir, route: "qc-flow", context });
+  assert.equal(inspection.scaffoldPresent, true);
+  assert.equal(inspection.bootstrapRequired, false);
+  assert.equal(fs.existsSync(context.statePath), false);
 });
 
 test("enforceQcFlowProtocol keeps front-half runs in research without allowing execution", () => {
