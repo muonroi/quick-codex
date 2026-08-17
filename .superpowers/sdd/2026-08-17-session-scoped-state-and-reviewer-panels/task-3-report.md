@@ -120,3 +120,42 @@ Result before production fixes: 2 tests ran and both failed for the reviewed rea
 ### Remaining boundaries
 
 - No Task 4 adapter lifecycle or Task 5 reviewer-panel behavior changed.
+
+## Review Fix Round 2
+
+### Implementation SHA
+
+- `9cbf8df708dfc150054a2dadfe02df5a4702a49c` — `fix: normalize trusted CLI session identity`
+
+### Critical issue closed
+
+- Trusted ambient identity selection now trims both environment values, ignores empty strings, and selects the first non-empty value in precedence order: `CODEX_THREAD_ID`, then `CODEX_SESSION_ID`.
+- With `CODEX_THREAD_ID=""`, `CODEX_SESSION_ID="thread-b"`, and only `thread-a` materialized, `capture-hooks` fails closed for `thread-b` and leaves `thread-a` byte-unchanged instead of falling through to the sole unrelated namespace.
+
+### RED evidence
+
+Command:
+
+```sh
+node --test --test-name-pattern="empty primary trusted identity" tests/session-concurrency.test.js
+```
+
+Result before the production fix: the regression failed because `capture-hooks` returned status 0, demonstrating that the empty primary identity masked the non-empty fallback identity and allowed sole-namespace fallback.
+
+### GREEN evidence
+
+- Combined critical regressions (`empty primary trusted identity|unknown trusted ambient identity|owner-bearing completion command`): 3 passed, 0 failed.
+- Task 3 focused suite: 54 passed, 0 failed.
+- Full `npm test`: 82 passed, 0 failed.
+- `npm run lint:package`: passed.
+- `node --check bin/quick-codex.js`: passed.
+- `git diff --check`: passed.
+
+### Files changed
+
+- `bin/quick-codex.js`
+- `tests/session-concurrency.test.js`
+
+### Remaining boundaries
+
+- No Task 4 adapter lifecycle or Task 5 reviewer-panel behavior changed.
