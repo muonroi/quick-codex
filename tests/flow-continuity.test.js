@@ -16,6 +16,22 @@ import {
   writeStateFile
 } from "./test-helpers.js";
 
+import { resolveSessionContext } from "../lib/wrapper/session-context.js";
+
+test("session-aware flow mutation writes companion state and project files inside the run owner", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-flow-session-owner-"));
+  const context = resolveSessionContext({ dir, sessionId: "thread-flow" });
+  fs.mkdirSync(context.runsDir, { recursive: true });
+  fs.writeFileSync(path.join(context.runsDir, "sample.md"), baseRun, "utf8");
+  fs.writeFileSync(context.statePath, `# Quick Codex Flow State\n\nActive run:\n- runs/sample.md\n\nActive lock:\n- none\n\nStatus:\n- active\n`, "utf8");
+
+  const result = runCli(dir, "sync-project", "--session", "thread-flow", "--dir", dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(fs.existsSync(context.projectRoadmapPath), true);
+  assert.equal(fs.existsSync(context.backlogPath), true);
+  assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "PROJECT-ROADMAP.md")), false);
+});
+
 test("lock-check passes when affected area, exclusions, evidence, and verify path are explicit", () => {
   const project = makeProject(baseRun);
   const result = runCli(project.dir, "lock-check", "--run", ".quick-codex-flow/sample.md", "--dir", project.dir);
