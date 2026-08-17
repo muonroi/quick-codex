@@ -606,6 +606,93 @@ test("native /status proof accumulates a label and UUID split across output chun
   assert.equal(session.ownerContext.id, threadId);
 });
 
+test("native /status proof ignores a stale post-injection turn-settled event", async () => {
+  const dir = makeProject();
+  const pending = createProvisionalContext({ dir });
+  const staleId = "25252525-2525-4252-8252-252525252525";
+  const actualId = "26262626-2626-4262-8262-262626262626";
+  const observer = new NativeSessionObserver();
+  const writes = [];
+  let resolveActualStatus;
+  const actualStatusRendered = new Promise((resolve) => {
+    resolveActualStatus = resolve;
+  });
+  const session = new NativeRemoteSession({ dir, context: pending, observer });
+  session.started = true;
+  session.controller = new NativeSessionController({
+    mode: "pipe",
+    stdin: {
+      destroyed: false,
+      write(value) {
+        writes.push(value);
+        if (value === "/status\n") {
+          queueMicrotask(() => observer.record("turn-settled", {
+            text: `codex resume ${staleId}`,
+            sessionId: staleId
+          }));
+          setTimeout(() => {
+            observer.ingestChunk("stdout", `Session ID: ${actualId}\n›`);
+            resolveActualStatus();
+          }, 10);
+          return;
+        }
+        queueMicrotask(() => observer.record("native-busy", { text: "working" }));
+      }
+    }
+  });
+  observer.record("prompt-ready", { text: ">" });
+
+  await session.task("use actual owner", { timeoutMs: 1000 });
+  await actualStatusRendered;
+
+  assert.deepEqual(writes, ["/status\n", "use actual owner\n"]);
+  assert.equal(session.ownerContext.id, actualId);
+  assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "sessions", staleId)), false);
+});
+
+test("native /status proof waits for a prompt newer than its identity output", async () => {
+  const dir = makeProject();
+  const pending = createProvisionalContext({ dir });
+  const threadId = "27272727-2727-4272-8272-272727272727";
+  const observer = new NativeSessionObserver();
+  const timeline = [];
+  let resolveFreshPrompt;
+  const freshPromptRendered = new Promise((resolve) => {
+    resolveFreshPrompt = resolve;
+  });
+  const session = new NativeRemoteSession({ dir, context: pending, observer });
+  session.started = true;
+  session.controller = new NativeSessionController({
+    mode: "pipe",
+    stdin: {
+      destroyed: false,
+      write(value) {
+        if (value === "/status\n") {
+          queueMicrotask(() => {
+            timeline.push("identity");
+            observer.ingestChunk("stdout", `Session ID: ${threadId}\n`);
+          });
+          setTimeout(() => {
+            timeline.push("fresh-prompt");
+            observer.record("prompt-ready", { text: ">" });
+            resolveFreshPrompt();
+          }, 20);
+          return;
+        }
+        timeline.push("task");
+        queueMicrotask(() => observer.record("native-busy", { text: "working" }));
+      }
+    }
+  });
+  observer.record("prompt-ready", { text: ">" });
+
+  await session.task("wait for clean prompt", { timeoutMs: 1000 });
+  await freshPromptRendered;
+
+  assert.deepEqual(timeline, ["identity", "fresh-prompt", "task"]);
+  assert.equal(session.ownerContext.id, threadId);
+});
+
 test("native /status proof never completes a stale pre-injection identity", async () => {
   const dir = makeProject();
   const pending = createProvisionalContext({ dir });
