@@ -411,6 +411,23 @@ function resolveWrapperContext(args, { provisionalWhenMissing = false } = {}) {
   });
 }
 
+function resolveWrapperDryRunContext(args) {
+  if (args.run) {
+    return resolveWrapperContext(args);
+  }
+  const ambientThreadId = String(process.env.CODEX_THREAD_ID ?? "").trim();
+  const ambientSessionId = String(process.env.CODEX_SESSION_ID ?? "").trim();
+  const trustedId = args.sessionId ?? (ambientThreadId || ambientSessionId || null);
+  if (!trustedId) {
+    return null;
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(trustedId)) {
+    return resolveWrapperContext(args);
+  }
+  const manifestPath = path.join(args.dir, ".quick-codex-flow", "sessions", trustedId, ".session.json");
+  return fs.existsSync(manifestPath) ? resolveWrapperContext(args) : null;
+}
+
 function executionContextFor({ dir, sourceContext, decision }) {
   if (!sourceContext || sourceContext.kind === "provisional") {
     return sourceContext ?? createProvisionalContext({ dir });
@@ -1251,8 +1268,11 @@ async function runNativeChatShell(args) {
       }
 
       const minIndex = session.observer.events.length;
+      const taskWillAwaitPromotion = session.ownerContext?.kind === "provisional";
       await session.task(decision.prompt);
-      await waitForTurnSettled(session.observer, minIndex, 60 * 60 * 1000);
+      if (!taskWillAwaitPromotion) {
+        await waitForTurnSettled(session.observer, minIndex, 60 * 60 * 1000);
+      }
       if (session.promotionError) {
         throw session.promotionError;
       }
@@ -1965,7 +1985,9 @@ async function main() {
   }
 
   if (args.command === "run") {
-    const context = resolveWrapperContext(args, { provisionalWhenMissing: true });
+    const context = args.dryRun
+      ? resolveWrapperDryRunContext(args)
+      : resolveWrapperContext(args, { provisionalWhenMissing: true });
     const scopedArgs = { ...args, context };
     const baseDecision = await taskDecisionFromArgs(scopedArgs, context);
     if (baseDecision.needsDisambiguation) {
@@ -1991,7 +2013,9 @@ async function main() {
       projectState: bootstrapState,
       prompt
     };
-    ensureOutputPath(args.outputLastMessage);
+    if (!args.dryRun) {
+      ensureOutputPath(args.outputLastMessage);
+    }
     const wrapperConfig = loadWrapperConfig(args.dir);
     const policy = resolvePermissionPolicy({
       explicitPermissionProfile: args.permissionProfile,
@@ -2005,7 +2029,8 @@ async function main() {
       policy,
       dryRun: args.dryRun,
       outputLastMessage: args.outputLastMessage,
-      context
+      context,
+      sourceContext: context?.kind === "provisional" ? null : context
     });
     const execution = routed.execution;
     const response = {

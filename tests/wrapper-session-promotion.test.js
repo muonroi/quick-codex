@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
 
 import {
   createProvisionalContext,
@@ -13,7 +14,13 @@ import {
   runCodexCommand
 } from "../lib/wrapper/codex-cli.js";
 import { CodexAppServerSession } from "../lib/wrapper/app-server-client.js";
-import { launchNativeCodexSession, NativeRemoteSession, promoteObservedNativeContext } from "../lib/wrapper/native-session.js";
+import {
+  launchNativeCodexSession,
+  NativeRemoteSession,
+  NativeSessionController,
+  NativeSessionObserver,
+  promoteObservedNativeContext
+} from "../lib/wrapper/native-session.js";
 
 const policy = {
   permissionProfile: "safe",
@@ -59,6 +66,20 @@ function withEnv(values, fn) {
         else process.env[key] = value;
       }
     });
+}
+
+function snapshotTree(root) {
+  const snapshot = {};
+  function visit(current, relative = "") {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const nextRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const absolute = path.join(current, entry.name);
+      if (entry.isDirectory()) visit(absolute, nextRelative);
+      else snapshot[nextRelative] = fs.readFileSync(absolute).toString("hex");
+    }
+  }
+  if (fs.existsSync(root)) visit(root);
+  return snapshot;
 }
 
 test("exec promotes only after the child closes and then re-reads from the final owner", async () => {
@@ -226,6 +247,32 @@ test("fresh app-server continuation forks source bytes and records parent", asyn
   assert.equal(fs.readFileSync(source.statePath, "utf8"), "source-state");
 });
 
+test("fresh app-server start from a final owner copies the source snapshot exactly once", async () => {
+  const dir = makeProject();
+  const source = resolveSessionContext({ dir, sessionId: "thread-source" });
+  fs.mkdirSync(source.runsDir, { recursive: true });
+  fs.writeFileSync(source.statePath, "source-state", "utf8");
+  fs.writeFileSync(source.wrapperStatePath, "source-wrapper", "utf8");
+  fs.writeFileSync(path.join(source.runsDir, "work.md"), "source-run", "utf8");
+  const sourceBefore = snapshotTree(source.root);
+  const session = new FakeAppServerSession([]);
+
+  const result = await session.runDecision({
+    dir,
+    decision: decision({ nativeThreadAction: "thread/start" }),
+    policy,
+    context: source
+  });
+
+  const manifest = JSON.parse(fs.readFileSync(result.context.manifestPath, "utf8"));
+  assert.equal(manifest.parent, source.id);
+  assert.equal(manifest.forkSnapshot.sourceId, source.id);
+  assert.equal(fs.readFileSync(result.context.statePath, "utf8"), "source-state");
+  assert.equal(fs.readFileSync(result.context.wrapperStatePath, "utf8"), "source-wrapper");
+  assert.equal(fs.readFileSync(path.join(result.context.runsDir, "work.md"), "utf8"), "source-run");
+  assert.deepEqual(snapshotTree(source.root), sourceBefore);
+});
+
 for (const nativeThreadAction of ["thread/resume", "thread/compact/start"]) {
   test(`${nativeThreadAction} fallback forks into the new thread before turn/start`, async () => {
     const dir = makeProject();
@@ -253,7 +300,7 @@ for (const nativeThreadAction of ["thread/resume", "thread/compact/start"]) {
 
 test("app-server missing a final thread id fails before turn/start and marks recovery", async () => {
   const dir = makeProject();
-  const pending = createProvisionalContext({ dir });
+  const source = resolveSessionContext({ dir, sessionId: "thread-source" });
   const events = [];
   const session = new FakeMissingIdAppServerSession(events);
 
@@ -262,14 +309,20 @@ test("app-server missing a final thread id fails before turn/start and marks rec
       dir,
       decision: decision({ nativeThreadAction: "thread/start" }),
       policy,
-      context: pending
+      context: source,
+      sourceContext: source
     }),
     /thread id/i
   );
 
   assert.equal(events.includes("turn/start"), false);
-  const manifest = JSON.parse(fs.readFileSync(pending.manifestPath, "utf8"));
+  const sessionsRoot = path.dirname(source.root);
+  const pendingNames = fs.readdirSync(sessionsRoot).filter((name) => name.startsWith("pending-"));
+  assert.equal(pendingNames.length, 1);
+  const manifest = JSON.parse(fs.readFileSync(path.join(sessionsRoot, pendingNames[0], ".session.json"), "utf8"));
+  assert.equal(manifest.parent, source.id);
   assert.equal(manifest.recovery.reason, "missing-final-id");
+  assert.equal(JSON.parse(fs.readFileSync(source.manifestPath, "utf8")).recovery, undefined);
 });
 
 test("a destination collision fails closed and preserves both namespaces", () => {
@@ -362,16 +415,75 @@ test("native context waits for an observed trusted id", () => {
   assert.equal(promoted.id, "thread-native");
 });
 
-test("native remote task refuses to submit while its context is still provisional", async () => {
+test("native first task submits under the provisional owner and promotes after trusted turn settlement", async () => {
   const dir = makeProject();
   const pending = createProvisionalContext({ dir });
-  const session = new NativeRemoteSession({ dir, context: pending });
+  const observer = new NativeSessionObserver();
+  const events = [];
+  const stdin = {
+    destroyed: false,
+    write(value) {
+      events.push(`write:${value}`);
+      assert.equal(fs.existsSync(pending.root), true);
+      queueMicrotask(() => {
+        events.push("busy");
+        observer.record("native-busy", { text: "working" });
+        setImmediate(() => {
+          events.push("settled");
+          observer.record("turn-settled", { sessionId: "thread-native-first", text: "session id: thread-native-first" });
+        });
+      });
+    }
+  };
+  const session = new NativeRemoteSession({ dir, context: pending, observer });
   session.started = true;
+  session.controller = new NativeSessionController({ stdin, mode: "pipe" });
+  observer.record("prompt-ready", { text: ">" });
 
-  await assert.rejects(
-    session.task("do work"),
-    /observed trusted.*id/i
-  );
+  const submitted = await session.task("do work", { timeoutMs: 1000 });
+
+  assert.equal(submitted.startedBy, "native-busy");
+  assert.equal(submitted.ownerPromotedBy, "turn-settled");
+  assert.equal(events[0], "write:do work\n");
+  assert.deepEqual(events.slice(1), ["busy", "settled"]);
+  assert.equal(session.ownerContext.id, "thread-native-first");
+  assert.equal(fs.existsSync(pending.root), false);
+});
+
+test("run dry-run leaves both an empty project and an existing source namespace byte-unchanged", () => {
+  const wrapperPath = path.resolve("bin/quick-codex-wrap.js");
+  const runDry = (dir, extraArgs = []) => {
+    const env = {
+      ...process.env,
+      QUICK_CODEX_NO_UPDATE_CHECK: "1",
+      QUICK_CODEX_WRAP_DISABLE_TASK_ROUTER: "1",
+      QUICK_CODEX_WRAP_DISABLE_MODEL_ROUTER: "1"
+    };
+    delete env.CODEX_THREAD_ID;
+    delete env.CODEX_SESSION_ID;
+    return spawnSync(process.execPath, [
+      wrapperPath,
+      "run",
+      "--task", "inspect only",
+      "--dry-run",
+      "--json",
+      "--dir", dir,
+      ...extraArgs
+    ], { cwd: path.dirname(wrapperPath), env, encoding: "utf8" });
+  };
+
+  const emptyDir = makeProject();
+  const emptyResult = runDry(emptyDir);
+  assert.equal(emptyResult.status, 0, emptyResult.stderr);
+  assert.deepEqual(snapshotTree(emptyDir), {});
+
+  const sourceDir = makeProject();
+  const source = resolveSessionContext({ dir: sourceDir, sessionId: "thread-source" });
+  fs.writeFileSync(source.statePath, "source-state", "utf8");
+  const sourceBefore = snapshotTree(sourceDir);
+  const sourceResult = runDry(sourceDir, ["--session", source.id]);
+  assert.equal(sourceResult.status, 0, sourceResult.stderr);
+  assert.deepEqual(snapshotTree(sourceDir), sourceBefore);
 });
 
 test("standalone native launch cannot auto-submit a prompt from a provisional owner", async () => {
