@@ -4,6 +4,7 @@ Thumbs.db
 *.tmp
 *.log
 node_modules/
+.worktrees/
 /.quick-codex-flow/
 /.quick-codex-lock/
 npm-debug.log*
