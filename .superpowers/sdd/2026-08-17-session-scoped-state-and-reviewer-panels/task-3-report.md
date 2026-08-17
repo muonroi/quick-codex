@@ -82,3 +82,41 @@ Additional verification:
 - `findRecentCodexSession()` remains only in the Experience Engine diagnostic request payload; it is not used by CLI namespace or mutation selection.
 - Trusted environment identity is auto-selected only when its canonical namespace is already materialized. Explicit `--session` is the CLI path that may create a new canonical namespace; this prevents ordinary legacy commands from silently creating an unrelated empty namespace from inherited desktop environment variables.
 - Per the no-subagent instruction, review was a local scoped diff/contract review plus deterministic focused and full verification.
+
+## Review Fix Round 1
+
+### Implementation SHA
+
+- `bb374a2` — `fix: preserve CLI session ownership`
+
+### Blocking issues closed
+
+- An unknown trusted ambient `CODEX_THREAD_ID` now fails closed before the sole-canonical/default fallback. It cannot select or mutate an unrelated namespace; the error directs the caller to materialize the trusted owner with `--session <id>` or explicitly select `--run` / `--legacy`.
+- Session delegation output now includes `--session <owner>` whenever its `--run` value is session-relative. The regression executes the exact printed shell command through a local CLI shim and proves completion succeeds against the original owner.
+- CLI test helpers now remove inherited Codex identity variables by default and inject them only when a test explicitly requests them, so legacy/default selector tests are deterministic inside a live Codex session.
+
+### RED evidence
+
+Command:
+
+```sh
+node --test --test-name-pattern="unknown trusted ambient identity|owner-bearing completion command" tests/session-concurrency.test.js tests/flow-continuity.test.js
+```
+
+Result before production fixes: 2 tests ran and both failed for the reviewed reasons:
+
+- ambient `thread-b` returned success and mutated sole namespace `thread-a`;
+- the emitted completion command contained `--run runs/sample.md` but no `--session thread-flow`.
+
+### GREEN evidence
+
+- Each blocker-specific focused test passed independently after its minimal production change.
+- Task 3 focused suite: 53 passed, 0 failed.
+- Full `npm test`: 81 passed, 0 failed.
+- `npm run lint:package`: passed.
+- `node --check bin/quick-codex.js`: passed.
+- `git diff --check`: passed.
+
+### Remaining boundaries
+
+- No Task 4 adapter lifecycle or Task 5 reviewer-panel behavior changed.
