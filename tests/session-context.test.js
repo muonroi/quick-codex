@@ -210,3 +210,33 @@ test("path locks reclaim an abandoned recovery claim", async () => {
   assert.equal(entered, true);
   assert.equal(fs.existsSync(recoveryPath), false);
 });
+
+test("path locks reclaim an aged recovery claim abandoned before metadata publication", async () => {
+  const dir = makeProject();
+  const filePath = path.join(dir, "state.json");
+  const recoveryPath = `${filePath}.lock.recovery`;
+  fs.writeFileSync(recoveryPath, "", "utf8");
+  const staleTime = new Date(Date.now() - 2_000);
+  fs.utimesSync(recoveryPath, staleTime, staleTime);
+  let entered = false;
+
+  await withPathLock(filePath, async () => {
+    entered = true;
+  }, { retries: 0 });
+
+  assert.equal(entered, true);
+  assert.equal(fs.existsSync(recoveryPath), false);
+});
+
+test("path locks preserve a fresh recovery claim until metadata publication grace expires", async () => {
+  const dir = makeProject();
+  const filePath = path.join(dir, "state.json");
+  const recoveryPath = `${filePath}.lock.recovery`;
+  fs.writeFileSync(recoveryPath, "", "utf8");
+
+  await assert.rejects(
+    withPathLock(filePath, async () => {}, { retries: 0 }),
+    { code: "EEXIST" }
+  );
+  assert.equal(fs.existsSync(recoveryPath), true);
+});
