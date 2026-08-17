@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { enforceQcFlowProtocol, enforceQcLockProtocol } from "../lib/wrapper/protocol.js";
+import { resolveSessionContext } from "../lib/wrapper/session-context.js";
 
 function makeDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qc-protocol-"));
@@ -61,6 +62,21 @@ test("enforceQcFlowProtocol bootstraps a task-specific clarify artifact for a fr
   const state = fs.readFileSync(path.join(dir, ".quick-codex-flow", "STATE.md"), "utf8");
   assert.match(state, /Current gate:\n- clarify/);
   assert.match(state, /Execution mode:\n- auto/);
+});
+
+test("flow bootstrap keeps identical task slugs inside their owner contexts", () => {
+  const dir = makeDir();
+  const a = resolveSessionContext({ dir, sessionId: "thread-a" });
+  const b = resolveSessionContext({ dir, sessionId: "thread-b" });
+
+  const first = enforceQcFlowProtocol({ dir, context: a, task: "Plan storage" });
+  const second = enforceQcFlowProtocol({ dir, context: b, task: "Plan storage" });
+
+  assert.notEqual(first.artifact.absoluteRunPath, second.artifact.absoluteRunPath);
+  assert.equal(first.artifact.absoluteRunPath, path.join(a.runsDir, "plan-storage.md"));
+  assert.equal(second.artifact.absoluteRunPath, path.join(b.runsDir, "plan-storage.md"));
+  assert.equal(fs.existsSync(a.statePath), true);
+  assert.equal(fs.existsSync(b.statePath), true);
 });
 
 test("enforceQcFlowProtocol keeps front-half runs in research without allowing execution", () => {
