@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.0
+
+Highlights:
+- isolated workflow artifacts and wrapper state by Codex session, with session-aware CLI migration and concurrent-session protection
+- hardened native thread ownership, session promotion, atomic lock claims, and abandoned-lock recovery
+- added independent reviewer panels at workflow gates and bound their decisions to the reviewed evidence
+
 ## 0.4.11
 
 Highlights:
