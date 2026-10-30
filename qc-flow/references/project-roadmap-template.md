@@ -3,7 +3,7 @@
 Recommended path:
 
 ```text
-.quick-codex-flow/PROJECT-ROADMAP.md
+.quick-codex-flow/sessions/<thread-id>/PROJECT-ROADMAP.md
 ```
 
 Use this file for project-level governance across multiple flow runs.
@@ -23,13 +23,13 @@ Current track:
 
 | Milestone | Status | Outcome | Active runs | Depends on | Exit verification |
 |---|---|---|---|---|---|
-| M1 | active | ... | .quick-codex-flow/<run>.md | none | ... |
+| M1 | active | ... | runs/<run>.md | none | ... |
 | M2 | planned | ... | none | M1 | ... |
 
 ## Active Run Register
 | Run | Status | Gate | Roadmap phase | Milestone | Track | Summary |
 |---|---|---|---|---|---|---|
-| .quick-codex-flow/<run>.md | active | execute | P1 | M1 | default | ... |
+| runs/<run>.md | active | execute | P1 | M1 | default | ... |
 
 ## Cross-Run Dependency Register
 | ID | Scope | Depends on | Why | Status |

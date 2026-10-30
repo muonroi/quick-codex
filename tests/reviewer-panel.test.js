@@ -115,6 +115,10 @@ test("completed reviewer results become stale when the reviewed plan or evidence
     reviewerGateViolation({ ...metadata, evidenceBasis: "repository evidence B" }, "plan-check", "plan"),
     /reviewed artifact digest is stale/i
   );
+  assert.match(
+    reviewerGateViolation({ ...metadata, verificationPlan: "cache-miss: additional executable check" }, "plan-check", "plan"),
+    /reviewed artifact digest is stale/i
+  );
 });
 
 test("reviewer count is explicit, unique, and never smaller than two", () => {

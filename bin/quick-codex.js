@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 
 import { resolveSessionContext } from "../lib/wrapper/session-context.js";
 import { writeFileAtomic } from "../lib/wrapper/atomic-fs.js";
+import { stateValue, isLeanArtifact, renderCurrentState, replaceSection, verificationPlan, orderedVerificationCommands, verificationFingerprint, assertVerificationReceipt } from "../lib/wrapper/workflow-artifact.js";
 import {
   aggregateReviewerResults,
   buildReviewerAssignments,
@@ -704,31 +705,20 @@ function initCommand({ dir, force }) {
   const flowDir = path.join(dir, ".quick-codex-flow");
   ensureDir(flowDir);
   const flowReadme = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "README.md");
-  const sampleRun = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "sample-run.md");
-  const stateTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "STATE.md");
   const wrapperConfigTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", "wrapper-config.json");
-  const projectRoadmapTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", PROJECT_ROADMAP_FILENAME);
-  const backlogTemplate = path.join(ROOT_DIR, "templates", ".quick-codex-flow", BACKLOG_FILENAME);
 
   const readmeResult = writeFileIfMissing(path.join(flowDir, "README.md"), fs.readFileSync(flowReadme, "utf8"));
-  const sampleResult = writeFileIfMissing(path.join(flowDir, "sample-run.md"), fs.readFileSync(sampleRun, "utf8"));
-  const stateResult = writeFileIfMissing(path.join(flowDir, "STATE.md"), fs.readFileSync(stateTemplate, "utf8"));
   const wrapperConfigResult = writeFileIfMissing(path.join(flowDir, "wrapper-config.json"), fs.readFileSync(wrapperConfigTemplate, "utf8"));
-  const projectRoadmapResult = writeFileIfMissing(path.join(flowDir, PROJECT_ROADMAP_FILENAME), fs.readFileSync(projectRoadmapTemplate, "utf8"));
-  const backlogResult = writeFileIfMissing(path.join(flowDir, BACKLOG_FILENAME), fs.readFileSync(backlogTemplate, "utf8"));
 
   console.log(`AGENTS scaffold: ${agentsResult}`);
   console.log(`.quick-codex-flow/README.md: ${readmeResult}`);
-  console.log(`.quick-codex-flow/sample-run.md: ${sampleResult}`);
-  console.log(`.quick-codex-flow/STATE.md: ${stateResult}`);
   console.log(`.quick-codex-flow/wrapper-config.json: ${wrapperConfigResult}`);
-  console.log(`.quick-codex-flow/${PROJECT_ROADMAP_FILENAME}: ${projectRoadmapResult}`);
-  console.log(`.quick-codex-flow/${BACKLOG_FILENAME}: ${backlogResult}`);
   console.log("");
   console.log("Recommended prompts:");
   console.log('1. Use $qc-flow for this task: <describe the non-trivial task>.');
-  console.log('2. Use $qc-flow and resume from .quick-codex-flow/<run-file>.md.');
-  console.log('3. Use $qc-lock for this task: execute <phase/wave> from .quick-codex-flow/<run-file>.md.');
+  console.log('2. Keep mutable state in .quick-codex-flow/sessions/<thread-id>/; use the trusted Codex thread ID or an explicit --session selector.');
+  console.log('3. Use $qc-flow and resume from runs/<run-file>.md inside that session namespace.');
+  console.log('4. Use $qc-lock for this task: execute <phase/wave> from locks/<run-file>.md inside that session namespace.');
   console.log("");
   console.log("Helpful commands:");
   console.log(`- node bin/quick-codex.js status --dir ${dir}`);
@@ -792,8 +782,9 @@ function findLabelValue(text, label) {
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i += 1) {
     const trimmed = lines[i].trim();
-    if (trimmed.startsWith(`${label}:`)) {
-      const sameLine = trimmed.slice(`${label}:`.length).trim();
+    const labelLine = stripBullet(trimmed);
+    if (labelLine.startsWith(`${label}:`)) {
+      const sameLine = labelLine.slice(`${label}:`.length).trim();
       if (sameLine.length > 0) {
         return stripBullet(sameLine);
       }
@@ -1225,7 +1216,8 @@ function milestoneStatusFromRun(metadata) {
   return "active";
 }
 
-function syncProjectFromRun(projectDir, metadata, relativeRunPath, context = null) {
+function syncProjectFromRun(projectDir, metadata, relativeRunPath, context = null, { explicit = false } = {}) {
+  if (isLeanArtifact(metadata.text) && !metadata.projectBoard && !explicit) return;
   const { roadmapPath, backlogPath } = ensureProjectArtifacts(projectDir, context);
   const roadmapText = fs.readFileSync(roadmapPath, "utf8");
   const roadmapMeta = parseProjectRoadmapMetadata(roadmapText);
@@ -1491,6 +1483,7 @@ function requiredDelegationViolations(metadata) {
   if (
     currentGateRank > gateRank("plan-check")
     && !metadata.hasReviewerPanelSection
+    && (!isLeanArtifact(metadata.text) || effectiveDelegationStatus(metadata, "plan-check") !== null)
     && effectiveDelegationStatus(metadata, "plan-check") !== "completed"
   ) {
     violations.push("plan-check");
@@ -2335,8 +2328,10 @@ function applyParsedWarningsToRun({ dir, run, context, parsedWarnings, sourceLab
 
   nextText = replaceOrInsertSection(nextText, "Experience Snapshot", experienceSnapshotLines(mergedSnapshot), "Approval Strategy");
   const mergedMetadata = runMetadataFromText(runPath, nextText);
-  nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(mergedMetadata, relativeRunPath), "Requirement Baseline");
-  nextText = replaceOrInsertSection(nextText, "Compact-Safe Summary", compactSafeSummaryLines(mergedMetadata, relativeRunPath), "Resume Digest");
+  if (!isLeanArtifact(nextText)) {
+    nextText = replaceOrInsertSection(nextText, "Resume Digest", resumeDigestLines(mergedMetadata, relativeRunPath), "Requirement Baseline");
+    nextText = replaceOrInsertSection(nextText, "Compact-Safe Summary", compactSafeSummaryLines(mergedMetadata, relativeRunPath), "Resume Digest");
+  }
   fs.writeFileSync(runPath, nextText, "utf8");
 
   const refreshedMetadata = runMetadata(runPath);
@@ -2761,7 +2756,7 @@ async function fetchSessionActionBrainVerdict({ metadata, relativeRunPath, proje
 }
 
 function relPathFrom(baseDir, targetPath) {
-  return path.relative(baseDir, targetPath) || ".";
+  return (path.relative(baseDir, targetPath) || ".").split(path.sep).join("/");
 }
 
 function phaseWaveFromMetadata(metadata) {
@@ -2784,7 +2779,7 @@ function normalizeStatePointer(value) {
   if (/^(none|n\/a|not recorded)$/i.test(trimmed)) {
     return null;
   }
-  return trimmed;
+  return trimmed.replace(/^`(.+)`$/, "$1").replace(/[\\/]+/g, "/");
 }
 
 function flowDirFor(projectDir) {
@@ -2863,7 +2858,7 @@ function resolveRunPath(projectDir, explicitRun, context = null) {
         }
       }
     }
-    const activeRun = findLabelValue(stateText, "Active run");
+    const activeRun = normalizeStatePointer(findLabelValue(stateText, "Active run"));
     if (activeRun) {
       const activeRunPath = resolveStatePointer(projectDir, context, activeRun);
       if (fs.existsSync(activeRunPath)) {
@@ -2905,9 +2900,25 @@ function resolveRunPath(projectDir, explicitRun, context = null) {
   throw new Error(`Multiple active runs found for session ${context?.id ?? "legacy"}; use --run to choose one explicitly.`);
 }
 
+function printLeanStatus(metadata, relativeRunPath) {
+  const position = phaseWaveFromMetadata(metadata);
+  console.log(`Run: ${relativeRunPath}`);
+  console.log(`Goal: ${metadata.goal}`);
+  console.log(`Current gate: ${metadata.currentGate}`);
+  console.log(`Current phase / wave: ${position.phase} / ${position.wave}`);
+  console.log(`Execution mode: ${metadata.executionMode}`);
+  console.log(`Execution state: ${metadata.executionState}`);
+  console.log(`Blockers: ${metadata.blockers}`);
+  if (metadata.currentGate === "done") return;
+  console.log(`Next verify: ${metadata.nextVerify}`);
+  const nextCommand = metadata.recommendedCommands[0];
+  if (nextCommand && nextCommand !== "none") console.log(`Recommended next command: ${nextCommand}`);
+}
+
 function statusCommand({ dir, run, context }) {
   const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
+  if (isLeanArtifact(metadata.text)) return printLeanStatus(metadata, artifactPointerFor(dir, context, runPath));
   const phaseWave = phaseWaveFromMetadata(metadata);
   const autoCommands = preferredAutoContinueCommands(dir, relPathFrom(dir, runPath), metadata.artifactType);
   const projectMeta = loadProjectMetadata(dir, context);
@@ -3001,7 +3012,7 @@ function syncProjectCommand({ dir, run, context }) {
     throw new Error("sync-project only supports qc-flow run artifacts");
   }
   const relativeRunPath = artifactPointerFor(dir, context, runPath);
-  syncProjectFromRun(dir, metadata, relativeRunPath, context);
+  syncProjectFromRun(dir, metadata, relativeRunPath, context, { explicit: true });
   console.log(`Synced project board from ${relativeRunPath}`);
   console.log(`- ${relPathFrom(dir, projectRoadmapFileFor(dir, context))}`);
   console.log(`- ${relPathFrom(dir, backlogFileFor(dir, context))}`);
@@ -3071,6 +3082,9 @@ function delegationSectionLines({ type, status, assignment, workerPrompt, expect
 function applyDelegationGate(type, metadata, nextText) {
   const config = DELEGATION_CONFIG[type];
   const gate = config.requiredGate;
+  if (isLeanArtifact(nextText)) return replaceSection(nextText, "Current Status", renderCurrentState({
+    ...metadata, currentGate: gate
+  }));
   const workflowStateLines = [
     `- Current stage: ${gate}`,
     `- Current gate: ${gate}`,
@@ -3426,7 +3440,9 @@ function runVerifyCommand(command, cwd, args) {
     const [program, ...programArgs] = parsed.tokens;
     return spawnSync(program, programArgs, {
       cwd,
-      encoding: "utf8"
+      encoding: "utf8",
+      timeout: 120000,
+      maxBuffer: 1024 * 1024
     });
   }
 
@@ -3440,7 +3456,9 @@ function runVerifyCommand(command, cwd, args) {
 
   return spawnSync("bash", ["-lc", command], {
     cwd,
-    encoding: "utf8"
+    encoding: "utf8",
+    timeout: 120000,
+    maxBuffer: 1024 * 1024
   });
 }
 
@@ -3534,6 +3552,8 @@ function lockCheckCommand({ dir, run, context }) {
 }
 
 function commandSetForVerification(metadata, mode) {
+  const plan = verificationPlan(metadata.text);
+  if (plan.length) return orderedVerificationCommands(plan);
   const activeCommands = findMeaningfulCommands([
     ...metadata.currentExecutionWaveVerify,
     ...metadata.lockCurrentVerify
@@ -3570,13 +3590,14 @@ function executeVerificationCommands(args) {
   }
 
   const results = [];
+  const fingerprint = verificationFingerprint(dir, metadata.text, commands);
   for (const command of commands) {
     const result = runVerifyCommand(command, dir, args);
     results.push({
       command,
       status: result.status ?? 1,
       stdout: result.stdout ?? "",
-      stderr: result.stderr ?? ""
+      stderr: result.error ? `${result.error.message}\n${result.stderr ?? ""}` : (result.stderr ?? "")
     });
     if ((result.status ?? 1) !== 0) {
       break;
@@ -3591,9 +3612,16 @@ function executeVerificationCommands(args) {
   });
 
   let nextText = appendVerificationLedger(metadata.text, ledgerEntries);
+  const after = verificationFingerprint(dir, metadata.text, commands);
+  nextText = replaceSection(nextText, "Verification Receipt", "```json\n" + JSON.stringify({
+    phase: phaseWave.phase, wave: phaseWave.wave, timestamp,
+    ...fingerprint, stable: fingerprint.digest === after.digest,
+    results: results.map(({ command, status }) => ({ command, status }))
+  }, null, 2) + "\n```");
   fs.writeFileSync(runPath, nextText, "utf8");
 
   console.log(`Run: ${relativeRunPath}`);
+  console.log(`Source binding: ${fingerprint.source}`);
   for (const result of results) {
     const outcome = result.status === 0 ? "pass" : "fail";
     console.log(`Result: ${outcome}`);
@@ -3605,6 +3633,7 @@ function executeVerificationCommands(args) {
     }
   }
   console.log("Next action: verification evidence appended to the run artifact");
+  if (fingerprint.digest !== after.digest) throw new Error("Source changed during verification; rerun against stable inputs");
 }
 
 function verifyWaveCommand(args) {
@@ -3895,12 +3924,22 @@ async function closeWaveCommand({ dir, run, context, phase, wave, phaseDone }) {
   const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
   validateRequestedPhaseWave(metadata, phase, wave);
+  if (isLeanArtifact(metadata.text) && metadata.currentGate !== "execute") throw new Error("close-wave requires an active execute gate");
+  if (unresolvedGrayAreaRows(metadata).length || meaningfulList(metadata.grayAreaTriggers).length || activeDelegation(metadata)) {
+    throw new Error("close-wave requires unresolved gray areas and assigned dependencies to be cleared");
+  }
   const phaseWave = phaseWaveFromMetadata(metadata);
   const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const verificationEntries = verificationLedgerEntries(metadata.text)
     .filter((entry) => entry.phase === phaseWave.phase && entry.wave === phaseWave.wave);
-  const passingEntries = verificationEntries.filter((entry) => entry.outcome === "pass");
-  const failingEntries = verificationEntries.filter((entry) => entry.outcome !== "pass");
+  const commands = commandSetForVerification(metadata, "verify-wave");
+  const latest = new Map(verificationEntries.map((entry) => [entry.command, entry]));
+  const passingEntries = [...latest.values()].filter((entry) => entry.outcome === "pass");
+  const failingEntries = [...latest.values()].filter((entry) => commands.includes(entry.command) && entry.outcome !== "pass");
+
+  if (isLeanArtifact(metadata.text) || verificationPlan(metadata.text).length || metadata.text.includes("## Verification Receipt")) {
+    assertVerificationReceipt({ dir, text: metadata.text, commands, ...phaseWave });
+  }
 
   if (passingEntries.length === 0) {
     throw new Error("close-wave requires at least one passing verification ledger entry for the active phase/wave");
@@ -3908,6 +3947,8 @@ async function closeWaveCommand({ dir, run, context, phase, wave, phaseDone }) {
   if (failingEntries.length > 0) {
     throw new Error("close-wave cannot complete while the active phase/wave still has failing verification ledger entries");
   }
+  const missingCommands = commands.filter((command) => latest.get(command)?.outcome !== "pass");
+  if (missingCommands.length) throw new Error(`close-wave requires passing evidence for every planned command: ${missingCommands.join(", ")}`);
 
   const requirementsCovered = uniqueValues(findSectionLabelBullets(metadata.text, "Current Execution Wave", "Covers requirements"));
   const nextRequirementsStillSatisfied = uniqueValues([
@@ -3920,6 +3961,27 @@ async function closeWaveCommand({ dir, run, context, phase, wave, phaseDone }) {
   const panelViolation = reviewerGateViolation(metadata, requiredPanelGate, `${phaseWave.phase}/${phaseWave.wave}`);
   if (panelViolation) {
     throw new Error(panelViolation);
+  }
+  if (isLeanArtifact(metadata.text)) {
+    const nextGate = featureComplete ? "done" : "plan";
+    const nextCommand = featureComplete ? "none" : `Use $qc-flow and resume from ${relativeRunPath} to detail and verify the next wave.`;
+    let leanText = updateWaveTableStatuses(metadata.text, phaseWave.phase, phaseWave.wave);
+    leanText = updatePhaseTableStatuses(leanText, phaseWave.phase, phaseDone);
+    leanText = replaceSection(leanText, "Current Status", renderCurrentState({ ...metadata,
+      currentGate: nextGate, executionState: "done", blockers: "none",
+      nextVerify: featureComplete ? "none" : "lock the next wave and its verification groups",
+      recommendedCommands: [nextCommand]
+    }));
+    const history = findSectionBullets(leanText, "History");
+    leanText = replaceSection(leanText, "History", [...history, `${new Date().toISOString()} ${phaseWave.phase}/${phaseWave.wave} verified: ${commands.map((command) => `\`${command}\``).join(", ")}`].map((line) => `- ${line}`).join("\n"));
+    fs.writeFileSync(runPath, leanText, "utf8");
+    const refreshed = runMetadataFromText(runPath, leanText);
+    const statePath = stateFileFor(dir, context);
+    ensureDir(path.dirname(statePath));
+    fs.writeFileSync(statePath, renderStateFile(relativeRunPath, refreshed), "utf8");
+    syncProjectFromRun(dir, refreshed, relativeRunPath, context);
+    console.log(`Closed wave: ${phaseWave.phase} / ${phaseWave.wave}\nCurrent gate: ${nextGate}\nNext action: ${nextCommand}`);
+    return;
   }
   const phaseRelation = closeWavePhaseRelation(metadata, phaseWave.phase, phaseDone, nextWaveRoute);
   const compactionAction = compactionActionForRelation(phaseRelation);
@@ -4267,6 +4329,7 @@ function printUpdateNotice(latestVersion) {
 function resumeCommand({ dir, run, context }) {
   const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
+  if (isLeanArtifact(metadata.text)) return printLeanStatus(metadata, artifactPointerFor(dir, context, runPath));
   const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const commands = metadata.recommendedCommands.length > 0
     ? metadata.recommendedCommands
@@ -4538,6 +4601,7 @@ function inferStateStatus(metadata) {
 
 function renderStateFile(relativeRunPath, metadata) {
   const activeLock = metadata.artifactType === "lock" ? relativeRunPath : "none";
+  if (isLeanArtifact(metadata.text)) return `# Quick Codex Flow State\n\nActive run:\n- ${relativeRunPath}\n\nActive lock:\n- ${activeLock}\n`;
   const phaseWave = phaseWaveFromMetadata(metadata);
   return `# Quick Codex Flow State
 
@@ -4564,6 +4628,7 @@ Status:
 function checkpointDigestCommand({ dir, run, context }) {
   const runPath = resolveRunPath(dir, run, context);
   const metadata = runMetadata(runPath);
+  if (isLeanArtifact(metadata.text)) return printLeanStatus(metadata, artifactPointerFor(dir, context, runPath));
   const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const lines = checkpointDigestLines(metadata, relativeRunPath);
   const autoCommands = preferredAutoContinueCommands(dir, relativeRunPath, metadata.artifactType);
@@ -4707,7 +4772,7 @@ function runMetadataStruct(runPath, text) {
     workflowCurrentRoadmapPhase: findSectionBulletValue(text, "Workflow State", "Current roadmap phase"),
     workflowCurrentRoadmapPhaseStatus: findSectionBulletValue(text, "Workflow State", "Current roadmap phase status"),
     workflowBlockedReason: findSectionBulletValue(text, "Workflow State", "Why blocked or not advancing"),
-    currentGate: findResumeDigestField(text, "Current gate")
+    currentGate: stateValue(text, "Current gate") ?? findResumeDigestField(text, "Current gate")
       ?? findSectionBulletValue(text, "Workflow State", "Current gate")
       ?? findLabelValue(text, "Current gate")
       ?? findHeadingValue(text, "Current gate")
@@ -4722,17 +4787,17 @@ function runMetadataStruct(runPath, text) {
     executionState: findLabelValueInSection(text, "Current Status", "Execution state")
       ?? findLabelValue(text, "Execution state")
       ?? (artifactType === "lock" ? findLabelValue(text, "Status") : null),
-    executionMode: findResumeDigestField(text, "Execution mode")
+    executionMode: stateValue(text, "Execution mode") ?? findResumeDigestField(text, "Execution mode")
       ?? findLabelValue(text, "Execution mode"),
     status: findLabelValue(text, "Status"),
-    blockers: findResumeDigestField(text, "Remaining blockers")
+    blockers: stateValue(text, "Blockers") ?? findResumeDigestField(text, "Remaining blockers")
       ?? findSectionBullets(text, "Blockers")[0]
       ?? lockBlockers[0]
       ?? "none",
-    nextVerify: findResumeDigestField(text, "Next verify")
+    nextVerify: stateValue(text, "Next verify") ?? findResumeDigestField(text, "Next verify")
       ?? lockCurrentVerify[0]
       ?? null,
-    recommendedCommands: uniqueValues([
+    recommendedCommands: stateValue(text, "Recommended next command") ? [stateValue(text, "Recommended next command")] : uniqueValues([
       ...findSectionBullets(text, "Recommended Next Command"),
       ...lockRecommendedCommands
     ]),
@@ -4861,6 +4926,12 @@ async function repairRunCommand({ dir, run, context }) {
   const metadata = runMetadata(runPath);
   const statePath = stateFileFor(dir, context);
   ensureDir(path.dirname(statePath));
+  if (isLeanArtifact(metadata.text)) {
+    fs.writeFileSync(statePath, renderStateFile(relativeRunPath, metadata), "utf8");
+    syncProjectFromRun(dir, metadata, relativeRunPath, context);
+    console.log(`Repaired discovery pointer: ${relativeRunPath}; Current Status remains authoritative.`);
+    return;
+  }
 
   if (metadata.artifactType === "lock") {
     const currentStateText = readTextIfExists(statePath);
@@ -4987,6 +5058,16 @@ function doctorRunCommand({ dir, run, context }) {
   const metadata = runMetadata(runPath);
   const relativeRunPath = artifactPointerFor(dir, context, runPath);
   const text = metadata.text;
+  if (isLeanArtifact(text)) {
+    const checks = doctorFlowChecks(metadata, text);
+    if (metadata.currentGate === "done") {
+      assertVerificationReceipt({ dir, text, commands: commandSetForVerification(metadata, "verify-wave"), ...phaseWaveFromMetadata(metadata) });
+    }
+    for (const [label, pass] of checks) console.log(`${pass ? "PASS" : "FAIL"}: ${label}`);
+    if (checks.some(([, pass]) => !pass)) throw new Error("doctor-run found one or more issues");
+    console.log("Doctor-run passed.");
+    return;
+  }
   const lockHeadings = ["Locked Plan", "Current Locked Plan"];
   const handoffScore = metadata.artifactType === "flow"
     ? handoffSufficiency(metadata, relativeRunPath)
@@ -5165,6 +5246,18 @@ function doctorRunCommand({ dir, run, context }) {
 }
 
 function doctorFlowChecks(metadata, text) {
+  if (isLeanArtifact(text)) {
+    const checks = [
+      ["Requirement Baseline", metadata.goal !== null && metadata.affectedArea.length > 0 && metadata.protectedBoundaries.length > 0],
+      ["Canonical Current Status", ["Current gate", "Current phase", "Current wave", "Execution state", "Execution mode", "Blockers", "Next verify", "Recommended next command"].every((label) => stateValue(text, label) !== null)],
+      ["Evidence Basis", metadata.evidenceBasis.length > 0],
+      ["Gray areas cleared before execution", !gateRequiresClearedGrayAreas(metadata) || unresolvedGrayAreaRows(metadata).length === 0],
+      ["Delegated checkpoints cleared", requiredDelegationViolations(metadata).length === 0],
+      ["Required reviewer panels cleared", requiredReviewerPanelViolations(metadata).length === 0]
+    ];
+    if (metadata.currentGate === "execute") checks.push(["Executable verification groups", verificationPlan(text).length > 0]);
+    return checks;
+  }
   const unresolvedGrayAreas = unresolvedGrayAreaRows(metadata);
   const hasRoadmapRows = metadata.deliveryRoadmapPhases.length > 0;
   const currentRoadmapPhase = metadata.workflowCurrentRoadmapPhase ?? metadata.deliveryRoadmapCurrentPhase;
@@ -5436,9 +5529,9 @@ function discoverLegacyMigrationFiles(dir) {
   const flowRoot = flowDirFor(dir);
   const lockRoot = path.join(dir, ".quick-codex-lock");
   const files = [];
-  const add = (source, destination, rewrite = false) => {
+  const add = (source, destination, rewrite = false, artifact = false) => {
     if (fs.existsSync(source) && fs.statSync(source).isFile()) {
-      files.push({ source, destination, rewrite });
+      files.push({ source, destination, rewrite, artifact });
     }
   };
 
@@ -5450,14 +5543,14 @@ function discoverLegacyMigrationFiles(dir) {
   if (fs.existsSync(flowRoot)) {
     for (const entry of fs.readdirSync(flowRoot, { withFileTypes: true })) {
       if (entry.isFile() && entry.name.endsWith(".md") && !["STATE.md", PROJECT_ROADMAP_FILENAME, BACKLOG_FILENAME].includes(entry.name)) {
-        add(path.join(flowRoot, entry.name), path.join("runs", entry.name), true);
+        add(path.join(flowRoot, entry.name), path.join("runs", entry.name), true, true);
       }
     }
   }
   if (fs.existsSync(lockRoot)) {
     for (const entry of fs.readdirSync(lockRoot, { withFileTypes: true })) {
       if (entry.isFile() && entry.name.endsWith(".md")) {
-        add(path.join(lockRoot, entry.name), path.join("locks", entry.name), true);
+        add(path.join(lockRoot, entry.name), path.join("locks", entry.name), true, true);
       }
     }
   }
@@ -5467,9 +5560,17 @@ function discoverLegacyMigrationFiles(dir) {
 function validateMigratedContext(dir, context) {
   statusCommand({ dir, context, run: null });
   resumeCommand({ dir, context, run: null });
-  doctorRunCommand({ dir, context, run: null });
+  try {
+    doctorRunCommand({ dir, context, run: null });
+  } catch (error) {
+    console.log(`WARN: migrated legacy artifact needs repair before doctor-run passes: ${error.message}`);
+  }
   if (fs.existsSync(context.projectRoadmapPath) && fs.existsSync(context.backlogPath)) {
-    doctorProjectCommand({ dir, context });
+    try {
+      doctorProjectCommand({ dir, context });
+    } catch (error) {
+      console.log(`WARN: migrated legacy project metadata needs repair before doctor-project passes: ${error.message}`);
+    }
   }
 }
 
@@ -5493,7 +5594,7 @@ function migrateStateCommand({ dir, toSession, dryRun }) {
   }
 
   const files = discoverLegacyMigrationFiles(dir);
-  if (!files.some((entry) => entry.destination === "STATE.md") || !files.some((entry) => entry.destination.startsWith("runs/") || entry.destination.startsWith("locks/"))) {
+  if (!files.some((entry) => entry.destination === "STATE.md") || !files.some((entry) => entry.artifact)) {
     throw new Error("Legacy state graph is incomplete: an active STATE.md and at least one run or lock artifact are required");
   }
   console.log(`Migration plan for legacy state -> session ${toSession}:`);

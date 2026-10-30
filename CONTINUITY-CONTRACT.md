@@ -12,6 +12,18 @@ The goal is interoperability, not identical file shapes.
 `qc-flow`, `qc-lock`, CLI recovery, `STATE.md`, and scaffolded `AGENTS.md` do not need the same schema.
 They do need a shared contract for what continuity state exists and where that state is authoritative.
 
+## Lean artifact authority
+
+For `Artifact profile: lean`, `Current Status` in the owner run is the only current
+state. `STATE.md` is a pointer. Keep future milestones short, active-wave details
+local, and superseded checkpoints in History. Project governance and empty
+registers are optional. Receipts bind executable proof to the active plan and
+working source; current passing evidence must cover every planned command.
+
+The expanded carry-forward schemas below describe legacy runs. Lean runs preserve
+the same goal, invariants, blockers, evidence boundaries, next check, and continuation
+command without generating duplicate digest, summary, or handoff sections.
+
 ## Continuity Layers
 
 | Layer | Purpose | Required core fields |
@@ -115,10 +127,10 @@ It must capture:
 
 | Surface | Role |
 |---|---|
-| `.quick-codex-flow/<run>.md` | Canonical continuity surface for planning, resume, risk, experience, and proof |
-| `.quick-codex-lock/<task>.md` | Canonical continuity surface for locked execution detail inside the current phase |
+| `.quick-codex-flow/sessions/<thread-id>/runs/<run>.md` | Canonical continuity surface for planning, resume, risk, experience, and proof |
+| `.quick-codex-flow/sessions/<thread-id>/locks/<task>.md` | Canonical continuity surface for locked execution detail inside the current phase |
 | Native Codex planner | Ephemeral operator-visible mirror of current progress; never canonical over the run artifact |
-| `.quick-codex-flow/STATE.md` | Active-run pointer only; not a substitute for the run artifact |
+| `.quick-codex-flow/sessions/<thread-id>/STATE.md` | Session-root-relative active-run pointer only; not a substitute for the run artifact |
 | CLI recovery (`status`, `resume`, `checkpoint-digest`, `repair-run`, `doctor-run`) | Read, print, repair, and validate the shared continuity subset by artifact type |
 | Scaffolded `AGENTS.md` | Entry guidance only; teaches where continuity state lives without duplicating the full contract |
 

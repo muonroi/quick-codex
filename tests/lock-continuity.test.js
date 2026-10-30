@@ -322,7 +322,7 @@ test("install removes duplicate skill installs from the alternate discovery root
   fs.mkdirSync(path.join(legacySkillsDir, "qc-flow"), { recursive: true });
   fs.mkdirSync(path.join(legacySkillsDir, "qc-lock"), { recursive: true });
 
-  const result = runCliWithEnv(repoRoot, { HOME: homeDir }, "install", "--copy");
+  const result = runCliWithEnv(repoRoot, { HOME: homeDir, USERPROFILE: homeDir }, "install", "--copy");
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.equal(fs.existsSync(path.join(agentsSkillsDir, "qc-flow")), true);
   assert.equal(fs.existsSync(path.join(agentsSkillsDir, "qc-lock")), true);
@@ -338,7 +338,7 @@ test("install to a custom target does not mutate discovery roots", () => {
   fs.mkdirSync(path.join(agentsSkillsDir, "qc-flow"), { recursive: true });
   fs.mkdirSync(path.join(legacySkillsDir, "qc-lock"), { recursive: true });
 
-  const result = runCliWithEnv(repoRoot, { HOME: homeDir }, "install", "--copy", "--target", customTarget);
+  const result = runCliWithEnv(repoRoot, { HOME: homeDir, USERPROFILE: homeDir }, "install", "--copy", "--target", customTarget);
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.equal(fs.existsSync(path.join(customTarget, "qc-flow")), true);
   assert.equal(fs.existsSync(path.join(customTarget, "qc-lock")), true);

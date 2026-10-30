@@ -11,7 +11,7 @@ Use $qc-flow for this task: Codex keeps losing the thread on this medium task. C
 ## Resume After Interruption
 
 ```text
-Use $qc-flow and resume from .quick-codex-flow/<run-file>.md. Restate the current gate, execution mode, current phase and wave, blockers, burn risk, approval strategy, experience constraints, hook-derived invariants, next verify, continue from file state instead of chat memory, and resync the native planner if it is available, including the current compact / clear / relock decision when the run is at a checkpoint.
+Use $qc-flow and resume from runs/<run-file>.md in the selected `.quick-codex-flow/sessions/<thread-id>/` namespace. Restate the current gate, execution mode, current phase and wave, blockers, burn risk, approval strategy, experience constraints, hook-derived invariants, next verify, continue from file state instead of chat memory, and resync the native planner if it is available, including the current compact / clear / relock decision when the run is at a checkpoint.
 ```
 
 Useful local commands:
@@ -45,7 +45,7 @@ Use $qc-lock for this task: simplify duplicated help-routing logic in repo-tool 
 ## Resume From Run Artifact
 
 ```text
-Use $qc-flow and resume from .quick-codex-flow/<run-file>.md. Restate the current gate, current phase, current wave, remaining blockers, experience constraints, and continue from the locked state instead of rebuilding context from chat.
+Use $qc-flow and resume from runs/<run-file>.md in the selected `.quick-codex-flow/sessions/<thread-id>/` namespace. Restate the current gate, current phase, current wave, remaining blockers, experience constraints, and continue from the locked state instead of rebuilding context from chat.
 ```
 
 ## Front-Half Then Handoff

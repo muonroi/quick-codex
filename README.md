@@ -24,6 +24,35 @@
 
 ---
 
+## Lean runs and evidence gates
+
+New flow runs keep one authoritative `Current Status` in the owner run. `STATE.md`
+contains discovery pointers only. Detail the active wave; future milestones stay
+short. Project roadmap/backlog files and inactive registers are optional. Existing
+expanded runs keep their compatibility readers and handoffs.
+
+Declare observable checks in `Verification Plan` as `Group | Kind | Command`, using
+`preflight`, `build`, `test`, `consumer`, or `deployed`. For example:
+
+```markdown
+| Group | Kind | Command |
+|---|---|---|
+| cache-hit | test | node --test tests/cache-hit.test.js |
+| cache-miss | test | node --test tests/cache-miss.test.js |
+```
+
+`verify-wave` runs preflights, builds, and remaining checks sequentially, executes
+identical commands once, and writes a receipt tied to the plan, wave, Git HEAD,
+and dirty/untracked source bytes. Each command has a two-minute timeout and 1 MiB
+output limit. `close-wave` requires all planned commands to pass against those
+inputs and any assigned reviewer gate to clear. Old failures remain in the ledger;
+a passing current retry supersedes their blocking outcome. Non-Git receipts bind
+the plan only and report `unversioned`. Generated outputs should be ignored.
+
+Source, build, tests, package-consumer, and deployed-runtime results remain separate
+claims. A checkpoint does not require another approval for already authorized work;
+only the portion depending on an unanswered question must wait.
+
 ## The Problem
 
 Codex is strong at focused execution. It weakens when the task outlives a single session.
@@ -69,6 +98,23 @@ YOUR TASK
 ```
 
 **State lives in files, not chat:**
+
+New work uses a session namespace; only `wrapper-config.json` is shared:
+
+```text
+.quick-codex-flow/
+  wrapper-config.json
+  sessions/<thread-id>/
+    .session.json
+    STATE.md
+    runs/<run>.md
+    locks/<task>.md
+    PROJECT-ROADMAP.md
+    BACKLOG.md
+```
+
+Flat artifacts below are the legacy layout. They remain readable and can be
+copied safely with `quick-codex migrate-state --to-session <thread-id>`.
 
 ```
 .quick-codex-flow/
@@ -147,7 +193,7 @@ Use $qc-lock for this task: <your task here>
 quick-codex init --dir ./my-project
 ```
 
-Creates `STATE.md`, `PROJECT-ROADMAP.md`, `BACKLOG.md`, and a sample run artifact.
+Creates shared configuration and session-aware guidance. Mutable state is created only under `sessions/<thread-id>/` by the trusted Codex thread identity or an explicit `--session` selector.
 
 ### Check your active run
 

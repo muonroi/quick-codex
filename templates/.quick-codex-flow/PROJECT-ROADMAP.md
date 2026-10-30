@@ -17,7 +17,7 @@ Current track:
 ## Active Run Register
 | Run | Status | Gate | Roadmap phase | Milestone | Track | Summary |
 |---|---|---|---|---|---|---|
-| .quick-codex-flow/sample-run.md | active | execute | P1 | M1 | default | sample run scaffold |
+| runs/sample-run.md | active | execute | P1 | M1 | default | sample run scaffold |
 
 ## Cross-Run Dependency Register
 | ID | Scope | Depends on | Why | Status |

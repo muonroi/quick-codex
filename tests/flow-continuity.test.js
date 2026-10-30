@@ -63,8 +63,10 @@ test("session delegation prints an owner-bearing completion command that execute
   assert.match(completionCommand, /--session thread-flow/);
 
   const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-shim-"));
-  const shimPath = path.join(shimDir, "quick-codex");
-  fs.writeFileSync(shimPath, `#!/bin/sh\nexec "${process.execPath}" "${cliPath}" "$@"\n`, "utf8");
+  const shimPath = path.join(shimDir, process.platform === "win32" ? "quick-codex.cmd" : "quick-codex");
+  fs.writeFileSync(shimPath, process.platform === "win32"
+    ? `@echo off\r\n"${process.execPath}" "${cliPath}" %*\r\n`
+    : `#!/bin/sh\nexec "${process.execPath}" "${cliPath}" "$@"\n`, "utf8");
   fs.chmodSync(shimPath, 0o755);
   const env = { ...process.env, PATH: `${shimDir}${path.delimiter}${process.env.PATH ?? ""}`, QUICK_CODEX_NO_UPDATE_CHECK: "1" };
   delete env.CODEX_THREAD_ID;
@@ -410,18 +412,18 @@ test("close-wave --phase-done closes the feature when the roadmap has no later p
   assert.equal(doctorResult.status, 0, doctorResult.stderr || doctorResult.stdout);
 });
 
-test("init scaffolds a sample flow artifact that passes doctor-run", () => {
+test("init scaffolds session-aware guidance without mutable legacy state", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quick-codex-init-"));
   const initResult = runCli(dir, "init", "--dir", dir);
   assert.equal(initResult.status, 0, initResult.stderr || initResult.stdout);
-  assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "sample-run.md")), true);
-  assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "STATE.md")), true);
-  assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "PROJECT-ROADMAP.md")), true);
-  assert.equal(fs.existsSync(path.join(dir, ".quick-codex-flow", "BACKLOG.md")), true);
-  const doctorResult = runCli(dir, "doctor-run", "--dir", dir, "--run", ".quick-codex-flow/sample-run.md");
-  assert.equal(doctorResult.status, 0, doctorResult.stderr || doctorResult.stdout);
-  const doctorProjectResult = runCli(dir, "doctor-project", "--dir", dir);
-  assert.equal(doctorProjectResult.status, 0, doctorProjectResult.stderr || doctorProjectResult.stdout);
+  const flowRoot = path.join(dir, ".quick-codex-flow");
+  assert.match(fs.readFileSync(path.join(flowRoot, "README.md"), "utf8"), /sessions\/<thread-id>\//);
+  assert.match(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"), /sessions\/<thread-id>\//);
+  assert.equal(fs.existsSync(path.join(flowRoot, "wrapper-config.json")), true);
+  assert.equal(fs.existsSync(path.join(flowRoot, "sample-run.md")), false);
+  assert.equal(fs.existsSync(path.join(flowRoot, "STATE.md")), false);
+  assert.equal(fs.existsSync(path.join(flowRoot, "PROJECT-ROADMAP.md")), false);
+  assert.equal(fs.existsSync(path.join(flowRoot, "BACKLOG.md")), false);
 });
 
 test("delegate-plan-check assigns a blocking delegated checkpoint and records the worker prompt", () => {

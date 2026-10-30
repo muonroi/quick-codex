@@ -31,7 +31,7 @@ test("two thread IDs derive disjoint mutable roots", () => {
   const b = resolveSessionContext({ dir, sessionId: "thread-b" });
 
   assert.notEqual(a.root, b.root);
-  assert.match(a.statePath, /sessions\/thread-a\/STATE\.md$/);
+  assert.match(a.statePath.split(path.sep).join("/"), /sessions\/thread-a\/STATE\.md$/);
   assert.equal(a.runsDir, path.join(a.root, "runs"));
   assert.equal(a.locksDir, path.join(a.root, "locks"));
   assert.equal(a.wrapperStatePath, path.join(a.root, "wrapper-state.json"));

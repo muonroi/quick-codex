@@ -431,6 +431,7 @@ Recommended transition:
 
 export const verifiedWaveRun = baseRun.replace("## Verification Ledger\n- initial ledger entry", `## Verification Ledger
 - 2026-01-01T00:00:00.000Z verify-wave P1/W1 \`printf first-check\` -> pass (first-check)
+- 2026-01-01T00:00:00.500Z verify-wave P1/W1 \`printf second-check\` -> pass (second-check)
 - 2026-01-01T00:00:01.000Z regression-check P1/W1 \`printf fallback\` -> pass (fallback)`);
 
 export const routedWaveRun = verifiedWaveRun.replace(/## Verified Plan[\s\S]*?## Plan-Check Delegation/, `## Verified Plan

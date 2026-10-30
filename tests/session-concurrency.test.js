@@ -255,6 +255,43 @@ test("migration is dry-runnable, copy-only, collision-safe, and idempotent", () 
   assert.deepEqual(snapshotTree(dir, new Set([".quick-codex-flow/sessions"])), sourceBefore);
 });
 
+test("migration accepts legacy checklist-style state pointers", () => {
+  const dir = makeDir();
+  createLegacyGraph(dir);
+  const flowDir = path.join(dir, ".quick-codex-flow");
+  fs.writeFileSync(path.join(flowDir, "STATE.md"), `# Quick Codex Flow State
+
+- Active run: \`.quick-codex-flow/sample.md\`
+- Current gate: \`execute\`
+- Current phase / wave: \`P1 / W1\`
+- Execution mode: \`manual\`
+- Status: \`active\`
+`, "utf8");
+
+  const result = runCli(dir, "migrate-state", "--to-session", "thread-inline", "--dir", dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const targetState = fs.readFileSync(path.join(flowDir, "sessions", "thread-inline", "STATE.md"), "utf8");
+  assert.match(targetState, /- Active run: `runs\/sample\.md`/);
+});
+
+test("migration preserves legacy artifacts that require a later doctor repair", () => {
+  const dir = makeDir();
+  const { flowDir } = createLegacyGraph(dir);
+  fs.writeFileSync(path.join(flowDir, "sample.md"), `# Run: legacy artifact
+
+Current gate:
+- complete
+
+Execution mode:
+- auto
+`, "utf8");
+
+  const result = runCli(dir, "migrate-state", "--to-session", "thread-repair", "--dir", dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /needs repair before doctor-run passes/i);
+  assert.equal(fs.existsSync(path.join(flowDir, "sessions", "thread-repair", "runs", "sample.md")), true);
+});
+
 test("barrier-synchronized migrations and project updates keep concurrent sessions byte-isolated", async () => {
   const dir = makeDir();
   createLegacyGraph(dir);

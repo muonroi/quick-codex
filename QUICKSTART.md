@@ -2,6 +2,11 @@
 
 Recommended current surface: install the skills and invoke `qc-flow` or `qc-lock` explicitly when a task needs durable workflow state.
 
+New runs use a compact owner run with one `Current Status`; `STATE.md` only points
+to it. Detail only the next wave. Project roadmap/backlog files are optional.
+Use `verify-wave` for grouped executable evidence, then `close-wave` to check every
+planned command against current source. Existing expanded runs remain supported.
+
 ## 1. Install the skills
 
 Fastest install from npm:
@@ -78,22 +83,22 @@ Check what the package thinks is active:
 node bin/quick-codex.js status --dir /path/to/project
 node bin/quick-codex.js resume --dir /path/to/project
 node bin/quick-codex.js project-status --dir /path/to/project
-node bin/quick-codex.js sync-project --dir /path/to/project --run .quick-codex-flow/<run>.md
-node bin/quick-codex.js delegate-research --dir /path/to/project --run .quick-codex-flow/<run>.md --question "..." --scope "..."
-node bin/quick-codex.js delegate-plan-check --dir /path/to/project --run .quick-codex-flow/<run>.md --focus "..." --scope "..."
-node bin/quick-codex.js delegate-goal-audit --dir /path/to/project --run .quick-codex-flow/<run>.md --focus "..." --scope "..."
-node bin/quick-codex.js complete-delegation --dir /path/to/project --run .quick-codex-flow/<run>.md --type plan-check --status completed --summary "..." --verdict "pass"
+node bin/quick-codex.js sync-project --dir /path/to/project --session <thread-id> --run runs/<run>.md
+node bin/quick-codex.js delegate-research --dir /path/to/project --session <thread-id> --run runs/<run>.md --question "..." --scope "..."
+node bin/quick-codex.js delegate-plan-check --dir /path/to/project --session <thread-id> --run runs/<run>.md --focus "..." --scope "..."
+node bin/quick-codex.js delegate-goal-audit --dir /path/to/project --session <thread-id> --run runs/<run>.md --focus "..." --scope "..."
+node bin/quick-codex.js complete-delegation --dir /path/to/project --session <thread-id> --run runs/<run>.md --type plan-check --status completed --summary "..." --verdict "pass"
 node bin/quick-codex.js capture-hooks --dir /path/to/project --input /path/to/hooks.txt
 node bin/quick-codex.js sync-experience --dir /path/to/project --tool Write --tool-input '{"file_path":"src/app.ts"}'
 node bin/quick-codex.js checkpoint-digest --dir /path/to/project
 node bin/quick-codex.js repair-run --dir /path/to/project
 node bin/quick-codex.js doctor-run --dir /path/to/project
-node bin/quick-codex.js doctor-flow --dir /path/to/project --run .quick-codex-flow/<run>.md
+node bin/quick-codex.js doctor-flow --dir /path/to/project --session <thread-id> --run runs/<run>.md
 node bin/quick-codex.js doctor-project --dir /path/to/project
-node bin/quick-codex.js lock-check --dir /path/to/project --run .quick-codex-flow/<run>.md
-node bin/quick-codex.js verify-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
-node bin/quick-codex.js regression-check --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
-node bin/quick-codex.js close-wave --dir /path/to/project --run .quick-codex-flow/<run>.md --phase Pn --wave Wn
+node bin/quick-codex.js lock-check --dir /path/to/project --session <thread-id> --run runs/<run>.md
+node bin/quick-codex.js verify-wave --dir /path/to/project --session <thread-id> --run runs/<run>.md --phase Pn --wave Wn
+node bin/quick-codex.js regression-check --dir /path/to/project --session <thread-id> --run runs/<run>.md --phase Pn --wave Wn
+node bin/quick-codex.js close-wave --dir /path/to/project --session <thread-id> --run runs/<run>.md --phase Pn --wave Wn
 ```
 
 Verification trust boundary:
@@ -109,14 +114,13 @@ If Codex is losing the thread on a medium task:
 Use $qc-flow for this task: <describe the task>. Keep a persistent run artifact and do not rely on chat memory.
 ```
 
-Hard rules in the current flow protocol:
-- discuss -> explore -> research -> delivery roadmap -> phase-local plan -> plan-check -> execute
-- unresolved gray areas are a hard stop for roadmap, planning, and execution
-- each gray area must produce at least 3 user-facing options, with one recommended option and a free-text path
-- delegated `research`, `plan-check`, and `goal-audit` checkpoints are blocking; the main flow does not advance until their result is merged back into the run artifact
-- `Delivery Roadmap` is mandatory before execution; `Verified Plan` is only for the active roadmap phase
-- `PROJECT-ROADMAP.md` and `BACKLOG.md` keep milestone, backlog, deferred-decision, and future-seed state outside any single run
-- `Discuss Register`, `Decision Register`, `Dependency Register`, and `Goal-Backward Verification` make the flow closer to a single-agent GSD discipline instead of a thin artifact shell
+Current flow protocol:
+- Resolve requirements and repo facts before dependent edits; continue independently authorized work.
+- Keep one lean run with authoritative `Current Status`; STATE is a discovery pointer.
+- Keep the milestone roadmap short and detail only the active wave in `Verified Plan` and `Current Execution Wave`.
+- Declare executable behavior groups in `Verification Plan`; receipts and every planned check gate wave closure.
+- Project roadmap/backlog files and registers are optional; assigned reviewer/delegation checkpoints still block dependent work.
+- Do not ask again for a decision or action the user already authorized.
 
 If the task tends to drift or reopen scope:
 - clarify
@@ -167,7 +171,7 @@ Expected behavior:
 - at phase checkpoints, that planner mirror should also surface the action family the operator should expect next: `compact`, `clear`, or `relock`
 - `checkpoint-digest` prints a resume card plus deliberate-compaction cues before a pause or a broad verify, including `Baseline action`, optional `Brain verdict`, `Explicit suggested action`, and any same-phase `Next Wave Pack`
 - `repair-run` rewrites stale flow-run resumability sections, including `Workflow State`, `Gray Area Register`, `Delivery Roadmap`, and `Wave Handoff`, preserves compact lock artifacts, and realigns `STATE.md`
-- `doctor-run` tells you if the flow run or lock artifact is stale, incomplete, or missing required continuity fields, including a scored handoff-sufficiency check for flow runs
+- `doctor-run` validates lean state and active requirements; expanded legacy runs also receive a scored handoff-sufficiency check
 - `doctor-flow` validates the flow-only hard rules: `Workflow State`, `Delegation State`, `Gray Area Register`, `Delivery Roadmap`, current roadmap phase, delegated checkpoint discipline, and gray-area discipline before roadmap/plan/execute
 - `doctor-project` validates the project-level governance files so milestone, backlog, deferred-decision, and future-seed state stay durable
 - `sync-project` syncs the active flow run into the project-level roadmap register
@@ -181,9 +185,10 @@ Expected behavior:
 - when the next route stays in the same phase, `close-wave` also writes a narrow `Next Wave Pack` so the next wave can resume without rereading the whole execution-wave narrative
 - `CONTINUITY-CONTRACT.md` defines which surface owns run, lock, pointer, and guidance continuity state
 
-`STATE.md` stays pointer-only:
-- `Active run` points to the main continuity artifact
-- optional `Active lock` points to the currently active lock handoff
+`STATE.md` stays pointer-only inside the selected session namespace:
+- `Active run` points to `runs/<run>.md`
+- optional `Active lock` points to `locks/<task>.md`
+- flat state is legacy-only; use `migrate-state --to-session <thread-id>` for a copy-only conversion
 
 If `doctor-run` fails on an older or partially updated run:
 

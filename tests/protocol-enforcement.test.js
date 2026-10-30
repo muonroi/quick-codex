@@ -58,20 +58,20 @@ test("enforceQcFlowProtocol bootstraps a task-specific clarify artifact for a fr
   assert.equal(result.created, true);
   assert.equal(result.effectiveGate, "clarify");
   assert.match(result.artifact.relativeRunPath, /^\.quick-codex-flow\/explore-storyflow-anti-bot-behavior-and-plan-the-hardening-work(?:-\d+)?\.md$/);
-  assert.match(result.artifact.delegationState.mainAgentRule, /Do not advance past the active delegated checkpoint/i);
-  assert.match(result.prompt, /Do not implement code, do not edit product files/);
-  assert.match(result.prompt, /present at least 3 options for each gray area/);
+  assert.match(result.prompt, /Do not implement code in unresolved scope/);
+  assert.match(result.prompt, /continue independent authorized work/);
   assert.match(result.prompt, /Current enforced gate: clarify/);
-  assert.equal(result.artifact.hasReviewerPanelSection, true);
+  assert.equal(result.artifact.hasReviewerPanelSection, false);
   assert.deepEqual(result.artifact.reviewerPanels, []);
 
   const reparsed = readRunArtifact({ dir, run: result.artifact.relativeRunPath });
-  assert.equal(reparsed.hasReviewerPanelSection, true);
+  assert.equal(reparsed.hasReviewerPanelSection, false);
   assert.deepEqual(reparsed.reviewerPanels, []);
 
   const state = fs.readFileSync(path.join(dir, ".quick-codex-flow", "STATE.md"), "utf8");
-  assert.match(state, /Current gate:\n- clarify/);
-  assert.match(state, /Execution mode:\n- auto/);
+  assert.doesNotMatch(state, /Current gate:|Execution mode:/);
+  assert.equal(reparsed.currentGate, "clarify");
+  assert.equal(reparsed.executionMode, "auto");
 });
 
 test("flow bootstrap keeps identical task slugs inside their owner contexts", () => {
@@ -95,6 +95,7 @@ test("panel-aware flow cannot enter execute until every plan-check reviewer clea
   const { text: _freshText, ...freshMetadata } = fresh;
   const executeReady = {
     ...freshMetadata,
+    hasReviewerPanelSection: true,
     currentGate: "execute",
     deliveryRoadmap: "| P1 | in-progress | implement storage | none | focused test |",
     verifiedPlan: "P1 / W1: implement storage with focused verification"

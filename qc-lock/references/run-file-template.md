@@ -5,7 +5,7 @@ Use this file for any task that may outlive a single short turn.
 Recommended path:
 
 ```text
-.quick-codex-lock/<task-slug>.md
+.quick-codex-flow/sessions/<thread-id>/locks/<task-slug>.md
 ```
 
 Naming:

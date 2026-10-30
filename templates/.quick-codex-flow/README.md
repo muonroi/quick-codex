@@ -1,23 +1,34 @@
 # .quick-codex-flow
 
-Use this directory for persistent run artifacts created by `qc-flow`.
+Shared configuration lives in `wrapper-config.json`. Mutable work belongs to one
+trusted Codex thread or explicit `--session <id>`:
 
-Keep two kinds of files here:
-- one run file per active task
-- one `STATE.md` file that points to the active run when you return after a clean session
-- one `PROJECT-ROADMAP.md` file for milestone and active-run governance
-- one `BACKLOG.md` file for parking-lot items, deferred decisions, and future seeds
+```text
+.quick-codex-flow/
+  wrapper-config.json
+  sessions/<thread-id>/
+    .session.json
+    STATE.md                  # discovery pointers only
+    runs/<task>.md            # one owner run
+    locks/<task>.md           # only for standalone locked work
+```
 
-Suggested rules:
-- one run file per task
-- prefer stable task slugs
-- keep `STATE.md` aligned with the active run
-- keep `PROJECT-ROADMAP.md` aligned with the active milestone, active run register, and cross-run dependencies
-- keep `BACKLOG.md` aligned with intentionally parked work, deferred decisions, and future seeds
-- keep `Affected area / blast radius` and `Evidence Basis` current enough to justify the next plan or handoff
-- keep `Delegation State` current when a blocking `research`, `plan-check`, or `goal-audit` checkpoint is assigned
-- keep the latest `Resume Digest` and `Recommended Next Command` current
-- keep `Experience Snapshot` current when a hook warning changes scope, verify, or invariants
-- refresh `Compact-Safe Summary` after each completed wave or phase and before any long verify or pause
-- resume from the run file instead of relying on chat memory
-- use `quick-codex status`, `quick-codex resume`, `quick-codex project-status`, `quick-codex sync-project`, `quick-codex delegate-plan-check`, `quick-codex complete-delegation`, `quick-codex checkpoint-digest`, `quick-codex repair-run`, `quick-codex doctor-run`, and `quick-codex doctor-project` to avoid guessing from chat state
+New runs use `Artifact profile: lean`. Read and update `Current Status` for current
+gate, phase/wave, mode, blockers, and next action. Put superseded facts in History.
+Keep a short roadmap in the run and detail only the active wave. `Verification Plan`
+uses `Group | Kind | Command`; `verify-wave` writes bounded evidence and a source-bound
+receipt, and `close-wave` requires all planned commands to pass.
+
+Create session-local `PROJECT-ROADMAP.md` and `BACKLOG.md` only when cross-run
+coordination or deferred work needs them. Registers, reviewers, delegation, and
+Experience sections are conditional on real entries or environment requirements.
+Assigned gates remain blocking for their dependent work. Checkpoints alone do not
+require new approval; continue independently authorized work.
+
+Existing expanded runs and their generated digests remain supported. Root-level
+flat state is legacy; use `--legacy` or copy it with
+`quick-codex migrate-state --to-session <thread-id>`. Never choose a namespace by
+timestamps or overwrite another session's pointers.
+
+Use `status`, `resume`, `verify-wave`, `close-wave`, and `doctor-run` for normal
+work. `repair-run` restores a lean discovery pointer without expanding the run.

@@ -3,7 +3,7 @@
 Recommended path:
 
 ```text
-.quick-codex-flow/BACKLOG.md
+.quick-codex-flow/sessions/<thread-id>/BACKLOG.md
 ```
 
 Use this file for deferred work that should not silently vanish from the workflow.

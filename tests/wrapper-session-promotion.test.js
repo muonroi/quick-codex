@@ -35,10 +35,9 @@ function makeProject() {
 }
 
 function makeFakeExecBin(dir, status = 0) {
-  const filePath = path.join(dir, `fake-codex-${status}.sh`);
-  fs.writeFileSync(filePath, `#!/bin/sh\nexit ${status}\n`, "utf8");
-  fs.chmodSync(filePath, 0o755);
-  return filePath;
+  // The adapter invokes <bin> exec ...; Node executes this fixture on every OS.
+  fs.writeFileSync(path.join(dir, "exec"), `process.exit(${status});\n`, "utf8");
+  return process.execPath;
 }
 
 function decision(overrides = {}) {
