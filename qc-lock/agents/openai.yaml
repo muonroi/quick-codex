@@ -4,4 +4,4 @@ interface:
   default_prompt: "Use $qc-lock to complete this task with a locked step-by-step plan and verification after each step."
 
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true
