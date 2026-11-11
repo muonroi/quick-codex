@@ -28,10 +28,12 @@ jobs:
         run: bash scripts/lint-skills.sh
 
       # npm trusted publishing (OIDC) needs npm >= 11.5.1; Node 20 ships npm 10.
+      # Pinned to 11: npm 12 requires Node ^22.22.2 || ^24.15.0 and fails EBADENGINE
+      # on this Node 20 runner (run 42972704424, 2026-11-11).
       # quick-codex lists this workflow (muonroi/quick-codex, publish.yml) as its
       # Trusted Publisher on npmjs.com, so no NPM_TOKEN is used.
       - name: npm with trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@^11.5.1
 
       - name: Publish package (skip existing)
         run: |
