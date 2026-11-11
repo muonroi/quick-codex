@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.1
+
+Highlights:
+- streamlined workflow state and required source-bound verification
+- enabled implicit invocation of qc-lock
+- publishing moves to npm trusted publishing (OIDC); 0.5.0 never reached npm (its tag's publish failed with E404 on an expired token)
+
 ## 0.5.0
 
 Highlights:
