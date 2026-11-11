@@ -27,9 +27,13 @@ jobs:
       - name: Lint package shape
         run: bash scripts/lint-skills.sh
 
+      # npm trusted publishing (OIDC) needs npm >= 11.5.1; Node 20 ships npm 10.
+      # quick-codex lists this workflow (muonroi/quick-codex, publish.yml) as its
+      # Trusted Publisher on npmjs.com, so no NPM_TOKEN is used.
+      - name: npm with trusted publishing
+        run: npm install -g npm@latest
+
       - name: Publish package (skip existing)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           PKG_NAME=$(node -p "require('./package.json').name")
           PKG_VERSION=$(node -p "require('./package.json').version")
